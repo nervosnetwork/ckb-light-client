@@ -1,6 +1,9 @@
-# CKB Light Client
+# [Experimental] CKB Light Client
 
 [![License]](#license)
+
+> :warning: **WARNING** This repository is unavailable, since it's still in
+> the proof-of-concept stage.
 
 A CKB light client based on [FlyClient].
 

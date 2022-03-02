@@ -1,0 +1,14 @@
+[package]
+name = "ckb-light-client"
+version = "0.1.0-alpha.0"
+authors = ["Boyu Yang <yangby@cryptape.com>"]
+edition = "2021"
+license = "MIT"
+description = "A CKB light client based on FlyClient."
+homepage = "https://github.com/yangby-cryptape/ckb-light-client"
+repository = "https://github.com/yangby-cryptape/ckb-light-client"
+
+[dependencies]
+
+[badges]
+maintenance = { status = "experimental" }
