@@ -9,6 +9,23 @@ homepage = "https://github.com/yangby-cryptape/ckb-light-client"
 repository = "https://github.com/yangby-cryptape/ckb-light-client"
 
 [dependencies]
+ckb-app-config    = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
+ckb-async-runtime = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
+ckb-types         = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
+ckb-network       = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
+ckb-merkle-mountain-range = "0.3.2"
+rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }
+anyhow = "1.0.56"
+thiserror = "1.0.30"
+log = "0.4.14"
+env_logger = "0.9.0"
+clap = { version = "2.34.0", features = ["yaml"]  }
+serde = { version = "1.0.136", features = ["derive"] }
+toml = "0.5.8"
+ctrlc = { version = "3.2.1", features = ["termination"] }
+path-clean = "0.1.0"
+rand = "0.8.5"
+faketime = "0.2.1"
 
 [badges]
 maintenance = { status = "experimental" }

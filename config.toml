@@ -1,0 +1,39 @@
+chain = "/ckb_dev/12b663ac"
+
+[store]
+path = "data/store"
+
+[network]
+path = "data/network"
+
+listen_addresses = ["/ip4/0.0.0.0/tcp/8116"]
+### Specify the public and routable network addresses
+# public_addresses = []
+
+# Node connects to nodes listed here to discovery other peers when there's no local stored peers.
+# When chain.spec is changed, this usually should also be changed to the bootnodes in the new chain.
+bootnodes = []
+
+### Whitelist-only mode
+whitelist_only = true
+### Whitelist peers connecting from the given IP addresses
+whitelist_peers = ["/ip4/0.0.0.0/tcp/8115/p2p/QmXG5yDrrReCRYynWpkVtMKLY4EtccXZVS5iaw86WmuJPr"]
+
+max_peers = 5000
+max_outbound_peers = 2500
+# 2 minutes
+ping_interval_secs = 120
+# 20 minutes
+ping_timeout_secs = 1200
+connect_outbound_interval_secs = 15
+# If set to true, try to register upnp
+upnp = false
+# If set to true, network service will add discovered local address to peer store, it's helpful for private net development
+discovery_local_address = false
+# If set to true, random cleanup when there are too many inbound nodes
+# Ensure that itself can continue to serve as a bootnode node
+bootnode_mode = false
+
+[light_client]
+# NaiveApproach, BinarySearchApproach, BoundingTheForkPoint
+strategy = "BoundingTheForkPoint"

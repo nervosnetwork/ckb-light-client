@@ -1,0 +1,12 @@
+name: CKB Light Client
+settings:
+  - SubcommandRequired
+subcommands:
+  - run:
+      about: Run the CKB light client.
+      args:
+        - config-file:
+            help: The config file which includes the running parameters.
+            long: config-file
+            takes_value: true
+            required: true
