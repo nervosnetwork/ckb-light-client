@@ -228,7 +228,11 @@ dependencies = [
 [[package]]
 name = "ckb-app-config"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-build-info",
  "ckb-chain-spec",
@@ -254,7 +258,11 @@ dependencies = [
 [[package]]
 name = "ckb-async-runtime"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-logger",
  "ckb-spawn",
@@ -265,12 +273,20 @@ dependencies = [
 [[package]]
 name = "ckb-build-info"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 
 [[package]]
 name = "ckb-chain-spec"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-constant",
  "ckb-crypto",
@@ -290,7 +306,11 @@ dependencies = [
 [[package]]
 name = "ckb-channel"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "crossbeam-channel",
 ]
@@ -298,12 +318,20 @@ dependencies = [
 [[package]]
 name = "ckb-constant"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 
 [[package]]
 name = "ckb-crypto"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-fixed-hash",
  "faster-hex",
@@ -316,7 +344,11 @@ dependencies = [
 [[package]]
 name = "ckb-dao-utils"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "byteorder",
  "ckb-error",
@@ -326,7 +358,11 @@ dependencies = [
 [[package]]
 name = "ckb-error"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "anyhow",
  "ckb-occupied-capacity",
@@ -337,7 +373,11 @@ dependencies = [
 [[package]]
 name = "ckb-fixed-hash"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-fixed-hash-core",
  "ckb-fixed-hash-macros",
@@ -346,7 +386,11 @@ dependencies = [
 [[package]]
 name = "ckb-fixed-hash-core"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "faster-hex",
  "serde",
@@ -356,7 +400,11 @@ dependencies = [
 [[package]]
 name = "ckb-fixed-hash-macros"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-fixed-hash-core",
  "proc-macro2",
@@ -367,7 +415,11 @@ dependencies = [
 [[package]]
 name = "ckb-hash"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "blake2b-ref",
  "blake2b-rs",
@@ -376,7 +428,11 @@ dependencies = [
 [[package]]
 name = "ckb-jsonrpc-types"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-types",
  "faster-hex",
@@ -410,10 +466,15 @@ dependencies = [
  "clap 2.34.0",
  "ctrlc",
  "env_logger",
+<<<<<<< HEAD
  "faketime",
  "log",
  "path-clean",
  "rand 0.8.5",
+=======
+ "log",
+ "path-clean",
+>>>>>>> tmp: do not pull request
  "serde",
  "thiserror",
  "toml",
@@ -422,7 +483,11 @@ dependencies = [
 [[package]]
 name = "ckb-logger"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "log",
 ]
@@ -430,7 +495,11 @@ dependencies = [
 [[package]]
 name = "ckb-logger-config"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "serde",
 ]
@@ -447,7 +516,11 @@ dependencies = [
 [[package]]
 name = "ckb-metrics-config"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "serde",
 ]
@@ -455,7 +528,11 @@ dependencies = [
 [[package]]
 name = "ckb-network"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "bloom-filters",
  "ckb-app-config",
@@ -480,7 +557,11 @@ dependencies = [
 [[package]]
 name = "ckb-occupied-capacity"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-occupied-capacity-core",
  "ckb-occupied-capacity-macros",
@@ -489,7 +570,11 @@ dependencies = [
 [[package]]
 name = "ckb-occupied-capacity-core"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "serde",
 ]
@@ -497,7 +582,11 @@ dependencies = [
 [[package]]
 name = "ckb-occupied-capacity-macros"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-occupied-capacity-core",
  "quote",
@@ -507,7 +596,11 @@ dependencies = [
 [[package]]
 name = "ckb-pow"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "byteorder",
  "ckb-hash",
@@ -520,7 +613,11 @@ dependencies = [
 [[package]]
 name = "ckb-rational"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "numext-fixed-uint",
  "serde",
@@ -529,7 +626,11 @@ dependencies = [
 [[package]]
 name = "ckb-resource"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-system-scripts",
  "ckb-types",
@@ -554,12 +655,20 @@ dependencies = [
 [[package]]
 name = "ckb-spawn"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 
 [[package]]
 name = "ckb-stop-handler"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-channel",
  "ckb-logger",
@@ -583,7 +692,11 @@ dependencies = [
 [[package]]
 name = "ckb-traits"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "ckb-types",
 ]
@@ -591,7 +704,11 @@ dependencies = [
 [[package]]
 name = "ckb-types"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "bit-vec",
  "bitflags",
@@ -613,7 +730,11 @@ dependencies = [
 [[package]]
 name = "ckb-util"
 version = "0.102.0-pre"
+<<<<<<< HEAD
 source = "git+https://github.com/yangby-cryptape/ckb?branch=poc/light-client#53492aeef4b2ed409abd83e4ea8e2a303dfe2259"
+=======
+source = "git+https://github.com/yangby-cryptape/ckb?rev=a372b73#a372b73c9531f6f0ab0430b7d9eaf63afa375760"
+>>>>>>> tmp: do not pull request
 dependencies = [
  "linked-hash-map",
  "once_cell",
