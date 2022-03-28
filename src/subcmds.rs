@@ -9,7 +9,7 @@ use ckb_network::{
 use crate::{
     config::RunConfig,
     error::{Error, Result},
-    protocols::{light_client_strategies, LightClientProtocol, SyncProtocol},
+    protocols::{light_client_strategies, FilterProtocol, LightClientProtocol, SyncProtocol},
     storage::Storage,
     types::BlockSamplingStrategy,
     utils,
@@ -30,7 +30,8 @@ impl RunConfig {
             })?;
         let required_protocol_ids = vec![
             SupportProtocols::Sync.protocol_id(),
-            SupportProtocols::LightClient.protocol_id(),
+            // SupportProtocols::LightClient.protocol_id(),
+            SupportProtocols::Filter.protocol_id(),
         ];
 
         let mut blocking_recv_flag = BlockingFlag::default();
@@ -50,6 +51,7 @@ impl RunConfig {
                 light_client_strategies::BoundingTheForkPoint,
             >::new(storage)),
         };
+        let filter_protocol = FilterProtocol::new();
 
         let protocols = vec![
             CKBProtocol::new_with_support_protocol(
@@ -60,6 +62,11 @@ impl RunConfig {
             CKBProtocol::new_with_support_protocol(
                 SupportProtocols::LightClient,
                 light_client,
+                Arc::clone(&network_state),
+            ),
+            CKBProtocol::new_with_support_protocol(
+                SupportProtocols::Filter,
+                Box::new(filter_protocol),
                 Arc::clone(&network_state),
             ),
         ];
