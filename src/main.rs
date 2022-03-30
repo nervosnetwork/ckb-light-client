@@ -1,6 +1,7 @@
 mod config;
 mod error;
 mod protocols;
+mod service;
 mod storage;
 mod subcmds;
 mod types;

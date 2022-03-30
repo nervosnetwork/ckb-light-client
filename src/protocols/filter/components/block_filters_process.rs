@@ -34,21 +34,17 @@ impl<'a> BlockFiltersProcess<'a> {
     pub fn execute(self) -> Status {
         let block_filters = self.message.to_entity();
         let block_number: BlockNumber = block_filters.start_number().unpack();
-        let mut pending_peer = self
-            .filter
-            .pending_peer
-            .write()
-            .expect("accuire pending_peer write lock");
+        let pending_peer = &self.filter.pending_peer;
 
-        if pending_peer.block_number != block_number {
+        if pending_peer.block_number() != block_number {
             info!(
                 "ignoring, block_number is not match, pending_peer: {}, block_filters: {}",
-                pending_peer.block_number, block_number
+                pending_peer.block_number(),
+                block_number
             );
         } else {
             pending_peer.check_filters_data(block_filters);
-            pending_peer.last_ask_time = Some(Instant::now());
-            pending_peer.block_number = block_number + BATCH_SIZE;
+            pending_peer.update_block_number(block_number + BATCH_SIZE);
 
             let content = packed::GetBlockFilters::new_builder()
                 .start_number((block_number + BATCH_SIZE).pack())

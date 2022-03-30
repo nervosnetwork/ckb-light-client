@@ -13,6 +13,7 @@ ckb-app-config    = { git="https://github.com/yangby-cryptape/ckb", branch="poc/
 ckb-async-runtime = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
 ckb-types         = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
 ckb-network       = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
+ckb-jsonrpc-types = { git="https://github.com/yangby-cryptape/ckb", branch="poc/light-client" }
 ckb-merkle-mountain-range = "0.3.2"
 golomb-coded-set = { git = "https://github.com/TheWaWaR/golomb-coded-set"}
 rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }
@@ -27,6 +28,10 @@ ctrlc = { version = "3.2.1", features = ["termination"] }
 path-clean = "0.1.0"
 rand = "0.8.5"
 faketime = "0.2.1"
+jsonrpc-core = "18.0"
+jsonrpc-derive = "18.0"
+jsonrpc-http-server = "18.0"
+jsonrpc-server-utils = "18.0"
 
 [badges]
 maintenance = { status = "experimental" }
