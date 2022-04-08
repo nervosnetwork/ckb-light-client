@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use ckb_async_runtime::new_global_runtime;
 use ckb_network::{
@@ -9,19 +9,25 @@ use ckb_network::{
 use crate::{
     config::RunConfig,
     error::{Error, Result},
-    protocols::{light_client_strategies, LightClientProtocol, SyncProtocol},
+    protocols::{light_client_strategies, FilterProtocol, LightClientProtocol, SyncProtocol},
     storage::Storage,
     types::BlockSamplingStrategy,
+    service::Service,
     utils,
 };
+use ckb_types::{core::BlockNumber, packed::Byte32};
 
 impl RunConfig {
     pub(crate) fn execute(self) -> Result<()> {
         log::info!("Run ...");
 
         utils::fs::need_directory(&self.run_env.network.path)?;
-        let storage = Storage::new(&self.run_env.store.path)?;
 
+        let script_hashes_and_block_number = Arc::new(RwLock::new((vec![], 0)));
+        let service = Service::new("127.0.0.1:9000");
+        let rpc_server = service.start(Arc::clone(&script_hashes_and_block_number));
+
+        let storage = Storage::new(&self.run_env.store.path)?;
         let network_state = NetworkState::from_config(self.run_env.network)
             .map(Arc::new)
             .map_err(|err| {
@@ -30,7 +36,8 @@ impl RunConfig {
             })?;
         let required_protocol_ids = vec![
             SupportProtocols::Sync.protocol_id(),
-            SupportProtocols::LightClient.protocol_id(),
+            // SupportProtocols::LightClient.protocol_id(),
+            SupportProtocols::Filter.protocol_id(),
         ];
 
         let mut blocking_recv_flag = BlockingFlag::default();
@@ -50,6 +57,7 @@ impl RunConfig {
                 light_client_strategies::BoundingTheForkPoint,
             >::new(storage)),
         };
+        let filter_protocol = FilterProtocol::new(script_hashes_and_block_number);
 
         let protocols = vec![
             CKBProtocol::new_with_support_protocol(
@@ -60,6 +68,11 @@ impl RunConfig {
             CKBProtocol::new_with_support_protocol(
                 SupportProtocols::LightClient,
                 light_client,
+                Arc::clone(&network_state),
+            ),
+            CKBProtocol::new_with_support_protocol(
+                SupportProtocols::Filter,
+                Box::new(filter_protocol),
                 Arc::clone(&network_state),
             ),
         ];
@@ -90,7 +103,7 @@ impl RunConfig {
             Error::runtime(errmsg)
         })?;
         exit_handler.wait_for_exit();
-
+        rpc_server.close();
         Ok(())
     }
 }

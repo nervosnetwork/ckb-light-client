@@ -4,7 +4,7 @@ use log::{info, trace, warn};
 use std::sync::Arc;
 use std::time::Duration;
 
-const BAD_MESSAGE_BAN_TIME: Duration = Duration::from_secs(5 * 60);
+pub const BAD_MESSAGE_BAN_TIME: Duration = Duration::from_secs(5 * 60);
 
 pub(crate) struct SyncProtocol {}
 
