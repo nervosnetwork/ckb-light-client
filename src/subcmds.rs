@@ -36,7 +36,7 @@ impl RunConfig {
             })?;
         let required_protocol_ids = vec![
             SupportProtocols::Sync.protocol_id(),
-            // SupportProtocols::LightClient.protocol_id(),
+            SupportProtocols::LightClient.protocol_id(),
             SupportProtocols::Filter.protocol_id(),
         ];
 
