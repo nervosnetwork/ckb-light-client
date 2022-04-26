@@ -10,12 +10,11 @@ use crate::{
     config::RunConfig,
     error::{Error, Result},
     protocols::{light_client_strategies, FilterProtocol, LightClientProtocol, SyncProtocol},
+    service::Service,
     storage::Storage,
     types::BlockSamplingStrategy,
-    service::Service,
     utils,
 };
-use ckb_types::{core::BlockNumber, packed::Byte32};
 
 impl RunConfig {
     pub(crate) fn execute(self) -> Result<()> {
@@ -23,11 +22,9 @@ impl RunConfig {
 
         utils::fs::need_directory(&self.run_env.network.path)?;
 
-        let script_hashes_and_block_number = Arc::new(RwLock::new((vec![], 0)));
         let service = Service::new("127.0.0.1:9000");
-        let rpc_server = service.start(Arc::clone(&script_hashes_and_block_number));
-
-        let storage = Storage::new(&self.run_env.store.path)?;
+        let storage = Storage::new(&self.run_env.store.path);
+        let rpc_server = service.start(storage.clone());
         let network_state = NetworkState::from_config(self.run_env.network)
             .map(Arc::new)
             .map_err(|err| {
@@ -45,19 +42,23 @@ impl RunConfig {
         blocking_recv_flag.disable_disconnected();
         blocking_recv_flag.disable_notify();
 
-        let sync_protocol = SyncProtocol::new();
+        let sync_protocol = SyncProtocol::new(storage.clone());
         let light_client: Box<dyn CKBProtocolHandler> = match self.run_env.light_client.strategy {
             BlockSamplingStrategy::NaiveApproach => Box::new(LightClientProtocol::<
                 light_client_strategies::NaiveApproach,
-            >::new(storage)),
-            BlockSamplingStrategy::BinarySearchApproach => Box::new(LightClientProtocol::<
-                light_client_strategies::BinarySearchApproach,
-            >::new(storage)),
-            BlockSamplingStrategy::BoundingTheForkPoint => Box::new(LightClientProtocol::<
-                light_client_strategies::BoundingTheForkPoint,
-            >::new(storage)),
+            >::new(storage.clone())),
+            BlockSamplingStrategy::BinarySearchApproach => {
+                Box::new(LightClientProtocol::<
+                    light_client_strategies::BinarySearchApproach,
+                >::new(storage.clone()))
+            }
+            BlockSamplingStrategy::BoundingTheForkPoint => {
+                Box::new(LightClientProtocol::<
+                    light_client_strategies::BoundingTheForkPoint,
+                >::new(storage.clone()))
+            }
         };
-        let filter_protocol = FilterProtocol::new(script_hashes_and_block_number);
+        let filter_protocol = FilterProtocol::new(storage.clone());
 
         let protocols = vec![
             CKBProtocol::new_with_support_protocol(

@@ -4,13 +4,17 @@ use log::{info, trace, warn};
 use std::sync::Arc;
 use std::time::Duration;
 
+use crate::storage::Storage;
+
 pub const BAD_MESSAGE_BAN_TIME: Duration = Duration::from_secs(5 * 60);
 
-pub(crate) struct SyncProtocol {}
+pub(crate) struct SyncProtocol {
+    storage: Storage,
+}
 
 impl SyncProtocol {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(storage: Storage) -> Self {
+        Self { storage }
     }
 }
 
@@ -33,7 +37,7 @@ impl CKBProtocolHandler for SyncProtocol {
     fn received(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex, data: Bytes) {
         trace!("SyncProtocol.received peer={}", peer);
 
-        let message = match packed::SyncMessage::from_slice(&data) {
+        let message = match packed::SyncMessageReader::from_compatible_slice(&data) {
             Ok(msg) => msg.to_enum(),
             _ => {
                 warn!(
@@ -49,13 +53,20 @@ impl CKBProtocolHandler for SyncProtocol {
             }
         };
 
-        let content = packed::InIBD::new_builder().build();
-        let msg = packed::SyncMessage::new_builder().set(content).build();
-        if let Err(err) = nc.send_message_to(peer, msg.as_bytes()) {
-            warn!(
-                "SyncProtocol.received failed to send InIBD message to peer={} since {:?}",
-                peer, err
-            );
+        match message {
+            packed::SyncMessageUnionReader::SendBlock(reader) => {
+                self.storage.filter_block(reader.to_entity().block());
+            }
+            _ => {
+                let content = packed::InIBD::new_builder().build();
+                let msg = packed::SyncMessage::new_builder().set(content).build();
+                if let Err(err) = nc.send_message_to(peer, msg.as_bytes()) {
+                    warn!(
+                        "SyncProtocol.received failed to send InIBD message to peer={} since {:?}",
+                        peer, err
+                    );
+                }
+            }
         }
     }
 }

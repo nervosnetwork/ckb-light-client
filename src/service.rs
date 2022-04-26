@@ -1,36 +1,33 @@
 use ckb_jsonrpc_types::{BlockNumber, Script};
-use ckb_types::{core, packed};
 use jsonrpc_core::{IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
 use jsonrpc_server_utils::cors::AccessControlAllowOrigin;
 use jsonrpc_server_utils::hosts::DomainsValidation;
 use std::net::ToSocketAddrs;
-use std::sync::{Arc, RwLock};
+
+use crate::storage::Storage;
 
 #[rpc(server)]
 pub trait BlockFilterRpc {
-    /// curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}], "0x59F74D"], "id": 1}'
+    /// curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}], ["0x59F74D"]], "id": 1}'
     #[rpc(name = "set_scripts")]
-    fn set_scripts(&self, scripts: Vec<Script>, block_number: Option<BlockNumber>) -> Result<()>;
+    fn set_scripts(&self, scripts: Vec<Script>, block_numbers: Vec<BlockNumber>) -> Result<()>;
 }
 
 pub struct BlockFilterRpcImpl {
-    script_hashes_and_block_number: Arc<RwLock<(Vec<packed::Byte32>, core::BlockNumber)>>,
+    storage: Storage,
 }
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
-    fn set_scripts(&self, scripts: Vec<Script>, block_number: Option<BlockNumber>) -> Result<()> {
-        let mut script_hashes_and_block_number =
-            self.script_hashes_and_block_number.write().unwrap();
-        script_hashes_and_block_number.0 = scripts
+    fn set_scripts(&self, scripts: Vec<Script>, block_numbers: Vec<BlockNumber>) -> Result<()> {
+        let scripts = scripts
             .into_iter()
-            .map(|script| {
-                let s: packed::Script = script.into();
-                s.calc_script_hash()
-            })
+            .zip(block_numbers)
+            .map(|(script, block_number)| (script.into(), block_number.into()))
             .collect();
-        script_hashes_and_block_number.1 = block_number.unwrap_or_default().into();
+
+        self.storage.update_filter_scripts(scripts);
         Ok(())
     }
 }
@@ -46,14 +43,9 @@ impl Service {
         }
     }
 
-    pub fn start(
-        &self,
-        script_hashes_and_block_number: Arc<RwLock<(Vec<packed::Byte32>, core::BlockNumber)>>,
-    ) -> Server {
+    pub fn start(&self, storage: Storage) -> Server {
         let mut io_handler = IoHandler::new();
-        let rpc_impl = BlockFilterRpcImpl {
-            script_hashes_and_block_number,
-        };
+        let rpc_impl = BlockFilterRpcImpl { storage };
         io_handler.extend_with(rpc_impl.to_delegate());
 
         ServerBuilder::new(io_handler)
