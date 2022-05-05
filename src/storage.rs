@@ -12,7 +12,7 @@ use crate::error::Result;
 
 #[derive(Clone)]
 pub struct Storage {
-    db: Arc<DB>,
+    pub(crate) db: Arc<DB>,
 }
 
 impl Storage {
