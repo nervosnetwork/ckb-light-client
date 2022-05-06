@@ -816,6 +816,25 @@ mod tests {
             "total size should be cellbase cells count + 1 (last block live cell)"
         );
 
+        let cells_page_1 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script2.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(
+            0,
+            cells_page_1.objects.len(),
+            "total size should be zero with unfiltered lock script"
+        );
+
         let desc_cells_page_1 = rpc
             .get_cells(
                 SearchKey {
