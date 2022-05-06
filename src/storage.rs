@@ -106,19 +106,24 @@ impl Storage {
                     .enumerate()
                     .for_each(|(input_index, input)| {
                         let tx_hash = input.previous_output().tx_hash();
-                        if let Some(previous_tx) = self.get_transaction(&tx_hash) {
+                        if let Some((
+                            generated_by_block_number,
+                            generated_by_tx_index,
+                            previous_tx,
+                        )) = self.get_transaction(&tx_hash)
+                        {
                             let previous_output_index = input.previous_output().index().unpack();
                             if let Some(previous_output) =
                                 previous_tx.raw().outputs().get(previous_output_index)
                             {
                                 let script = previous_output.lock();
                                 if let Some(stored_block_number) = scripts.get(&script) {
-                                    if block_number > *stored_block_number {
+                                    if block_number >= *stored_block_number {
                                         // delete utxo
                                         let key = Key::CellLockScript(
                                             &script,
-                                            block_number,
-                                            tx_index as u32,
+                                            generated_by_block_number,
+                                            generated_by_tx_index,
                                             previous_output_index as u32,
                                         )
                                         .into_vec();
@@ -137,9 +142,9 @@ impl Storage {
                                             .expect("batch put should be ok");
                                         // insert tx
                                         let key = Key::TxHash(&tx_hash).into_vec();
-                                        batch
-                                            .put(key, tx.as_slice())
-                                            .expect("batch put should be ok");
+                                        let value =
+                                            Value::Transaction(block_number, tx_index as u32, &tx);
+                                        batch.put_kv(key, value).expect("batch put should be ok");
                                     }
                                 }
                             }
@@ -153,7 +158,7 @@ impl Storage {
                     .for_each(|(output_index, output)| {
                         let script = output.lock();
                         if let Some(stored_block_number) = scripts.get(&script) {
-                            if block_number > *stored_block_number {
+                            if block_number >= *stored_block_number {
                                 let tx_hash = tx.calc_tx_hash();
                                 // insert utxo
                                 let key = Key::CellLockScript(
@@ -180,18 +185,26 @@ impl Storage {
                                     .expect("batch put should be ok");
                                 // insert tx
                                 let key = Key::TxHash(&tx_hash).into_vec();
-                                batch
-                                    .put(key, tx.as_slice())
-                                    .expect("batch put should be ok");
+                                let value = Value::Transaction(block_number, tx_index as u32, &tx);
+                                batch.put_kv(key, value).expect("batch put should be ok");
                             }
                         }
                     });
             });
+        batch.commit().expect("batch commit should be ok");
     }
 
-    pub fn get_transaction(&self, tx_hash: &Byte32) -> Option<Transaction> {
+    pub fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, TxIndex, Transaction)> {
         self.get(Key::TxHash(tx_hash).into_vec())
-            .map(|v| v.map(|v| Transaction::from_slice(&v).expect("stored Transaction")))
+            .map(|v| {
+                v.map(|v| {
+                    (
+                        BlockNumber::from_be_bytes(v[0..8].try_into().expect("stored BlockNumber")),
+                        TxIndex::from_be_bytes(v[8..12].try_into().expect("stored TxIndex")),
+                        Transaction::from_slice(&v[12..]).expect("stored Transaction"),
+                    )
+                })
+            })
             .expect("db get should be ok")
     }
 }
@@ -252,7 +265,7 @@ pub enum Key<'a> {
 }
 
 pub enum Value<'a> {
-    Transaction(&'a Transaction),
+    Transaction(BlockNumber, TxIndex, &'a Transaction),
     TxHash(&'a Byte32),
     MetaValue(Vec<u8>),
 }
@@ -318,7 +331,13 @@ impl<'a> From<Key<'a>> for Vec<u8> {
 impl<'a> From<Value<'a>> for Vec<u8> {
     fn from(value: Value<'a>) -> Vec<u8> {
         match value {
-            Value::Transaction(transaction) => transaction.as_slice().into(),
+            Value::Transaction(block_number, tx_index, transaction) => {
+                let mut encoded = Vec::new();
+                encoded.extend_from_slice(&block_number.to_be_bytes());
+                encoded.extend_from_slice(&tx_index.to_be_bytes());
+                encoded.extend_from_slice(transaction.as_slice());
+                encoded
+            }
             Value::TxHash(tx_hash) => tx_hash.as_slice().into(),
             Value::MetaValue(meta_value) => meta_value,
         }

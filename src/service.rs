@@ -1,5 +1,5 @@
 use ckb_jsonrpc_types::{
-    BlockNumber, CellOutput, JsonBytes, OutPoint, Script, TransactionView, Uint32, Uint64,
+    BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, TransactionView, Uint32, Uint64,
 };
 use ckb_types::{core, packed, prelude::*, H256};
 use jsonrpc_core::{Error, IoHandler, Result};
@@ -39,6 +39,9 @@ pub trait BlockFilterRpc {
         limit: Uint32,
         after: Option<JsonBytes>,
     ) -> Result<Pagination<Tx>>;
+
+    #[rpc(name = "get_cells_capacity")]
+    fn get_cells_capacity(&self, search_key: SearchKey) -> Result<Capacity>;
 }
 
 #[derive(Deserialize)]
@@ -170,7 +173,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                     &snapshot
                         .get(Key::TxHash(&tx_hash).into_vec())
                         .expect("get tx should be OK")
-                        .expect("stored tx"),
+                        .expect("stored tx")[12..],
                 )
                 .expect("from stored tx slice should be OK");
                 let output = tx
@@ -297,7 +300,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                     &snapshot
                         .get(Key::TxHash(&tx_hash).into_vec())
                         .expect("get tx should be OK")
-                        .expect("stored tx"),
+                        .expect("stored tx")[12..],
                 )
                 .expect("from stored tx slice should be OK");
 
@@ -383,6 +386,114 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             objects: txs,
             last_cursor: JsonBytes::from_vec(last_key),
         })
+    }
+
+    fn get_cells_capacity(&self, search_key: SearchKey) -> Result<Capacity> {
+        let (prefix, from_key, direction, skip) = build_query_options(
+            &search_key,
+            KeyPrefix::CellLockScript,
+            KeyPrefix::CellTypeScript,
+            Order::Asc,
+            None,
+        )?;
+        let filter_script_type = match search_key.script_type {
+            ScriptType::Lock => ScriptType::Type,
+            ScriptType::Type => ScriptType::Lock,
+        };
+        let (
+            filter_prefix,
+            filter_output_data_len_range,
+            filter_output_capacity_range,
+            filter_block_range,
+        ) = build_filter_options(search_key)?;
+        let mode = IteratorMode::From(from_key.as_ref(), direction);
+        let snapshot = self.storage.db.snapshot();
+        let iter = snapshot.iterator(mode).skip(skip);
+
+        let capacity: u64 = iter
+            .take_while(|(key, _value)| key.starts_with(&prefix))
+            .filter_map(|(key, value)| {
+                let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
+                let output_index = u32::from_be_bytes(
+                    key[key.len() - 4..]
+                        .try_into()
+                        .expect("stored output_index"),
+                );
+                let tx_index = u32::from_be_bytes(
+                    key[key.len() - 8..key.len() - 4]
+                        .try_into()
+                        .expect("stored tx_index"),
+                );
+                let block_number = u64::from_be_bytes(
+                    key[key.len() - 16..key.len() - 8]
+                        .try_into()
+                        .expect("stored block_number"),
+                );
+
+                let tx = packed::Transaction::from_slice(
+                    &snapshot
+                        .get(Key::TxHash(&tx_hash).into_vec())
+                        .expect("get tx should be OK")
+                        .expect("stored tx")[12..],
+                )
+                .expect("from stored tx slice should be OK");
+                let output = tx
+                    .raw()
+                    .outputs()
+                    .get(output_index as usize)
+                    .expect("get output by index should be OK");
+                let output_data = tx
+                    .raw()
+                    .outputs_data()
+                    .get(output_index as usize)
+                    .expect("get output data by index should be OK");
+
+                if let Some(prefix) = filter_prefix.as_ref() {
+                    match filter_script_type {
+                        ScriptType::Lock => {
+                            if !extract_raw_data(&output.lock())
+                                .as_slice()
+                                .starts_with(prefix)
+                            {
+                                return None;
+                            }
+                        }
+                        ScriptType::Type => {
+                            if output.type_().is_none()
+                                || !extract_raw_data(&output.type_().to_opt().unwrap())
+                                    .as_slice()
+                                    .starts_with(prefix)
+                            {
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                if let Some([r0, r1]) = filter_output_data_len_range {
+                    if output_data.len() < r0 || output_data.len() >= r1 {
+                        return None;
+                    }
+                }
+
+                if let Some([r0, r1]) = filter_output_capacity_range {
+                    let capacity: core::Capacity = output.capacity().unpack();
+                    if capacity < r0 || capacity >= r1 {
+                        return None;
+                    }
+                }
+
+                if let Some([r0, r1]) = filter_block_range {
+                    if block_number < r0 || block_number >= r1 {
+                        return None;
+                    }
+                }
+
+                Some(Unpack::<core::Capacity>::unpack(&output.capacity()).as_u64())
+            })
+            .sum();
+
+        Ok(capacity.into())
     }
 }
 
@@ -518,5 +629,395 @@ impl Service {
                     .expect("config listen_address parsed"),
             )
             .expect("Start Jsonrpc HTTP service")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::*;
+    use crate::storage::Storage;
+    use ckb_types::{
+        bytes::Bytes,
+        core::{
+            capacity_bytes, BlockBuilder, Capacity, HeaderBuilder, ScriptHashType,
+            TransactionBuilder,
+        },
+        packed::{CellInput, CellOutputBuilder, OutPoint, Script, ScriptBuilder},
+        H256,
+    };
+    use tempfile;
+
+    fn new_storage(prefix: &str) -> Storage {
+        let tmp_dir = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
+        Storage::new(tmp_dir.path().to_str().unwrap())
+    }
+
+    #[test]
+    fn rpc() {
+        let storage = new_storage("rpc");
+        let rpc = BlockFilterRpcImpl {
+            storage: storage.clone(),
+        };
+
+        // setup test data
+        let lock_script1 = ScriptBuilder::default()
+            .code_hash(H256(rand::random()).pack())
+            .hash_type(ScriptHashType::Data.into())
+            .args(Bytes::from(b"lock_script1".to_vec()).pack())
+            .build();
+
+        let lock_script2 = ScriptBuilder::default()
+            .code_hash(H256(rand::random()).pack())
+            .hash_type(ScriptHashType::Type.into())
+            .args(Bytes::from(b"lock_script2".to_vec()).pack())
+            .build();
+
+        let type_script1 = ScriptBuilder::default()
+            .code_hash(H256(rand::random()).pack())
+            .hash_type(ScriptHashType::Data.into())
+            .args(Bytes::from(b"type_script1".to_vec()).pack())
+            .build();
+
+        let type_script2 = ScriptBuilder::default()
+            .code_hash(H256(rand::random()).pack())
+            .hash_type(ScriptHashType::Type.into())
+            .args(Bytes::from(b"type_script2".to_vec()).pack())
+            .build();
+
+        let cellbase0 = TransactionBuilder::default()
+            .input(CellInput::new_cellbase_input(0))
+            .witness(Script::default().into_witness())
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(1000).pack())
+                    .lock(lock_script1.clone())
+                    .build(),
+            )
+            .output_data(Default::default())
+            .build();
+
+        let tx00 = TransactionBuilder::default()
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(1000).pack())
+                    .lock(lock_script1.clone())
+                    .type_(Some(type_script1.clone()).pack())
+                    .build(),
+            )
+            .output_data(Default::default())
+            .build();
+
+        let tx01 = TransactionBuilder::default()
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(2000).pack())
+                    .lock(lock_script2.clone())
+                    .type_(Some(type_script2.clone()).pack())
+                    .build(),
+            )
+            .output_data(Default::default())
+            .build();
+
+        let block0 = BlockBuilder::default()
+            .transaction(cellbase0)
+            .transaction(tx00.clone())
+            .transaction(tx01.clone())
+            .header(HeaderBuilder::default().number(0.pack()).build())
+            .build();
+
+        storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), 0)]));
+        storage.filter_block(block0.data());
+
+        let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
+        let total_blocks = 255;
+        for i in 1..total_blocks {
+            let cellbase = TransactionBuilder::default()
+                .input(CellInput::new_cellbase_input(i + 1))
+                .witness(Script::default().into_witness())
+                .output(
+                    CellOutputBuilder::default()
+                        .capacity(capacity_bytes!(1000).pack())
+                        .lock(lock_script1.clone())
+                        .build(),
+                )
+                .output_data(Default::default())
+                .build();
+
+            pre_tx0 = TransactionBuilder::default()
+                .input(CellInput::new(OutPoint::new(pre_tx0.hash(), 0), 0))
+                .output(
+                    CellOutputBuilder::default()
+                        .capacity(capacity_bytes!(1000).pack())
+                        .lock(lock_script1.clone())
+                        .type_(Some(type_script1.clone()).pack())
+                        .build(),
+                )
+                .output_data(Default::default())
+                .build();
+
+            pre_tx1 = TransactionBuilder::default()
+                .input(CellInput::new(OutPoint::new(pre_tx1.hash(), 0), 0))
+                .output(
+                    CellOutputBuilder::default()
+                        .capacity(capacity_bytes!(2000).pack())
+                        .lock(lock_script2.clone())
+                        .type_(Some(type_script2.clone()).pack())
+                        .build(),
+                )
+                .output_data(Default::default())
+                .build();
+
+            pre_block = BlockBuilder::default()
+                .transaction(cellbase)
+                .transaction(pre_tx0.clone())
+                .transaction(pre_tx1.clone())
+                .header(
+                    HeaderBuilder::default()
+                        .number((pre_block.number() + 1).pack())
+                        .parent_hash(pre_block.hash())
+                        .build(),
+                )
+                .build();
+
+            storage.filter_block(pre_block.data());
+        }
+
+        // test get_cells rpc
+        let cells_page_1 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+        let cells_page_2 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                150.into(),
+                Some(cells_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!(
+            total_blocks as usize + 1,
+            cells_page_1.objects.len() + cells_page_2.objects.len(),
+            "total size should be cellbase cells count + 1 (last block live cell)"
+        );
+
+        let desc_cells_page_1 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Desc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+
+        let desc_cells_page_2 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Desc,
+                150.into(),
+                Some(desc_cells_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!(
+            total_blocks as usize + 1,
+            desc_cells_page_1.objects.len() + desc_cells_page_2.objects.len(),
+            "total size should be cellbase cells count + 1 (last block live cell)"
+        );
+        assert_eq!(
+            desc_cells_page_1.objects.first().unwrap().out_point,
+            cells_page_2.objects.last().unwrap().out_point
+        );
+
+        let filter_cells_page_1 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: Some(SearchKeyFilter {
+                        script: None,
+                        output_data_len_range: None,
+                        output_capacity_range: None,
+                        block_range: Some([100.into(), 200.into()]),
+                    }),
+                },
+                Order::Asc,
+                60.into(),
+                None,
+            )
+            .unwrap();
+
+        let filter_cells_page_2 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: Some(SearchKeyFilter {
+                        script: None,
+                        output_data_len_range: None,
+                        output_capacity_range: None,
+                        block_range: Some([100.into(), 200.into()]),
+                    }),
+                },
+                Order::Asc,
+                60.into(),
+                Some(filter_cells_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!(
+            100,
+            filter_cells_page_1.objects.len() + filter_cells_page_2.objects.len(),
+            "total size should be filtered cellbase cells (100~199)"
+        );
+
+        // test get_transactions rpc
+        let txs_page_1 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                500.into(),
+                None,
+            )
+            .unwrap();
+        let txs_page_2 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                500.into(),
+                Some(txs_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!(total_blocks as usize * 3 - 1, txs_page_1.objects.len() + txs_page_2.objects.len(), "total size should be cellbase tx count + total_block * 2 - 1 (genesis block only has one tx)");
+
+        let desc_txs_page_1 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Desc,
+                500.into(),
+                None,
+            )
+            .unwrap();
+        let desc_txs_page_2 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Desc,
+                500.into(),
+                Some(desc_txs_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!(total_blocks as usize * 3 - 1, desc_txs_page_1.objects.len() + desc_txs_page_2.objects.len(), "total size should be cellbase tx count + total_block * 2 - 1 (genesis block only has one tx)");
+        assert_eq!(
+            desc_txs_page_1.objects.first().unwrap().transaction.hash,
+            txs_page_2.objects.last().unwrap().transaction.hash,
+        );
+
+        let filter_txs_page_1 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: Some(SearchKeyFilter {
+                        script: None,
+                        output_data_len_range: None,
+                        output_capacity_range: None,
+                        block_range: Some([100.into(), 200.into()]),
+                    }),
+                },
+                Order::Asc,
+                200.into(),
+                None,
+            )
+            .unwrap();
+
+        let filter_txs_page_2 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: Some(SearchKeyFilter {
+                        script: None,
+                        output_data_len_range: None,
+                        output_capacity_range: None,
+                        block_range: Some([100.into(), 200.into()]),
+                    }),
+                },
+                Order::Asc,
+                200.into(),
+                Some(filter_txs_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!(
+            300,
+            filter_txs_page_1.objects.len() + filter_txs_page_2.objects.len(),
+            "total size should be filtered blocks count * 3 (100~199 * 3)"
+        );
+
+        // test get_cells_capacity rpc
+        let capacity = rpc
+            .get_cells_capacity(SearchKey {
+                script: lock_script1.clone().into(),
+                script_type: ScriptType::Lock,
+                filter: None,
+            })
+            .unwrap();
+
+        assert_eq!(
+            1000 * 100000000 * (total_blocks + 1),
+            capacity.value(),
+            "cellbases + last block live cell"
+        );
+
+        let capacity = rpc
+            .get_cells_capacity(SearchKey {
+                script: lock_script2.clone().into(),
+                script_type: ScriptType::Lock,
+                filter: None,
+            })
+            .unwrap();
+
+        assert_eq!(0, capacity.value(), "lock_script2 is not filtered");
     }
 }
