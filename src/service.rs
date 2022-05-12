@@ -18,9 +18,12 @@ use crate::storage::{self, extract_raw_data, Key, KeyPrefix, Storage};
 
 #[rpc(server)]
 pub trait BlockFilterRpc {
-    /// curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}], ["0x59F74D"]], "id": 1}'
+    /// curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [{"script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}, "block_number": "0x59F74D"}], "id": 1}'
     #[rpc(name = "set_scripts")]
-    fn set_scripts(&self, scripts: Vec<Script>, block_numbers: Vec<BlockNumber>) -> Result<()>;
+    fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()>;
+
+    #[rpc(name = "get_scripts")]
+    fn get_scripts(&self) -> Result<Vec<ScriptStatus>>;
 
     #[rpc(name = "get_cells")]
     fn get_cells(
@@ -42,6 +45,12 @@ pub trait BlockFilterRpc {
 
     #[rpc(name = "get_cells_capacity")]
     fn get_cells_capacity(&self, search_key: SearchKey) -> Result<Capacity>;
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct ScriptStatus {
+    script: Script,
+    block_number: BlockNumber,
 }
 
 #[derive(Deserialize)]
@@ -109,15 +118,24 @@ pub struct BlockFilterRpcImpl {
 }
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
-    fn set_scripts(&self, scripts: Vec<Script>, block_numbers: Vec<BlockNumber>) -> Result<()> {
+    fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
         let scripts = scripts
             .into_iter()
-            .zip(block_numbers)
-            .map(|(script, block_number)| (script.into(), block_number.into()))
+            .map(|script_status| (script_status.script.into(), script_status.block_number.into()))
             .collect();
 
         self.storage.update_filter_scripts(scripts);
         Ok(())
+    }
+
+    fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
+        let scripts = self.storage.get_filter_scripts();
+        Ok(scripts.into_iter().map(|(script, block_number)| {
+            ScriptStatus {
+                script: script.into(),
+                block_number: block_number.into(),
+            }
+        }).collect())
     }
 
     fn get_cells(
