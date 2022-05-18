@@ -1,4 +1,4 @@
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 use ckb_async_runtime::new_global_runtime;
 use ckb_network::{
@@ -9,10 +9,9 @@ use ckb_network::{
 use crate::{
     config::RunConfig,
     error::{Error, Result},
-    protocols::{light_client_strategies, FilterProtocol, LightClientProtocol, SyncProtocol},
+    protocols::{FilterProtocol, LightClientProtocol, SyncProtocol},
     service::Service,
     storage::Storage,
-    types::BlockSamplingStrategy,
     utils,
 };
 
@@ -43,22 +42,9 @@ impl RunConfig {
         blocking_recv_flag.disable_notify();
 
         let sync_protocol = SyncProtocol::new(storage.clone());
-        let light_client: Box<dyn CKBProtocolHandler> = match self.run_env.light_client.strategy {
-            BlockSamplingStrategy::NaiveApproach => Box::new(LightClientProtocol::<
-                light_client_strategies::NaiveApproach,
-            >::new(storage.clone())),
-            BlockSamplingStrategy::BinarySearchApproach => {
-                Box::new(LightClientProtocol::<
-                    light_client_strategies::BinarySearchApproach,
-                >::new(storage.clone()))
-            }
-            BlockSamplingStrategy::BoundingTheForkPoint => {
-                Box::new(LightClientProtocol::<
-                    light_client_strategies::BoundingTheForkPoint,
-                >::new(storage.clone()))
-            }
-        };
-        let filter_protocol = FilterProtocol::new(storage.clone());
+        let light_client: Box<dyn CKBProtocolHandler> =
+            Box::new(LightClientProtocol::new(self.run_env.pow));
+        let filter_protocol = FilterProtocol::new(storage);
 
         let protocols = vec![
             CKBProtocol::new_with_support_protocol(

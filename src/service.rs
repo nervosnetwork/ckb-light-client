@@ -1,7 +1,7 @@
 use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, TransactionView, Uint32, Uint64,
 };
-use ckb_types::{core, packed, prelude::*, H256};
+use ckb_types::{core, packed, prelude::*};
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
@@ -121,7 +121,12 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
         let scripts = scripts
             .into_iter()
-            .map(|script_status| (script_status.script.into(), script_status.block_number.into()))
+            .map(|script_status| {
+                (
+                    script_status.script.into(),
+                    script_status.block_number.into(),
+                )
+            })
             .collect();
 
         self.storage.update_filter_scripts(scripts);
@@ -130,12 +135,13 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
 
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
         let scripts = self.storage.get_filter_scripts();
-        Ok(scripts.into_iter().map(|(script, block_number)| {
-            ScriptStatus {
+        Ok(scripts
+            .into_iter()
+            .map(|(script, block_number)| ScriptStatus {
                 script: script.into(),
                 block_number: block_number.into(),
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     fn get_cells(

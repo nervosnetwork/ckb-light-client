@@ -1,9 +1,17 @@
+use std::time::Duration;
+
+use ckb_types::core::BlockNumber;
+
 mod filter;
 mod light_client;
 mod status;
 mod synchronizer;
 
 pub(crate) use filter::FilterProtocol;
-pub(crate) use light_client::{strategies as light_client_strategies, LightClientProtocol};
+pub(crate) use light_client::LightClientProtocol;
 pub(crate) use status::{Status, StatusCode};
 pub(crate) use synchronizer::SyncProtocol;
+
+pub const BAD_MESSAGE_BAN_TIME: Duration = Duration::from_secs(5 * 60);
+
+pub const LAST_N_BLOCKS: BlockNumber = 500;

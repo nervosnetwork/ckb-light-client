@@ -2,11 +2,9 @@ use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerInde
 use ckb_types::{packed, prelude::*};
 use log::{info, trace, warn};
 use std::sync::Arc;
-use std::time::Duration;
 
+use super::BAD_MESSAGE_BAN_TIME;
 use crate::storage::Storage;
-
-pub const BAD_MESSAGE_BAN_TIME: Duration = Duration::from_secs(5 * 60);
 
 pub(crate) struct SyncProtocol {
     storage: Storage,
