@@ -1,6 +1,4 @@
-use std::{
-    convert::TryFrom, fmt::Display, fs::OpenOptions, io::Read as _, path::PathBuf, str::FromStr,
-};
+use std::{convert::TryFrom, fmt::Display, fs::OpenOptions, io::Read as _, str::FromStr};
 
 use crate::{
     error::{Error, Result},

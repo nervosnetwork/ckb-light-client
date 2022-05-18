@@ -11,13 +11,9 @@ use ckb_resource::Resource;
 use crate::{
     config::RunConfig,
     error::{Error, Result},
-    protocols::{
-        light_client_strategies, FilterProtocol, LightClientProtocol, PendingTxs, RelayProtocol,
-        SyncProtocol,
-    },
+    protocols::{FilterProtocol, LightClientProtocol, PendingTxs, RelayProtocol, SyncProtocol},
     service::Service,
     storage::Storage,
-    types::BlockSamplingStrategy,
     utils,
 };
 
@@ -60,21 +56,8 @@ impl RunConfig {
 
         let sync_protocol = SyncProtocol::new(storage.clone());
         let relay_protocol = RelayProtocol::new(pending_txs.clone());
-        let light_client: Box<dyn CKBProtocolHandler> = match self.run_env.light_client.strategy {
-            BlockSamplingStrategy::NaiveApproach => Box::new(LightClientProtocol::<
-                light_client_strategies::NaiveApproach,
-            >::new(storage.clone())),
-            BlockSamplingStrategy::BinarySearchApproach => {
-                Box::new(LightClientProtocol::<
-                    light_client_strategies::BinarySearchApproach,
-                >::new(storage.clone()))
-            }
-            BlockSamplingStrategy::BoundingTheForkPoint => {
-                Box::new(LightClientProtocol::<
-                    light_client_strategies::BoundingTheForkPoint,
-                >::new(storage.clone()))
-            }
-        };
+        let light_client: Box<dyn CKBProtocolHandler> =
+            Box::new(LightClientProtocol::new(self.run_env.pow));
         let filter_protocol = FilterProtocol::new(storage.clone());
 
         let protocols = vec![

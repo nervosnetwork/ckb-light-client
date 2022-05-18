@@ -37,6 +37,5 @@ discovery_local_address = false
 # Ensure that itself can continue to serve as a bootnode node
 bootnode_mode = false
 
-[light_client]
-# NaiveApproach, BinarySearchApproach, BoundingTheForkPoint
-strategy = "BoundingTheForkPoint"
+[pow]
+func = "Eaglesong"
