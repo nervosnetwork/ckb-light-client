@@ -1,6 +1,8 @@
 use ckb_jsonrpc_types::{
-    BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, TransactionView, Uint32, Uint64,
+    BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, Transaction, TransactionView,
+    Uint32, Uint64,
 };
+use ckb_network::NetworkController;
 use ckb_types::{core, packed, prelude::*, H256};
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
@@ -12,9 +14,15 @@ use rocksdb::{
     Direction, IteratorMode,
 };
 use serde::{Deserialize, Serialize};
-use std::net::ToSocketAddrs;
+use std::{
+    net::ToSocketAddrs,
+    sync::{Arc, RwLock},
+};
 
-use crate::storage::{self, extract_raw_data, Key, KeyPrefix, Storage};
+use crate::{
+    protocols::PendingTxs,
+    storage::{self, extract_raw_data, Key, KeyPrefix, Storage},
+};
 
 #[rpc(server)]
 pub trait BlockFilterRpc {
@@ -45,6 +53,12 @@ pub trait BlockFilterRpc {
 
     #[rpc(name = "get_cells_capacity")]
     fn get_cells_capacity(&self, search_key: SearchKey) -> Result<Capacity>;
+}
+
+#[rpc(server)]
+pub trait TransactionRpc {
+    #[rpc(name = "send_transaction")]
+    fn send_transaction(&self, tx: Transaction) -> Result<H256>;
 }
 
 #[derive(Deserialize, Serialize)]
@@ -117,11 +131,21 @@ pub struct BlockFilterRpcImpl {
     storage: Storage,
 }
 
+pub struct TransactionRpcImpl {
+    network_controller: NetworkController,
+    pending_txs: Arc<RwLock<PendingTxs>>,
+}
+
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
         let scripts = scripts
             .into_iter()
-            .map(|script_status| (script_status.script.into(), script_status.block_number.into()))
+            .map(|script_status| {
+                (
+                    script_status.script.into(),
+                    script_status.block_number.into(),
+                )
+            })
             .collect();
 
         self.storage.update_filter_scripts(scripts);
@@ -130,12 +154,13 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
 
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
         let scripts = self.storage.get_filter_scripts();
-        Ok(scripts.into_iter().map(|(script, block_number)| {
-            ScriptStatus {
+        Ok(scripts
+            .into_iter()
+            .map(|(script, block_number)| ScriptStatus {
                 script: script.into(),
                 block_number: block_number.into(),
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     fn get_cells(
@@ -616,7 +641,13 @@ fn build_filter_options(
     ))
 }
 
-pub struct Service {
+impl TransactionRpc for TransactionRpcImpl {
+    fn send_transaction(&self, tx: Transaction) -> Result<H256> {
+        Ok(H256([0; 32]))
+    }
+}
+
+pub(crate) struct Service {
     listen_address: String,
 }
 
@@ -627,10 +658,20 @@ impl Service {
         }
     }
 
-    pub fn start(&self, storage: Storage) -> Server {
+    pub fn start(
+        &self,
+        network_controller: NetworkController,
+        storage: Storage,
+        pending_txs: Arc<RwLock<PendingTxs>>,
+    ) -> Server {
         let mut io_handler = IoHandler::new();
-        let rpc_impl = BlockFilterRpcImpl { storage };
-        io_handler.extend_with(rpc_impl.to_delegate());
+        let block_filter_rpc_impl = BlockFilterRpcImpl { storage };
+        let transaction_rpc_impl = TransactionRpcImpl {
+            network_controller,
+            pending_txs,
+        };
+        io_handler.extend_with(block_filter_rpc_impl.to_delegate());
+        io_handler.extend_with(transaction_rpc_impl.to_delegate());
 
         ServerBuilder::new(io_handler)
             .cors(DomainsValidation::AllowOnly(vec![

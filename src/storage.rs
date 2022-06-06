@@ -1,8 +1,11 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use ckb_types::{
-    core::BlockNumber,
-    packed::{Block, Byte32, Script, Transaction},
+    core::{
+        cell::{CellMeta, CellProvider, CellStatus},
+        BlockNumber, TransactionInfo,
+    },
+    packed::{Block, Byte32, CellOutput, OutPoint, Script, Transaction},
     prelude::*,
 };
 
@@ -202,6 +205,34 @@ impl Storage {
                 })
             })
             .expect("db get should be ok")
+    }
+}
+
+impl CellProvider for Storage {
+    // assume all cells are live and load data eagerly
+    fn cell(&self, out_point: &OutPoint, _eager_load: bool) -> CellStatus {
+        if let Some((_block_number, _tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
+            let output_index = out_point.index().unpack();
+            let tx = tx.into_view();
+            if let Some(cell_output) = tx.outputs().get(output_index) {
+                let output_data = tx
+                    .outputs_data()
+                    .get(output_index)
+                    .expect("output_data's index should be same as output")
+                    .raw_data();
+                let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
+                let cell_meta = CellMeta {
+                    out_point: out_point.clone(),
+                    cell_output,
+                    transaction_info: None,
+                    data_bytes: output_data.len() as u64,
+                    mem_cell_data: Some(output_data),
+                    mem_cell_data_hash: Some(output_data_data_hash),
+                };
+                return CellStatus::Live(cell_meta);
+            }
+        }
+        CellStatus::Unknown
     }
 }
 
