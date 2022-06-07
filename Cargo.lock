@@ -432,6 +432,7 @@ dependencies = [
  "ckb-jsonrpc-types",
  "ckb-merkle-mountain-range",
  "ckb-network",
+ "ckb-resource",
  "ckb-rocksdb",
  "ckb-script",
  "ckb-traits",

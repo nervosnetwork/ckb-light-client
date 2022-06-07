@@ -45,6 +45,37 @@ impl Storage {
         }
     }
 
+    pub fn init_genesis_block(&self, block: Block) {
+        let genesis_hash = block.calc_header_hash();
+        let key_prefix = Key::MetaKey("GENESIS_HASH").into_vec();
+        if let Some(stored_genesis_hash) =
+            self.get(key_prefix.as_slice()).expect("get genesis hash")
+        {
+            if genesis_hash.as_slice() != stored_genesis_hash.as_slice() {
+                panic!(
+                    "genesis hash mismatch: stored={:#?}, new={}",
+                    stored_genesis_hash, genesis_hash
+                );
+            }
+        } else {
+            let mut batch = self.batch();
+            block
+                .transactions()
+                .into_iter()
+                .enumerate()
+                .for_each(|(tx_index, tx)| {
+                    let tx_hash = tx.calc_tx_hash();
+                    let key = Key::TxHash(&tx_hash).into_vec();
+                    let value = Value::Transaction(0, tx_index as u32, &tx);
+                    batch.put_kv(key, value).expect("batch put should be ok");
+                });
+            batch
+                .put_kv(key_prefix, genesis_hash.as_slice())
+                .expect("batch put should be ok");
+            batch.commit().expect("batch commit should be ok");
+        }
+    }
+
     pub fn get_filter_scripts(&self) -> HashMap<Script, BlockNumber> {
         let key_prefix = Key::MetaKey("FILTER_SCRIPTS").into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
