@@ -175,9 +175,17 @@ impl LightClientProtocol {
                 }
             }
         }
-        if let Some((_, prove_state)) = best.as_ref() {
+        // FIXME: must use ProveState instead
+        if let Some(request) = self
+            .peers()
+            .items()
+            .iter()
+            .next()
+            .map(|(_, peer)| peer)
+            .and_then(|peer| peer.state().get_prove_request())
+        {
             self.storage
-                .update_tip_header(prove_state.get_last_header().header());
+                .update_tip_header(request.get_last_header().header());
         }
         self.best = best;
     }

@@ -173,9 +173,17 @@ impl Peer {
             update_timestamp,
         }
     }
+    pub(crate) fn state(&self) -> &PeerState {
+        &self.state
+    }
 }
 
 impl Peers {
+    // FIXME: remove this function later
+    pub(crate) fn items(&self) -> &HashMap<PeerIndex, Peer> {
+        &self.inner
+    }
+
     pub(crate) fn add_peer(&mut self, index: PeerIndex) {
         let now = unix_time_as_millis();
         let peer = Peer::new(now);
