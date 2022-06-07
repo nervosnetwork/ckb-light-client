@@ -43,7 +43,7 @@ impl RunConfig {
 
         let sync_protocol = SyncProtocol::new(storage.clone());
         let light_client: Box<dyn CKBProtocolHandler> =
-            Box::new(LightClientProtocol::new(self.run_env.pow));
+            Box::new(LightClientProtocol::new(self.run_env.pow, storage.clone()));
         let filter_protocol = FilterProtocol::new(storage);
 
         let protocols = vec![

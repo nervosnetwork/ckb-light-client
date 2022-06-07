@@ -23,8 +23,10 @@ use super::{
     status::{Status, StatusCode},
     BAD_MESSAGE_BAN_TIME,
 };
+use crate::storage::Storage;
 
 pub struct LightClientProtocol {
+    storage: Storage,
     peers: Peers,
     pow: Pow,
     best: Option<(PeerIndex, ProveState)>,
@@ -128,8 +130,9 @@ impl LightClientProtocol {
 }
 
 impl LightClientProtocol {
-    pub(crate) fn new(pow: Pow) -> Self {
+    pub(crate) fn new(pow: Pow, storage: Storage) -> Self {
         Self {
+            storage,
             peers: Peers::default(),
             pow,
             best: None,
@@ -171,6 +174,10 @@ impl LightClientProtocol {
                     best = Some((curr_peer, curr_state));
                 }
             }
+        }
+        if let Some((_, prove_state)) = best.as_ref() {
+            self.storage
+                .update_tip_header(prove_state.get_last_header().header());
         }
         self.best = best;
     }
