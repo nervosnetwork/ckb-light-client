@@ -1,6 +1,6 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Status, StatusCode};
-use crate::storage::{self, Storage};
+use crate::storage::Storage;
 use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
 use golomb_coded_set::GCSFilterReader;
