@@ -1,15 +1,20 @@
 use std::sync::{Arc, RwLock};
 
 use ckb_async_runtime::new_global_runtime;
+use ckb_chain_spec::ChainSpec;
 use ckb_network::{
     BlockingFlag, CKBProtocol, CKBProtocolHandler, DefaultExitHandler, ExitHandler, NetworkService,
     NetworkState, SupportProtocols,
 };
+use ckb_resource::Resource;
 
 use crate::{
     config::RunConfig,
     error::{Error, Result},
-    protocols::{light_client_strategies, FilterProtocol, LightClientProtocol, SyncProtocol},
+    protocols::{
+        light_client_strategies, FilterProtocol, LightClientProtocol, PendingTxs, RelayProtocol,
+        SyncProtocol,
+    },
     service::Service,
     storage::Storage,
     types::BlockSamplingStrategy,
@@ -22,9 +27,19 @@ impl RunConfig {
 
         utils::fs::need_directory(&self.run_env.network.path)?;
 
-        let service = Service::new("127.0.0.1:9000");
         let storage = Storage::new(&self.run_env.store.path);
-        let rpc_server = service.start(storage.clone());
+        let chain_spec = ChainSpec::load_from(&match self.run_env.chain.as_str() {
+            "mainnet" => Resource::bundled("specs/mainnet.toml".to_string()),
+            "testnet" => Resource::bundled("specs/testnet.toml".to_string()),
+            path => Resource::file_system(path.into()),
+        })
+        .expect("load spec should be OK");
+        let consensus = chain_spec
+            .build_consensus()
+            .expect("build consensus should be OK");
+        storage.init_genesis_block(consensus.genesis_block().data());
+
+        let pending_txs = Arc::new(RwLock::new(PendingTxs::new(64)));
         let network_state = NetworkState::from_config(self.run_env.network)
             .map(Arc::new)
             .map_err(|err| {
@@ -33,6 +48,7 @@ impl RunConfig {
             })?;
         let required_protocol_ids = vec![
             SupportProtocols::Sync.protocol_id(),
+            SupportProtocols::RelayV2.protocol_id(),
             SupportProtocols::LightClient.protocol_id(),
             SupportProtocols::Filter.protocol_id(),
         ];
@@ -43,6 +59,7 @@ impl RunConfig {
         blocking_recv_flag.disable_notify();
 
         let sync_protocol = SyncProtocol::new(storage.clone());
+        let relay_protocol = RelayProtocol::new(pending_txs.clone());
         let light_client: Box<dyn CKBProtocolHandler> = match self.run_env.light_client.strategy {
             BlockSamplingStrategy::NaiveApproach => Box::new(LightClientProtocol::<
                 light_client_strategies::NaiveApproach,
@@ -67,6 +84,11 @@ impl RunConfig {
                 Arc::clone(&network_state),
             ),
             CKBProtocol::new_with_support_protocol(
+                SupportProtocols::RelayV2,
+                Box::new(relay_protocol),
+                Arc::clone(&network_state),
+            ),
+            CKBProtocol::new_with_support_protocol(
                 SupportProtocols::LightClient,
                 light_client,
                 Arc::clone(&network_state),
@@ -85,7 +107,7 @@ impl RunConfig {
             Arc::clone(&network_state),
             protocols,
             required_protocol_ids,
-            self.run_env.chain,
+            consensus.identify_name(),
             clap::crate_version!().to_owned(),
             exit_handler.clone(),
         )
@@ -94,6 +116,9 @@ impl RunConfig {
             let errmsg = format!("failed to start network since {}", err);
             Error::runtime(errmsg)
         })?;
+
+        let service = Service::new("127.0.0.1:9000");
+        let rpc_server = service.start(network_controller, storage, pending_txs);
 
         let exit_handler_clone = exit_handler.clone();
         ctrlc::set_handler(move || {

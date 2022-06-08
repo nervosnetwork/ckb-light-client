@@ -1,4 +1,7 @@
-chain = "/ckb_dev/823b2ff5"
+# chain = "mainnet"
+# chain = "testnet"
+# chain = "your_path_to/dev.toml"
+chain = "testnet"
 
 [store]
 path = "data/store"

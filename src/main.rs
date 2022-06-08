@@ -6,6 +6,7 @@ mod storage;
 mod subcmds;
 mod types;
 mod utils;
+mod verify;
 
 use config::AppConfig;
 

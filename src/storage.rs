@@ -1,8 +1,11 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
 use ckb_types::{
-    core::BlockNumber,
-    packed::{Block, Byte32, Script, Transaction},
+    core::{
+        cell::{CellMeta, CellProvider, CellStatus},
+        BlockNumber, TransactionInfo,
+    },
+    packed::{Block, Byte32, CellOutput, OutPoint, Script, Transaction},
     prelude::*,
 };
 
@@ -39,6 +42,37 @@ impl Storage {
         Batch {
             db: Arc::clone(&self.db),
             wb: WriteBatch::default(),
+        }
+    }
+
+    pub fn init_genesis_block(&self, block: Block) {
+        let genesis_hash = block.calc_header_hash();
+        let key_prefix = Key::MetaKey("GENESIS_HASH").into_vec();
+        if let Some(stored_genesis_hash) =
+            self.get(key_prefix.as_slice()).expect("get genesis hash")
+        {
+            if genesis_hash.as_slice() != stored_genesis_hash.as_slice() {
+                panic!(
+                    "genesis hash mismatch: stored={:#?}, new={}",
+                    stored_genesis_hash, genesis_hash
+                );
+            }
+        } else {
+            let mut batch = self.batch();
+            block
+                .transactions()
+                .into_iter()
+                .enumerate()
+                .for_each(|(tx_index, tx)| {
+                    let tx_hash = tx.calc_tx_hash();
+                    let key = Key::TxHash(&tx_hash).into_vec();
+                    let value = Value::Transaction(0, tx_index as u32, &tx);
+                    batch.put_kv(key, value).expect("batch put should be ok");
+                });
+            batch
+                .put_kv(key_prefix, genesis_hash.as_slice())
+                .expect("batch put should be ok");
+            batch.commit().expect("batch commit should be ok");
         }
     }
 
@@ -202,6 +236,34 @@ impl Storage {
                 })
             })
             .expect("db get should be ok")
+    }
+}
+
+impl CellProvider for Storage {
+    // assume all cells are live and load data eagerly
+    fn cell(&self, out_point: &OutPoint, _eager_load: bool) -> CellStatus {
+        if let Some((_block_number, _tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
+            let output_index = out_point.index().unpack();
+            let tx = tx.into_view();
+            if let Some(cell_output) = tx.outputs().get(output_index) {
+                let output_data = tx
+                    .outputs_data()
+                    .get(output_index)
+                    .expect("output_data's index should be same as output")
+                    .raw_data();
+                let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
+                let cell_meta = CellMeta {
+                    out_point: out_point.clone(),
+                    cell_output,
+                    transaction_info: None,
+                    data_bytes: output_data.len() as u64,
+                    mem_cell_data: Some(output_data),
+                    mem_cell_data_hash: Some(output_data_data_hash),
+                };
+                return CellStatus::Live(cell_meta);
+            }
+        }
+        CellStatus::Unknown
     }
 }
 

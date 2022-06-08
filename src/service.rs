@@ -1,7 +1,14 @@
 use ckb_jsonrpc_types::{
-    BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, TransactionView, Uint32, Uint64,
+    BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, Transaction, TransactionView,
+    Uint32, Uint64,
 };
-use ckb_types::{core, packed, prelude::*, H256};
+use ckb_network::{NetworkController, SupportProtocols};
+use ckb_types::{
+    core::{self, Cycle},
+    packed,
+    prelude::*,
+    H256,
+};
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
@@ -12,9 +19,16 @@ use rocksdb::{
     Direction, IteratorMode,
 };
 use serde::{Deserialize, Serialize};
-use std::net::ToSocketAddrs;
+use std::{
+    net::ToSocketAddrs,
+    sync::{Arc, RwLock},
+};
 
-use crate::storage::{self, extract_raw_data, Key, KeyPrefix, Storage};
+use crate::{
+    protocols::PendingTxs,
+    storage::{self, extract_raw_data, Key, KeyPrefix, Storage},
+    verify::verify_tx,
+};
 
 #[rpc(server)]
 pub trait BlockFilterRpc {
@@ -45,6 +59,12 @@ pub trait BlockFilterRpc {
 
     #[rpc(name = "get_cells_capacity")]
     fn get_cells_capacity(&self, search_key: SearchKey) -> Result<Capacity>;
+}
+
+#[rpc(server)]
+pub trait TransactionRpc {
+    #[rpc(name = "send_transaction")]
+    fn send_transaction(&self, tx: Transaction) -> Result<H256>;
 }
 
 #[derive(Deserialize, Serialize)]
@@ -117,11 +137,22 @@ pub struct BlockFilterRpcImpl {
     storage: Storage,
 }
 
+pub struct TransactionRpcImpl {
+    network_controller: NetworkController,
+    pending_txs: Arc<RwLock<PendingTxs>>,
+    storage: Storage,
+}
+
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
         let scripts = scripts
             .into_iter()
-            .map(|script_status| (script_status.script.into(), script_status.block_number.into()))
+            .map(|script_status| {
+                (
+                    script_status.script.into(),
+                    script_status.block_number.into(),
+                )
+            })
             .collect();
 
         self.storage.update_filter_scripts(scripts);
@@ -130,12 +161,13 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
 
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
         let scripts = self.storage.get_filter_scripts();
-        Ok(scripts.into_iter().map(|(script, block_number)| {
-            ScriptStatus {
+        Ok(scripts
+            .into_iter()
+            .map(|(script, block_number)| ScriptStatus {
                 script: script.into(),
                 block_number: block_number.into(),
-            }
-        }).collect())
+            })
+            .collect())
     }
 
     fn get_cells(
@@ -616,7 +648,35 @@ fn build_filter_options(
     ))
 }
 
-pub struct Service {
+// TODO get from consensus
+const MAX_CYCLES: Cycle = 3_500_000 * 597;
+
+impl TransactionRpc for TransactionRpcImpl {
+    fn send_transaction(&self, tx: Transaction) -> Result<H256> {
+        let tx: packed::Transaction = tx.into();
+        let tx = tx.into_view();
+        // TODO get from storage
+        let tip_header = packed::Header::default().into_view();
+        let cycles = verify_tx(&self.storage, &tip_header, tx.clone(), MAX_CYCLES)
+            .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
+        self.pending_txs
+            .write()
+            .expect("pending_txs lock is poisoned")
+            .push(tx.clone(), cycles);
+
+        let content = packed::RelayTransactionHashes::new_builder()
+            .tx_hashes(vec![tx.hash()].pack())
+            .build();
+        let message = packed::RelayMessage::new_builder().set(content).build();
+        self.network_controller
+            .broadcast(SupportProtocols::RelayV2.protocol_id(), message.as_bytes())
+            .map_err(|_err| Error::internal_error())?;
+
+        Ok(tx.hash().unpack())
+    }
+}
+
+pub(crate) struct Service {
     listen_address: String,
 }
 
@@ -627,10 +687,23 @@ impl Service {
         }
     }
 
-    pub fn start(&self, storage: Storage) -> Server {
+    pub fn start(
+        &self,
+        network_controller: NetworkController,
+        storage: Storage,
+        pending_txs: Arc<RwLock<PendingTxs>>,
+    ) -> Server {
         let mut io_handler = IoHandler::new();
-        let rpc_impl = BlockFilterRpcImpl { storage };
-        io_handler.extend_with(rpc_impl.to_delegate());
+        let block_filter_rpc_impl = BlockFilterRpcImpl {
+            storage: storage.clone(),
+        };
+        let transaction_rpc_impl = TransactionRpcImpl {
+            network_controller,
+            pending_txs,
+            storage,
+        };
+        io_handler.extend_with(block_filter_rpc_impl.to_delegate());
+        io_handler.extend_with(transaction_rpc_impl.to_delegate());
 
         ServerBuilder::new(io_handler)
             .cors(DomainsValidation::AllowOnly(vec![
