@@ -451,6 +451,7 @@ dependencies = [
  "rand 0.6.5",
  "rand 0.8.5",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
  "toml",

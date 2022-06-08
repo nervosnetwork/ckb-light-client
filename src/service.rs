@@ -2,8 +2,13 @@ use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, Transaction, TransactionView,
     Uint32, Uint64,
 };
-use ckb_network::NetworkController;
-use ckb_types::{core, packed, prelude::*, H256};
+use ckb_network::{NetworkController, SupportProtocols};
+use ckb_types::{
+    core::{self, Cycle},
+    packed,
+    prelude::*,
+    H256,
+};
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
@@ -22,6 +27,7 @@ use std::{
 use crate::{
     protocols::PendingTxs,
     storage::{self, extract_raw_data, Key, KeyPrefix, Storage},
+    verify::verify_tx,
 };
 
 #[rpc(server)]
@@ -134,6 +140,7 @@ pub struct BlockFilterRpcImpl {
 pub struct TransactionRpcImpl {
     network_controller: NetworkController,
     pending_txs: Arc<RwLock<PendingTxs>>,
+    storage: Storage,
 }
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
@@ -641,9 +648,31 @@ fn build_filter_options(
     ))
 }
 
+// TODO get from consensus
+const MAX_CYCLES: Cycle = 3_500_000 * 597;
+
 impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
-        Ok(H256([0; 32]))
+        let tx: packed::Transaction = tx.into();
+        let tx = tx.into_view();
+        // TODO get from storage
+        let tip_header = packed::Header::default().into_view();
+        let cycles = verify_tx(&self.storage, &tip_header, tx.clone(), MAX_CYCLES)
+            .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
+        self.pending_txs
+            .write()
+            .expect("pending_txs lock is poisoned")
+            .push(tx.clone(), cycles);
+
+        let content = packed::RelayTransactionHashes::new_builder()
+            .tx_hashes(vec![tx.hash()].pack())
+            .build();
+        let message = packed::RelayMessage::new_builder().set(content).build();
+        self.network_controller
+            .broadcast(SupportProtocols::RelayV2.protocol_id(), message.as_bytes())
+            .map_err(|_err| Error::internal_error())?;
+
+        Ok(tx.hash().unpack())
     }
 }
 
@@ -665,10 +694,13 @@ impl Service {
         pending_txs: Arc<RwLock<PendingTxs>>,
     ) -> Server {
         let mut io_handler = IoHandler::new();
-        let block_filter_rpc_impl = BlockFilterRpcImpl { storage };
+        let block_filter_rpc_impl = BlockFilterRpcImpl {
+            storage: storage.clone(),
+        };
         let transaction_rpc_impl = TransactionRpcImpl {
             network_controller,
             pending_txs,
+            storage,
         };
         io_handler.extend_with(block_filter_rpc_impl.to_delegate());
         io_handler.extend_with(transaction_rpc_impl.to_delegate());
