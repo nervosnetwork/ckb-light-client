@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use ckb_types::{
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber, TransactionInfo,
+        BlockNumber,
     },
     packed::{Block, Byte32, CellOutput, OutPoint, Script, Transaction},
     prelude::*,
@@ -66,7 +66,7 @@ impl Storage {
                 .for_each(|(tx_index, tx)| {
                     let tx_hash = tx.calc_tx_hash();
                     let key = Key::TxHash(&tx_hash).into_vec();
-                    let value = Value::Transaction(0, tx_index as u32, &tx);
+                    let value = Value::Transaction(0, tx_index as TxIndex, &tx);
                     batch.put_kv(key, value).expect("batch put should be ok");
                 });
             batch
@@ -139,12 +139,11 @@ impl Storage {
                     .into_iter()
                     .enumerate()
                     .for_each(|(input_index, input)| {
-                        let tx_hash = input.previous_output().tx_hash();
                         if let Some((
                             generated_by_block_number,
                             generated_by_tx_index,
                             previous_tx,
-                        )) = self.get_transaction(&tx_hash)
+                        )) = self.get_transaction(&input.previous_output().tx_hash())
                         {
                             let previous_output_index = input.previous_output().index().unpack();
                             if let Some(previous_output) =
@@ -157,7 +156,7 @@ impl Storage {
                                         &script,
                                         generated_by_block_number,
                                         generated_by_tx_index,
-                                        previous_output_index as u32,
+                                        previous_output_index as OutputIndex,
                                     )
                                     .into_vec();
                                     batch.delete(key).expect("batch delete should be ok");
@@ -165,18 +164,19 @@ impl Storage {
                                     let key = Key::TxLockScript(
                                         &script,
                                         block_number,
-                                        tx_index as u32,
-                                        input_index as u32,
+                                        tx_index as TxIndex,
+                                        input_index as CellIndex,
                                         CellType::Input,
                                     )
                                     .into_vec();
+                                    let tx_hash = tx.calc_tx_hash();
                                     batch
                                         .put(key, tx_hash.as_slice())
                                         .expect("batch put should be ok");
                                     // insert tx
                                     let key = Key::TxHash(&tx_hash).into_vec();
                                     let value =
-                                        Value::Transaction(block_number, tx_index as u32, &tx);
+                                        Value::Transaction(block_number, tx_index as TxIndex, &tx);
                                     batch.put_kv(key, value).expect("batch put should be ok");
                                 }
                             }
@@ -195,19 +195,19 @@ impl Storage {
                             let key = Key::CellLockScript(
                                 &script,
                                 block_number,
-                                tx_index as u32,
-                                output_index as u32,
+                                tx_index as TxIndex,
+                                output_index as OutputIndex,
                             )
                             .into_vec();
                             batch
                                 .put(key, tx_hash.as_slice())
-                                .expect("batch delete should be ok");
+                                .expect("batch put should be ok");
                             // insert tx history
                             let key = Key::TxLockScript(
                                 &script,
                                 block_number,
-                                tx_index as u32,
-                                output_index as u32,
+                                tx_index as TxIndex,
+                                output_index as CellIndex,
                                 CellType::Output,
                             )
                             .into_vec();
@@ -216,7 +216,7 @@ impl Storage {
                                 .expect("batch put should be ok");
                             // insert tx
                             let key = Key::TxHash(&tx_hash).into_vec();
-                            let value = Value::Transaction(block_number, tx_index as u32, &tx);
+                            let value = Value::Transaction(block_number, tx_index as TxIndex, &tx);
                             batch.put_kv(key, value).expect("batch put should be ok");
                         }
                     });

@@ -6,8 +6,6 @@ use ckb_types::{packed, prelude::*};
 use log::{error, info};
 use std::sync::Arc;
 
-const BATCH_SIZE: BlockNumber = 100;
-
 pub struct BlockFiltersProcess<'a> {
     message: packed::BlockFiltersReader<'a>,
     filter: &'a FilterProtocol,
@@ -42,8 +40,18 @@ impl<'a> BlockFiltersProcess<'a> {
                 block_number
             );
         } else {
-            if block_filters.filters().len() != block_filters.block_hashes().len() {
-                let error_message = format!("filters length not equal to block_hashes length");
+            let filters_count = block_filters.filters().len();
+            if filters_count == 0 {
+                info!("no new filters, ignore peer: {}", self.peer);
+                return Status::ok();
+            }
+
+            let blocks_count = block_filters.block_hashes().len();
+            if filters_count != blocks_count {
+                let error_message = format!(
+                    "filters length ({}) not equal to block_hashes length ({})",
+                    filters_count, blocks_count
+                );
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
             }
 
@@ -67,11 +75,12 @@ impl<'a> BlockFiltersProcess<'a> {
                 }
             }
 
+            let next_batch_start_number = block_number + blocks_count as BlockNumber;
             // send next batch GetBlockFilters message to peer
-            pending_peer.update_block_number(block_number + BATCH_SIZE);
+            pending_peer.update_block_number(next_batch_start_number);
             {
                 let content = packed::GetBlockFilters::new_builder()
-                    .start_number((block_number + BATCH_SIZE).pack())
+                    .start_number((next_batch_start_number).pack())
                     .build();
 
                 let message = packed::BlockFilterMessage::new_builder()
