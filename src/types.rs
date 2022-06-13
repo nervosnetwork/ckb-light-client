@@ -1,7 +1,6 @@
 use std::{fmt, path::PathBuf, result::Result as StdResult, str::FromStr};
 
 use ckb_app_config::NetworkConfig;
-use ckb_pow::Pow;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -10,7 +9,6 @@ pub(crate) struct RunEnv {
     pub(crate) chain: String,
     pub(crate) store: StoreConfig,
     pub(crate) network: NetworkConfig,
-    pub(crate) pow: Pow,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
