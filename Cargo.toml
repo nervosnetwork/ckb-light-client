@@ -5,22 +5,22 @@ authors = ["Boyu Yang <yangby@cryptape.com>"]
 edition = "2021"
 license = "MIT"
 description = "A CKB light client based on FlyClient."
-homepage = "https://github.com/yangby-cryptape/ckb-light-client"
-repository = "https://github.com/yangby-cryptape/ckb-light-client"
+homepage = "https://github.com/nervosnetwork/ckb-light-client"
+repository = "https://github.com/nervosnetwork/ckb-light-client"
 
 [dependencies]
-ckb-app-config    = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-async-runtime = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-constant      = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-types         = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-network       = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-jsonrpc-types = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-pow           = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-error         = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-script        = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-chain-spec    = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-traits        = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
-ckb-resource      = { git="https://github.com/yangby-cryptape/ckb", rev = "3afd7971cfc5745c8ca42b3bb1a01ee420a43e81" }
+ckb-app-config    = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-async-runtime = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-constant      = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-types         = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-network       = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-jsonrpc-types = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-pow           = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-error         = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-script        = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-chain-spec    = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-traits        = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
+ckb-resource      = { git="https://github.com/nervosnetwork/ckb", rev = "2604b270222c976983dcc3c92f773cfafe069c9a" }
 ckb-merkle-mountain-range = "0.4.0"
 golomb-coded-set = { git = "https://github.com/TheWaWaR/golomb-coded-set"}
 rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }

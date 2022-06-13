@@ -1,7 +1,7 @@
 # [Experimental] CKB Light Client
 
 [![License]](#license)
-[![GitHub Actions]](https://github.com/yangby-cryptape/ckb-light-client/actions)
+[![GitHub Actions]](https://github.com/nervosnetwork/ckb-light-client/actions)
 
 > :warning: **WARNING** This repository is unavailable, since it's still in
 > the proof-of-concept stage.
@@ -9,7 +9,7 @@
 A CKB light client based on [FlyClient].
 
 [License]: https://img.shields.io/badge/License-MIT-blue.svg
-[GitHub Actions]: https://github.com/yangby-cryptape/ckb-light-client/workflows/CI/badge.svg
+[GitHub Actions]: https://github.com/nervosnetwork/ckb-light-client/workflows/CI/badge.svg
 
 ## References
 
@@ -18,11 +18,11 @@ A CKB light client based on [FlyClient].
 
 ## How to connect testnet
 
-1. Build a full node with [this branch](https://github.com/yangby-cryptape/ckb/tree/poc/light-client)
+1. Build a full node with [this branch](https://github.com/nervosnetwork/ckb/tree/light-client)
 
 ```
-git clone https://github.com/yangby-cryptape/ckb.git
-git checkout poc/light-client
+git clone https://github.com/nervosnetwork/ckb.git
+git checkout light-client
 make prod
 ```
 
@@ -38,10 +38,10 @@ modify ckb.toml, add a line `block_filter_enable = true` to the section of `[sto
 ckb run
 ```
 
-3. Build a light client with [this branch](https://github.com/yangby-cryptape/ckb-light-client/tree/develop)
+3. Build a light client with [this branch](https://github.com/nervosnetwork/ckb-light-client/tree/develop)
 
 ```
-git clone https://github.com/yangby-cryptape/ckb-light-client.git
+git clone https://github.com/nervosnetwork/ckb-light-client.git
 git checkout develop
 cargo build --release
 ```
