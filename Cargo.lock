@@ -251,8 +251,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-app-config"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-build-info",
  "ckb-chain-spec",
@@ -273,12 +273,13 @@ dependencies = [
  "tentacle-multiaddr",
  "tentacle-secio",
  "toml",
+ "url",
 ]
 
 [[package]]
 name = "ckb-async-runtime"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-logger",
  "ckb-spawn",
@@ -288,13 +289,13 @@ dependencies = [
 
 [[package]]
 name = "ckb-build-info"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 
 [[package]]
 name = "ckb-chain-spec"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-constant",
  "ckb-crypto",
@@ -313,21 +314,21 @@ dependencies = [
 
 [[package]]
 name = "ckb-channel"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "crossbeam-channel",
 ]
 
 [[package]]
 name = "ckb-constant"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 
 [[package]]
 name = "ckb-crypto"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-fixed-hash",
  "faster-hex",
@@ -339,8 +340,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-dao-utils"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "byteorder",
  "ckb-error",
@@ -349,8 +350,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-error"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "anyhow",
  "ckb-occupied-capacity",
@@ -360,8 +361,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-fixed-hash"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-fixed-hash-core",
  "ckb-fixed-hash-macros",
@@ -369,8 +370,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-fixed-hash-core"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "faster-hex",
  "serde",
@@ -379,8 +380,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-fixed-hash-macros"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-fixed-hash-core",
  "proc-macro2",
@@ -390,8 +391,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-hash"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "blake2b-ref",
  "blake2b-rs",
@@ -399,8 +400,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-jsonrpc-types"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-types",
  "faster-hex",
@@ -461,16 +462,16 @@ dependencies = [
 
 [[package]]
 name = "ckb-logger"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "log",
 ]
 
 [[package]]
 name = "ckb-logger-config"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "serde",
 ]
@@ -485,22 +486,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "ckb-metrics"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
+dependencies = [
+ "opentelemetry",
+]
+
+[[package]]
 name = "ckb-metrics-config"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ckb-network"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "bloom-filters",
  "ckb-app-config",
  "ckb-hash",
  "ckb-logger",
+ "ckb-metrics",
  "ckb-spawn",
  "ckb-stop-handler",
  "ckb-types",
@@ -519,8 +529,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-occupied-capacity"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-occupied-capacity-core",
  "ckb-occupied-capacity-macros",
@@ -528,16 +538,16 @@ dependencies = [
 
 [[package]]
 name = "ckb-occupied-capacity-core"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "ckb-occupied-capacity-macros"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-occupied-capacity-core",
  "quote",
@@ -546,8 +556,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-pow"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "byteorder",
  "ckb-hash",
@@ -559,8 +569,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-rational"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "numext-fixed-uint",
  "serde",
@@ -568,8 +578,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-resource"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-system-scripts",
  "ckb-types",
@@ -593,8 +603,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-script"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "byteorder",
  "ckb-chain-spec",
@@ -612,13 +622,13 @@ dependencies = [
 
 [[package]]
 name = "ckb-spawn"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 
 [[package]]
 name = "ckb-stop-handler"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-channel",
  "ckb-logger",
@@ -641,16 +651,16 @@ dependencies = [
 
 [[package]]
 name = "ckb-traits"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "ckb-types",
 ]
 
 [[package]]
 name = "ckb-types"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "bit-vec",
  "bitflags",
@@ -671,8 +681,8 @@ dependencies = [
 
 [[package]]
 name = "ckb-util"
-version = "0.102.0-pre"
-source = "git+https://github.com/yangby-cryptape/ckb?rev=3afd7971cfc5745c8ca42b3bb1a01ee420a43e81#3afd7971cfc5745c8ca42b3bb1a01ee420a43e81"
+version = "0.104.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=2604b270222c976983dcc3c92f773cfafe069c9a#2604b270222c976983dcc3c92f773cfafe069c9a"
 dependencies = [
  "linked-hash-map",
  "once_cell",
@@ -682,9 +692,9 @@ dependencies = [
 
 [[package]]
 name = "ckb-vm"
-version = "0.21.1"
+version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a33a9a7cbd7eb53af03ade3903109c207abc1eb7d13aeeb04d2dd41cfe7777c3"
+checksum = "dc81aeacb7eaa4981e4c4f8285e30bca92f8d7346937cbcfc0b77f26b21da2de"
 dependencies = [
  "byteorder",
  "bytes",
@@ -702,9 +712,9 @@ dependencies = [
 
 [[package]]
 name = "ckb-vm-definitions"
-version = "0.21.1"
+version = "0.21.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59b85b56f35eb5a5d4c64b538ec4a4bf49d3335455d57755151f201bcfff74e2"
+checksum = "7968c559498b68833791364e87182fdd1a3aba803e8a16c34b1aa45fc08add1c"
 
 [[package]]
 name = "clang-sys"
@@ -847,6 +857,16 @@ dependencies = [
  "rand_core 0.5.1",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "dashmap"
+version = "4.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e77a43b28d0668df09411cb0bc9a8c2adc40f9a048afe863e05fd43251e8e39c"
+dependencies = [
+ "cfg-if 1.0.0",
+ "num_cpus",
 ]
 
 [[package]]
@@ -1670,6 +1690,20 @@ dependencies = [
  "libc",
  "pkg-config",
  "vcpkg",
+]
+
+[[package]]
+name = "opentelemetry"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff27b33e30432e7b9854936693ca103d8591b0501f7ae9f633de48cda3bf2a67"
+dependencies = [
+ "dashmap",
+ "fnv",
+ "futures",
+ "js-sys",
+ "lazy_static",
+ "thiserror",
 ]
 
 [[package]]
@@ -2669,6 +2703,7 @@ dependencies = [
  "idna",
  "matches",
  "percent-encoding",
+ "serde",
 ]
 
 [[package]]
