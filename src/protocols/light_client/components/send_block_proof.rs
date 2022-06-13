@@ -60,6 +60,119 @@ impl<'a> SendBlockProofProcess<'a> {
 
         let chain_root = self.message.root().to_entity();
         let proof: MMRProof = self.message.proof().unpack();
+
+        // Check if the response is match the request.
+        {
+            let prev_request = prove_request.get_request();
+            let difficulty_boundary: U256 = prev_request.difficulty_boundary().unpack();
+            let mut difficulties: Vec<U256> = prev_request
+                .difficulties()
+                .into_iter()
+                .map(|item| item.unpack())
+                .collect();
+
+            {
+                // Check the first block in last-N blocks.
+                let first_last_n_header = self
+                    .message
+                    .last_n_headers()
+                    .iter()
+                    .next()
+                    .map(|inner| inner.to_entity())
+                    .expect("checked: first last-N header should be existed");
+                let verifiable_header =
+                    VerifiableHeader::new_from_header_with_chain_root(first_last_n_header.clone());
+                if !verifiable_header.is_valid(mmr_activated_number, None) {
+                    let header = verifiable_header.header();
+                    error!(
+                        "failed: chain root is not valid for first last-N block#{} (hash: {:#x})",
+                        header.number(),
+                        header.hash()
+                    );
+                    return StatusCode::InvalidChainRootForSamples.into();
+                }
+                let compact_target = first_last_n_header.header().raw().compact_target();
+                let block_difficulty = compact_to_difficulty(compact_target.unpack());
+                let total_difficulty_before: U256 =
+                    first_last_n_header.chain_root().total_difficulty().unpack();
+                let total_difficulty = total_difficulty_before.saturating_add(&block_difficulty);
+
+                // All total difficulties for sampled blocks should be less
+                // than the total difficulty of any last-N blocks.
+                if total_difficulty < difficulty_boundary {
+                    difficulties = difficulties
+                        .into_iter()
+                        .take_while(|d| d < &total_difficulty)
+                        .collect();
+                }
+
+                let last_n_blocks: u64 = prev_request.last_n_blocks().unpack();
+                // Last-N blocks should be satisfied the follow condition.
+                if self.message.last_n_headers().len() as u64 > last_n_blocks
+                    && total_difficulty < difficulty_boundary
+                {
+                    error!(
+                        "failed: total difficulty of any last-N blocks \
+                        should be greater than the difficulty boundary \
+                        if there are enough blocks",
+                    );
+                    return StatusCode::InvalidChainRootForSamples.into();
+                }
+            }
+
+            for item in self.message.sampled_headers().iter() {
+                let header_with_chain_root = item.to_entity();
+                let verifiable_header = VerifiableHeader::new_from_header_with_chain_root(
+                    header_with_chain_root.clone(),
+                );
+                let header = verifiable_header.header();
+                // Chain root for any sampled blocks should be valid.
+                if !verifiable_header.is_valid(mmr_activated_number, None) {
+                    error!(
+                        "failed: chain root is not valid for sampled block#{} (hash: {:#x})",
+                        header.number(),
+                        header.hash()
+                    );
+                    return StatusCode::InvalidChainRootForSamples.into();
+                }
+                let compact_target = header_with_chain_root.header().raw().compact_target();
+                let block_difficulty = compact_to_difficulty(compact_target.unpack());
+                let total_difficulty_lhs: U256 = header_with_chain_root
+                    .chain_root()
+                    .total_difficulty()
+                    .unpack();
+                let total_difficulty_rhs = total_difficulty_lhs.saturating_add(&block_difficulty);
+
+                let mut is_valid = false;
+                // Total difficulty for any sampled blocks should be valid.
+                while let Some(curr_difficulty) = difficulties.first().cloned() {
+                    if curr_difficulty < total_difficulty_lhs {
+                        // Current difficulty has no sample.
+                        difficulties.remove(0);
+                        continue;
+                    } else if curr_difficulty > total_difficulty_rhs {
+                        break;
+                    } else {
+                        // Current difficulty has one sample, and the sample is current block.
+                        difficulties.remove(0);
+                        is_valid = true;
+                    }
+                }
+
+                if !is_valid {
+                    error!(
+                        "failed: total difficulty is not valid for sampled block#{}, \
+                        hash is {:#x}, difficulty range is [{},{}].",
+                        header.number(),
+                        header.hash(),
+                        total_difficulty_lhs,
+                        total_difficulty_rhs,
+                    );
+                    return StatusCode::InvalidTotalDifficultyForSamples.into();
+                }
+            }
+        }
+
         let sampled_headers = self
             .message
             .sampled_headers()
@@ -328,7 +441,7 @@ pub fn verify_total_difficuly(
             .ok_or_else(|| {
                 format!(
                     "failed since the epoch difficulty increased \
-                                    too fast ({}->{}) during epochs ([{},{}])",
+                    too fast ({}->{}) during epochs ([{},{}])",
                     start_epoch_difficulty, end_epoch_difficulty, start_epoch, end_epoch
                 )
             })?,
@@ -341,23 +454,31 @@ pub fn verify_total_difficuly(
             .ok_or_else(|| {
                 format!(
                     "failed since the epoch difficulty decreased \
-                                    too fast ({}->{}) during epochs ([{},{}])",
+                    too fast ({}->{}) during epochs ([{},{}])",
                     start_epoch_difficulty, end_epoch_difficulty, start_epoch, end_epoch
                 )
             })?,
         };
 
         // Step-2 Check the range of total difficulty.
-        let start_epoch_blocks_count = start_epoch.length() - start_epoch.index();
-        let end_epoch_blocks_count = end_epoch.length() - end_epoch.index();
-        let unaligned_difficulty_calculated = start_block_difficulty * start_epoch_blocks_count
-            + end_block_difficulty * end_epoch_blocks_count;
+        let start_epoch_blocks_count = start_epoch.length() - start_epoch.index() - 1;
+        let end_epoch_blocks_count = end_epoch.index() + 1;
+        let unaligned_difficulty_calculated = &start_block_difficulty * start_epoch_blocks_count
+            + &end_block_difficulty * end_epoch_blocks_count;
         if epochs_switch_count == 1 {
             if total_difficulty != unaligned_difficulty_calculated {
                 let errmsg = format!(
-                    "failed since total difficulty is {} but the calculated is {} \
-                                during epochs ([{:#},{:#}])",
-                    total_difficulty, unaligned_difficulty_calculated, start_epoch, end_epoch
+                    "failed since total difficulty is {} \
+                    but the calculated is {} (= {} * {} + {} * {}) \
+                    during epochs ([{:#},{:#}])",
+                    total_difficulty,
+                    unaligned_difficulty_calculated,
+                    start_block_difficulty,
+                    start_epoch_blocks_count,
+                    end_block_difficulty,
+                    end_epoch_blocks_count,
+                    start_epoch,
+                    end_epoch
                 );
                 return Err(errmsg);
             }
@@ -413,7 +534,7 @@ pub fn verify_total_difficuly(
             {
                 let errmsg = format!(
                     "failed since total difficulty ({}) isn't in the range ({}+[{},{}]) \
-                                during epochs ([{:#},{:#}])",
+                    during epochs ([{:#},{:#}])",
                     total_difficulty,
                     unaligned_difficulty_calculated,
                     aligned_difficulty_min,

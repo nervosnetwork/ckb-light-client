@@ -27,16 +27,20 @@ pub enum StatusCode {
 
     /// Receives a proof but the peer isn't waiting for a proof.
     PeerIsNotOnProcess = 421,
+    /// Failed to verify chain roots for samples.
+    InvalidChainRootForSamples = 422,
+    /// Failed to verify total difficulty for samples.
+    InvalidTotalDifficultyForSamples = 423,
     /// Failed to verify the compact target.
-    InvalidCompactTarget = 422,
+    InvalidCompactTarget = 424,
     /// Failed to verify the total difficulty.
-    InvalidTotalDifficulty = 423,
+    InvalidTotalDifficulty = 425,
     /// Failed to verify the pow.
-    InvalidNonce = 424,
+    InvalidNonce = 426,
     /// Failed to verify the parent hash.
-    InvalidParentHash = 425,
+    InvalidParentHash = 427,
     /// Failed to verify the proof.
-    FailedToVerifyTheProof = 426,
+    FailedToVerifyTheProof = 428,
 
     /// Throws an internal error.
     InternalError = 500,
