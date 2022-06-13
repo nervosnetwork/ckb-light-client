@@ -3,9 +3,9 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use ckb_types::{
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber,
+        BlockNumber, HeaderView,
     },
-    packed::{Block, Byte32, CellOutput, OutPoint, Script, Transaction},
+    packed::{self, Block, Byte32, CellOutput, OutPoint, Script, Transaction},
     prelude::*,
 };
 
@@ -102,6 +102,20 @@ impl Storage {
             batch.put(key, value).expect("batch put should be ok");
         }
         batch.commit().expect("batch commit should be ok");
+    }
+
+    pub fn update_tip_header(&self, tip_header: &HeaderView) {
+        let key = Key::MetaKey("TIP_HEADER").into_vec();
+        self.db
+            .put(key, tip_header.pack().as_slice())
+            .expect("db put tip header should be ok");
+    }
+    pub fn get_tip_header(&self) -> Option<HeaderView> {
+        let key = Key::MetaKey("TIP_HEADER").into_vec();
+        self.db
+            .get_pinned(&key)
+            .expect("db get tip header should be ok")
+            .map(|data| packed::HeaderViewReader::from_slice_should_be_ok(&data).unpack())
     }
 
     pub fn update_block_number(&self, block_number: BlockNumber) {

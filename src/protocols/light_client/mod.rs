@@ -2,192 +2,42 @@
 //!
 //! TODO(light-client) More documentation.
 
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
-use ckb_types::{
-    core::{BlockNumber, HeaderView},
-    packed,
-    prelude::*,
-};
-use faketime::unix_time_as_millis;
+use ckb_pow::{Pow, PowEngine};
+use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256};
 use log::{debug, error, info, trace, warn};
 
 mod components;
 pub mod constant;
+mod peers;
 mod prelude;
-mod status;
-pub(crate) mod strategies;
+mod sampling;
 
 use prelude::*;
-pub use status::{Status, StatusCode};
-use strategies::BlockSamplingStrategy;
 
+use self::peers::Peers;
+pub(crate) use self::peers::{PeerState, ProveState};
+use super::{
+    status::{Status, StatusCode},
+    BAD_MESSAGE_BAN_TIME,
+};
 use crate::storage::Storage;
 
-#[derive(Clone)]
-pub struct PeerState {
-    mmr_activated_number: Option<BlockNumber>,
-    last_header: Option<HeaderView>,
-    update_timestamp: u64,
-}
-
-#[derive(Default, Clone)]
-pub struct Peers {
-    state: HashMap<PeerIndex, PeerState>,
-}
-
-pub struct LightClientProtocol<S: BlockSamplingStrategy> {
-    strategy: S,
+pub struct LightClientProtocol {
     storage: Storage,
+    peers: Peers,
+    pow: Pow,
+    best: Option<(PeerIndex, ProveState)>,
 }
 
-impl PeerState {
-    fn new(update_timestamp: u64) -> Self {
-        Self {
-            mmr_activated_number: None,
-            last_header: None,
-            update_timestamp,
-        }
-    }
-
-    fn is_ready(&self) -> bool {
-        self.mmr_activated_number.is_some() && self.last_header.is_some()
-    }
-}
-
-impl Peers {
-    fn add_peer(&mut self, index: PeerIndex, update_timestamp: u64) {
-        let state = PeerState::new(update_timestamp);
-        self.state.insert(index, state);
-    }
-
-    fn remove_peer(&mut self, index: PeerIndex) {
-        self.state.remove(&index);
-    }
-
-    fn is_ready(&self) -> bool {
-        self.state.iter().any(|(_, state)| state.is_ready())
-    }
-
-    fn update_timestamp(&mut self, index: PeerIndex, timestamp: u64) {
-        if let Some(state) = self.state.get_mut(&index) {
-            state.update_timestamp = timestamp;
-        }
-    }
-
-    pub(crate) fn get_mmr_activated_number(&self, index: &PeerIndex) -> Option<BlockNumber> {
-        self.state
-            .get(&index)
-            .and_then(|state| state.mmr_activated_number)
-    }
-
-    pub(crate) fn get_last_header(&self, index: &PeerIndex) -> Option<HeaderView> {
-        self.state
-            .get(&index)
-            .and_then(|state| state.last_header.clone())
-    }
-
-    pub(crate) fn update_mmr_activated_number(
-        &mut self,
-        index: PeerIndex,
-        mmr_activated_number: BlockNumber,
-    ) {
-        let now = faketime::unix_time_as_millis();
-        if let Some(state) = self.state.get_mut(&index) {
-            state.mmr_activated_number = Some(mmr_activated_number);
-            state.update_timestamp = now;
-        }
-    }
-
-    pub(crate) fn update_last_header(&mut self, index: PeerIndex, last_header: HeaderView) {
-        let now = faketime::unix_time_as_millis();
-        if let Some(state) = self.state.get_mut(&index) {
-            state.last_header = Some(last_header);
-            state.update_timestamp = now;
-        }
-    }
-
-    fn get_peers_which_require_chain_info(&self, before_timestamp: u64) -> Vec<PeerIndex> {
-        self.state
-            .iter()
-            .filter_map(|(index, state)| {
-                if state.mmr_activated_number.is_none() && state.update_timestamp < before_timestamp
-                {
-                    Some(*index)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    fn get_peers_which_require_last_header(&self, before_timestamp: u64) -> Vec<PeerIndex> {
-        self.state
-            .iter()
-            .filter_map(|(index, state)| {
-                if state.mmr_activated_number.is_some()
-                    && state.last_header.is_none()
-                    && state.update_timestamp < before_timestamp
-                {
-                    Some(*index)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-
-    fn get_peers_which_are_ready(&self) -> Vec<(PeerIndex, PeerState)> {
-        self.state
-            .iter()
-            .filter_map(|(index, state)| {
-                if state.is_ready() {
-                    Some((index.to_owned(), state.to_owned()))
-                } else {
-                    None
-                }
-            })
-            .collect()
-    }
-}
-
-impl<S: BlockSamplingStrategy> LightClientProtocol<S> {
-    pub(crate) fn new(storage: Storage) -> Self {
-        Self {
-            strategy: S::new(),
-            storage,
-        }
-    }
-
-    pub(crate) fn honest_peer(&self) -> Option<PeerIndex> {
-        self.strategy.honest_peer()
-    }
-
-    pub(crate) fn peers(&self) -> &Peers {
-        self.strategy.peers()
-    }
-
-    pub(crate) fn mut_peers(&mut self) -> &mut Peers {
-        self.strategy.mut_peers()
-    }
-}
-
-impl<S: BlockSamplingStrategy> CKBProtocolHandler for LightClientProtocol<S> {
+impl CKBProtocolHandler for LightClientProtocol {
     fn init(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>) {
+        info!("LightClient.protocol initialized");
         nc.set_notify(
-            constant::WAIT_FOR_PEERS_DURATION,
-            constant::WAIT_FOR_PEERS_TOKEN,
-        )
-        .expect("set_notify should be ok");
-        nc.set_notify(
-            constant::GET_CHAIN_INFO_DURATION,
-            constant::GET_CHAIN_INFO_TOKEN,
-        )
-        .expect("set_notify should be ok");
-        nc.set_notify(
-            constant::GET_LAST_HEADER_DURATION,
-            constant::GET_LAST_HEADER_TOKEN,
+            constant::REFRESH_PEERS_DURATION,
+            constant::REFRESH_PEERS_TOKEN,
         )
         .expect("set_notify should be ok");
     }
@@ -199,9 +49,8 @@ impl<S: BlockSamplingStrategy> CKBProtocolHandler for LightClientProtocol<S> {
         version: &str,
     ) {
         info!("LightClient({}).connected peer={}", version, peer);
-        let now = faketime::unix_time_as_millis();
-        self.get_chain_info(nc.as_ref(), peer);
-        self.mut_peers().add_peer(peer, now);
+        self.mut_peers().add_peer(peer);
+        self.get_last_state(nc.as_ref(), peer);
     }
 
     fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
@@ -221,7 +70,7 @@ impl<S: BlockSamplingStrategy> CKBProtocolHandler for LightClientProtocol<S> {
                 );
                 nc.ban_peer(
                     peer,
-                    constant::BAD_MESSAGE_BAN_TIME,
+                    BAD_MESSAGE_BAN_TIME,
                     String::from("send us a malformed message"),
                 );
                 return;
@@ -245,54 +94,15 @@ impl<S: BlockSamplingStrategy> CKBProtocolHandler for LightClientProtocol<S> {
 
     fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
         match token {
-            constant::WAIT_FOR_PEERS_TOKEN => {
-                if self.peers().is_ready() {
-                    if nc.remove_notify(constant::WAIT_FOR_PEERS_TOKEN).is_err() {
-                        trace!("failed to remove notify WAIT_FOR_PEERS_TOKEN")
-                    }
-                    self.strategy.start(nc.as_ref());
-                    if nc
-                        .set_notify(
-                            constant::FIND_HONEST_PEER_DURATION,
-                            constant::FIND_HONEST_PEER_TOKEN,
-                        )
-                        .is_err()
-                    {
-                        trace!("failed to set notify FIND_HONEST_PEER_TOKEN")
-                    }
-                }
-            }
-            constant::GET_CHAIN_INFO_TOKEN => {
-                let now = faketime::unix_time_as_millis();
-                let before = now - constant::GET_CHAIN_INFO_DURATION.as_millis() as u64;
-                for peer in self.peers().get_peers_which_require_chain_info(before) {
-                    self.get_chain_info(nc.as_ref(), peer);
-                    self.mut_peers().update_timestamp(peer, now);
-                }
-            }
-            constant::GET_LAST_HEADER_TOKEN => {
-                let now = faketime::unix_time_as_millis();
-                let before = now - constant::GET_LAST_HEADER_DURATION.as_millis() as u64;
-                for peer in self.peers().get_peers_which_require_last_header(before) {
-                    self.get_last_header(nc.as_ref(), peer);
-                    self.mut_peers().update_timestamp(peer, now);
-                }
-            }
-            constant::FIND_HONEST_PEER_TOKEN => {
-                if self.honest_peer().is_some() {
-                    if nc.remove_notify(constant::FIND_HONEST_PEER_TOKEN).is_err() {
-                        trace!("failed to remove notify FIND_HONEST_PEER_TOKEN")
-                    }
-                } else {
-                    self.strategy.try_find_honest();
-                }
+            constant::REFRESH_PEERS_TOKEN => {
+                self.refresh_all_peers(nc.as_ref());
             }
             _ => unreachable!(),
         }
     }
 }
 
-impl<S: BlockSamplingStrategy> LightClientProtocol<S> {
+impl LightClientProtocol {
     fn try_process(
         &mut self,
         nc: &dyn CKBProtocolContext,
@@ -300,11 +110,8 @@ impl<S: BlockSamplingStrategy> LightClientProtocol<S> {
         message: packed::LightClientMessageUnionReader<'_>,
     ) -> Status {
         match message {
-            packed::LightClientMessageUnionReader::SendChainInfo(reader) => {
-                components::SendChainInfoProcess::new(reader, self, peer, nc).execute()
-            }
-            packed::LightClientMessageUnionReader::SendLastHeader(reader) => {
-                components::SendLastHeaderProcess::new(reader, self, peer, nc).execute()
+            packed::LightClientMessageUnionReader::SendLastState(reader) => {
+                components::SendLastStateProcess::new(reader, self, peer, nc).execute()
             }
             packed::LightClientMessageUnionReader::SendBlockProof(reader) => {
                 components::SendBlockProofProcess::new(reader, self, peer, nc).execute()
@@ -313,19 +120,96 @@ impl<S: BlockSamplingStrategy> LightClientProtocol<S> {
         }
     }
 
-    fn get_chain_info(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
-        let content = packed::GetChainInfo::new_builder().build();
+    fn get_last_state(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
+        let content = packed::GetLastState::new_builder().build();
         let message = packed::LightClientMessage::new_builder()
             .set(content)
             .build();
         nc.reply(peer, &message);
     }
+}
 
-    fn get_last_header(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
-        let content = packed::GetLastHeader::new_builder().build();
-        let message = packed::LightClientMessage::new_builder()
-            .set(content)
-            .build();
-        nc.reply(peer, &message);
+impl LightClientProtocol {
+    pub(crate) fn new(pow: Pow, storage: Storage) -> Self {
+        Self {
+            storage,
+            peers: Peers::default(),
+            pow,
+            best: None,
+        }
+    }
+
+    pub(crate) fn peers(&self) -> &Peers {
+        &self.peers
+    }
+
+    pub(crate) fn mut_peers(&mut self) -> &mut Peers {
+        &mut self.peers
+    }
+
+    pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
+        self.pow.engine()
+    }
+
+    fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
+        let now = faketime::unix_time_as_millis();
+        let before = now - constant::REFRESH_PEERS_INTERVAL.as_millis() as u64;
+
+        for peer in self.peers().get_peers_which_require_updating(before) {
+            self.get_last_state(nc, peer);
+            self.mut_peers().update_timestamp(peer, now);
+        }
+
+        let mut best: Option<(PeerIndex, ProveState)> = None;
+        for (curr_peer, curr_state) in self.peers().get_peers_which_are_proved() {
+            if best.is_none() {
+                best = Some((curr_peer, curr_state));
+            } else {
+                let best_total_difficulty = best
+                    .as_ref()
+                    .map(|(_, state)| state.get_total_difficulty())
+                    .expect("checkd: best is not None");
+                let curr_total_difficulty = curr_state.get_total_difficulty();
+                if curr_total_difficulty > best_total_difficulty {
+                    best = Some((curr_peer, curr_state));
+                }
+            }
+        }
+        if let Some((_, prove_state)) = best.as_ref() {
+            self.storage
+                .update_tip_header(prove_state.get_last_header().header());
+        }
+        self.best = best;
+    }
+
+    fn build_prove_request_content(
+        &self,
+        peer_state: &PeerState,
+        last_header: &VerifiableHeader,
+        last_total_difficulty: &U256,
+    ) -> packed::GetBlockProof {
+        let (start_number, start_total_difficulty) = peer_state
+            .get_prove_state()
+            .map(|inner| {
+                (
+                    inner.get_last_header().header().number(),
+                    inner.get_total_difficulty().to_owned(),
+                )
+            })
+            .unwrap_or((0, U256::zero()));
+        let last_number = last_header.header().number();
+        let (last_n_blocks, difficulty_boundary, difficulties) = sampling::sample_blocks(
+            start_number,
+            &start_total_difficulty,
+            last_number,
+            last_total_difficulty,
+        );
+        packed::GetBlockProof::new_builder()
+            .last_hash(last_header.header().hash())
+            .start_number(start_number.pack())
+            .last_n_blocks(last_n_blocks.pack())
+            .difficulty_boundary(difficulty_boundary.pack())
+            .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
+            .build()
     }
 }

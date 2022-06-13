@@ -1,6 +1,6 @@
 use std::{fmt, time::Duration};
 
-use super::synchronizer::BAD_MESSAGE_BAN_TIME;
+use super::BAD_MESSAGE_BAN_TIME;
 
 /// StatusCodes indicate whether a specific operation has been successfully completed.
 ///
@@ -9,8 +9,8 @@ use super::synchronizer::BAD_MESSAGE_BAN_TIME;
 /// The first digest of the StatusCode defines the class of result:
 ///   - 1xx: Informational response – the request was received, continuing process.
 ///   - 2xx: Success - The action requested by the client was received, understood, and accepted.
-///   - 4xx: Client errors - The error seems to have been caused by the client.
-///   - 5xx: Server errors - The server failed to fulfil a request.
+///   - 4xx: Remote errors - The error seems to have been caused by the remote (the server).
+///   - 5xx: Local errors - The client failed to process a response.
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StatusCode {
@@ -22,10 +22,25 @@ pub enum StatusCode {
     /// Unexpected light-client protocol message.
     UnexpectedProtocolMessage = 401,
 
-    /// The last block sent from client is invalid.
-    InvalidLastBlock = 411,
-    /// At least one unconfirmed block sent from client is invalid.
-    InvalidUnconfirmedBlock = 412,
+    /// The last state sent from server is invalid.
+    InvalidLastState = 411,
+
+    /// Receives a proof but the peer isn't waiting for a proof.
+    PeerIsNotOnProcess = 421,
+    /// Failed to verify chain roots for samples.
+    InvalidChainRootForSamples = 422,
+    /// Failed to verify total difficulty for samples.
+    InvalidTotalDifficultyForSamples = 423,
+    /// Failed to verify the compact target.
+    InvalidCompactTarget = 424,
+    /// Failed to verify the total difficulty.
+    InvalidTotalDifficulty = 425,
+    /// Failed to verify the pow.
+    InvalidNonce = 426,
+    /// Failed to verify the parent hash.
+    InvalidParentHash = 427,
+    /// Failed to verify the proof.
+    FailedToVerifyTheProof = 428,
 
     /// Throws an internal error.
     InternalError = 500,

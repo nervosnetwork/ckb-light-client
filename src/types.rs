@@ -9,27 +9,12 @@ pub(crate) struct RunEnv {
     pub(crate) chain: String,
     pub(crate) store: StoreConfig,
     pub(crate) network: NetworkConfig,
-    pub(crate) light_client: LightClientConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StoreConfig {
     pub(crate) path: PathBuf,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) struct LightClientConfig {
-    pub(crate) strategy: BlockSamplingStrategy,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-#[serde(deny_unknown_fields)]
-pub(crate) enum BlockSamplingStrategy {
-    NaiveApproach,
-    BinarySearchApproach,
-    BoundingTheForkPoint,
 }
 
 impl FromStr for RunEnv {
