@@ -655,8 +655,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        // TODO get from storage
-        let tip_header = packed::Header::default().into_view();
+        let tip_header = self.storage.get_tip_header().unwrap_or_else(|| packed::Header::default().into_view());
         let cycles = verify_tx(&self.storage, &tip_header, tx.clone(), MAX_CYCLES)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
