@@ -3,15 +3,17 @@ use std::{collections::HashMap, path::Path, sync::Arc};
 use ckb_types::{
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber, HeaderView,
+        BlockNumber,
     },
-    packed::{self, Block, Byte32, CellOutput, OutPoint, Script, Transaction},
+    packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
 };
 
 use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 
 use crate::error::Result;
+
+const TIP_HEADER_KEY: &str = "TIP_HEADER";
 
 #[derive(Clone)]
 pub struct Storage {
@@ -59,6 +61,7 @@ impl Storage {
             }
         } else {
             let mut batch = self.batch();
+            batch.put_kv(Key::MetaKey(TIP_HEADER_KEY), block.header().as_slice());
             block
                 .transactions()
                 .into_iter()
@@ -104,18 +107,20 @@ impl Storage {
         batch.commit().expect("batch commit should be ok");
     }
 
-    pub fn update_tip_header(&self, tip_header: &HeaderView) {
-        let key = Key::MetaKey("TIP_HEADER").into_vec();
+    pub fn update_tip_header(&self, tip_header: &Header) {
+        let key = Key::MetaKey(TIP_HEADER_KEY).into_vec();
         self.db
-            .put(key, tip_header.pack().as_slice())
+            .put(key, tip_header.as_slice())
             .expect("db put tip header should be ok");
     }
-    pub fn get_tip_header(&self) -> Option<HeaderView> {
-        let key = Key::MetaKey("TIP_HEADER").into_vec();
+
+    pub fn get_tip_header(&self) -> Header {
+        let key = Key::MetaKey(TIP_HEADER_KEY).into_vec();
         self.db
             .get_pinned(&key)
             .expect("db get tip header should be ok")
-            .map(|data| packed::HeaderViewReader::from_slice_should_be_ok(&data).unpack())
+            .map(|data| packed::HeaderReader::from_slice_should_be_ok(&data).to_entity())
+            .expect("tip header should be inited")
     }
 
     pub fn update_block_number(&self, block_number: BlockNumber) {

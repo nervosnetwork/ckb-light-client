@@ -1,6 +1,6 @@
 use ckb_jsonrpc_types::{
-    BlockNumber, Capacity, CellOutput, JsonBytes, OutPoint, Script, Transaction, TransactionView,
-    Uint32, Uint64,
+    BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, OutPoint, Script, Transaction,
+    TransactionView, Uint32, Uint64,
 };
 use ckb_network::{NetworkController, SupportProtocols};
 use ckb_types::{
@@ -65,6 +65,12 @@ pub trait BlockFilterRpc {
 pub trait TransactionRpc {
     #[rpc(name = "send_transaction")]
     fn send_transaction(&self, tx: Transaction) -> Result<H256>;
+}
+
+#[rpc(server)]
+pub trait ChainRpc {
+    #[rpc(name = "get_tip_header")]
+    fn get_tip_header(&self) -> Result<HeaderView>;
 }
 
 #[derive(Deserialize, Serialize)]
@@ -140,6 +146,10 @@ pub struct BlockFilterRpcImpl {
 pub struct TransactionRpcImpl {
     network_controller: NetworkController,
     pending_txs: Arc<RwLock<PendingTxs>>,
+    storage: Storage,
+}
+
+pub struct ChainRpcImpl {
     storage: Storage,
 }
 
@@ -655,7 +665,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let tip_header = self.storage.get_tip_header().unwrap_or_else(|| packed::Header::default().into_view());
+        let tip_header = self.storage.get_tip_header().into_view();
         let cycles = verify_tx(&self.storage, &tip_header, tx.clone(), MAX_CYCLES)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
@@ -672,6 +682,12 @@ impl TransactionRpc for TransactionRpcImpl {
             .map_err(|_err| Error::internal_error())?;
 
         Ok(tx.hash().unpack())
+    }
+}
+
+impl ChainRpc for ChainRpcImpl {
+    fn get_tip_header(&self) -> Result<HeaderView> {
+        Ok(self.storage.get_tip_header().into_view().into())
     }
 }
 
@@ -696,12 +712,16 @@ impl Service {
         let block_filter_rpc_impl = BlockFilterRpcImpl {
             storage: storage.clone(),
         };
+        let chain_rpc_impl = ChainRpcImpl {
+            storage: storage.clone(),
+        };
         let transaction_rpc_impl = TransactionRpcImpl {
             network_controller,
             pending_txs,
             storage,
         };
         io_handler.extend_with(block_filter_rpc_impl.to_delegate());
+        io_handler.extend_with(chain_rpc_impl.to_delegate());
         io_handler.extend_with(transaction_rpc_impl.to_delegate());
 
         ServerBuilder::new(io_handler)

@@ -177,7 +177,7 @@ impl LightClientProtocol {
         }
         if let Some((_, prove_state)) = best.as_ref() {
             self.storage
-                .update_tip_header(prove_state.get_last_header().header());
+                .update_tip_header(&prove_state.get_last_header().header().data());
         }
         self.best = best;
     }
