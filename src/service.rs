@@ -75,6 +75,9 @@ pub trait ChainRpc {
 
     #[rpc(name = "get_header")]
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>>;
+
+    #[rpc(name = "get_transaction")]
+    fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>>;
 }
 
 #[rpc(server)]
@@ -180,6 +183,12 @@ pub enum CellType {
 pub struct Pagination<T> {
     objects: Vec<T>,
     last_cursor: JsonBytes,
+}
+
+#[derive(Serialize)]
+pub struct TransactionWithHeader {
+    transaction: TransactionView,
+    header: HeaderView,
 }
 
 pub struct BlockFilterRpcImpl {
@@ -804,6 +813,18 @@ impl ChainRpc for ChainRpcImpl {
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
         Ok(self.storage.get_header(&block_hash.pack()).map(Into::into))
     }
+
+    fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>> {
+        let transaction_with_header = self
+            .storage
+            .get_transaction_with_header(&tx_hash.pack())
+            .map(|(tx, header)| TransactionWithHeader {
+                transaction: tx.into_view().into(),
+                header: header.into_view().into(),
+            });
+
+        Ok(transaction_with_header)
+    }
 }
 
 pub(crate) struct Service {
@@ -1279,6 +1300,17 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(pre_block.header().number(), header.inner.number.value(),);
+
+        // test get_transaction rpc
+        let TransactionWithHeader {
+            transaction,
+            header,
+        } = rpc
+            .get_transaction(pre_tx0.hash().unpack())
+            .unwrap()
+            .unwrap();
+        assert_eq!(transaction.hash, pre_tx0.hash().unpack());
+        assert_eq!(header.hash, pre_block.header().hash().unpack());
     }
 
     #[test]

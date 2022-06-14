@@ -136,6 +136,43 @@ Returns the header with the highest block number in the canonical chain
 curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "get_tip_header", "params": [], "id": 1}'
 ```
 
+### `get_header`
+
+Returns the information about a block header by hash.
+
+#### Parameters
+
+    block_hash - the block hash
+
+#### Returns
+
+    header - HeaderView
+
+#### Examples
+
+```
+curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "get_header", "params": ["0xa5f5c85987a15de25661e5a214f2c1449cd803f071acc7999820f25246471f40"], "id": 1}'
+```
+
+### `get_transaction`
+
+Returns the information about a transaction by hash, the block header is also returned.
+
+#### Parameters
+
+    transaction_hash - the transaction hash
+
+#### Returns
+
+    transaction - TransactionView
+    header - HeaderView
+
+#### Examples
+
+```
+curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "get_transaction", "params": ["0xa0ef4eb5f4ceeb08a4c8524d84c5da95dce2f608e0ca2ec8091191b0f330c6e3"], "id": 1}'
+```
+
 ### `get_cells`
 
 To facilitate code migration, the rpc is same as ckb-indexer, please refer to ckb-indexer rpc [doc](https://github.com/nervosnetwork/ckb-indexer#get_cells)
