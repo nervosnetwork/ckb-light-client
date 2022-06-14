@@ -17,8 +17,7 @@ mod sampling;
 
 use prelude::*;
 
-use self::peers::Peers;
-pub(crate) use self::peers::{PeerState, ProveState};
+pub(crate) use self::peers::{PeerState, Peers, ProveState};
 use super::{
     status::{Status, StatusCode},
     BAD_MESSAGE_BAN_TIME,
@@ -27,7 +26,7 @@ use crate::storage::Storage;
 
 pub struct LightClientProtocol {
     storage: Storage,
-    peers: Peers,
+    peers: Arc<Peers>,
     pow: Pow,
     best: Option<(PeerIndex, ProveState)>,
 }
@@ -49,13 +48,13 @@ impl CKBProtocolHandler for LightClientProtocol {
         version: &str,
     ) {
         info!("LightClient({}).connected peer={}", version, peer);
-        self.mut_peers().add_peer(peer);
+        self.peers().add_peer(peer);
         self.get_last_state(nc.as_ref(), peer);
     }
 
     fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
         info!("LightClient.disconnected peer={}", peer);
-        self.mut_peers().remove_peer(peer);
+        self.peers().remove_peer(peer);
     }
 
     fn received(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex, data: Bytes) {
@@ -130,10 +129,10 @@ impl LightClientProtocol {
 }
 
 impl LightClientProtocol {
-    pub(crate) fn new(pow: Pow, storage: Storage) -> Self {
+    pub(crate) fn new(storage: Storage, peers: Arc<Peers>, pow: Pow) -> Self {
         Self {
             storage,
-            peers: Peers::default(),
+            peers,
             pow,
             best: None,
         }
@@ -141,10 +140,6 @@ impl LightClientProtocol {
 
     pub(crate) fn peers(&self) -> &Peers {
         &self.peers
-    }
-
-    pub(crate) fn mut_peers(&mut self) -> &mut Peers {
-        &mut self.peers
     }
 
     pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
@@ -157,7 +152,7 @@ impl LightClientProtocol {
 
         for peer in self.peers().get_peers_which_require_updating(before) {
             self.get_last_state(nc, peer);
-            self.mut_peers().update_timestamp(peer, now);
+            self.peers().update_timestamp(peer, now);
         }
 
         let mut best: Option<(PeerIndex, ProveState)> = None;

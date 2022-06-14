@@ -11,7 +11,9 @@ use ckb_resource::Resource;
 use crate::{
     config::RunConfig,
     error::{Error, Result},
-    protocols::{FilterProtocol, LightClientProtocol, PendingTxs, RelayProtocol, SyncProtocol},
+    protocols::{
+        FilterProtocol, LightClientProtocol, Peers, PendingTxs, RelayProtocol, SyncProtocol,
+    },
     service::Service,
     storage::Storage,
     utils,
@@ -54,11 +56,13 @@ impl RunConfig {
         blocking_recv_flag.disable_disconnected();
         blocking_recv_flag.disable_notify();
 
+        let peers = Arc::new(Peers::default());
         let sync_protocol = SyncProtocol::new(storage.clone());
         let relay_protocol = RelayProtocol::new(pending_txs.clone());
         let light_client: Box<dyn CKBProtocolHandler> = Box::new(LightClientProtocol::new(
-            consensus.pow.clone(),
             storage.clone(),
+            Arc::clone(&peers),
+            consensus.pow.clone(),
         ));
         let filter_protocol = FilterProtocol::new(storage.clone());
 
@@ -103,7 +107,7 @@ impl RunConfig {
         })?;
 
         let service = Service::new("127.0.0.1:9000");
-        let rpc_server = service.start(network_controller, storage, pending_txs);
+        let rpc_server = service.start(network_controller, storage, peers, pending_txs);
 
         let exit_handler_clone = exit_handler.clone();
         ctrlc::set_handler(move || {

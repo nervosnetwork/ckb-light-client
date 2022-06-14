@@ -1,8 +1,8 @@
 use ckb_jsonrpc_types::{
-    BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, OutPoint, Script, Transaction,
-    TransactionView, Uint32, Uint64,
+    BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
+    RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
 };
-use ckb_network::{NetworkController, SupportProtocols};
+use ckb_network::{extract_peer_id, NetworkController, SupportProtocols};
 use ckb_traits::HeaderProvider;
 use ckb_types::{
     core::{self, Cycle},
@@ -26,7 +26,7 @@ use std::{
 };
 
 use crate::{
-    protocols::PendingTxs,
+    protocols::{Peers, PendingTxs},
     storage::{self, extract_raw_data, Key, KeyPrefix, Storage},
     verify::verify_tx,
 };
@@ -77,10 +77,49 @@ pub trait ChainRpc {
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>>;
 }
 
+#[rpc(server)]
+pub trait NetRpc {
+    #[rpc(name = "get_peers")]
+    fn get_peers(&self) -> Result<Vec<RemoteNode>>;
+}
+
 #[derive(Deserialize, Serialize)]
 pub struct ScriptStatus {
     script: Script,
     block_number: BlockNumber,
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct RemoteNode {
+    /// The remote node version.
+    pub version: String,
+    /// The remote node ID which is derived from its P2P private key.
+    pub node_id: String,
+    /// The remote node addresses.
+    pub addresses: Vec<NodeAddress>,
+    /// Elapsed time in milliseconds since the remote node is connected.
+    pub connected_duration: Uint64,
+    /// Null means chain sync has not started with this remote node yet.
+    pub sync_state: Option<PeerSyncState>,
+    /// Active protocols.
+    ///
+    /// CKB uses Tentacle multiplexed network framework. Multiple protocols are running
+    /// simultaneously in the connection.
+    pub protocols: Vec<RemoteNodeProtocol>,
+    // TODO: maybe add this field later.
+    // /// Elapsed time in milliseconds since receiving the ping response from this remote node.
+    // ///
+    // /// Null means no ping responses have been received yet.
+    // pub last_ping_duration: Option<Uint64>,
+}
+#[derive(Deserialize, Serialize)]
+pub struct PeerSyncState {
+    /// Requested best known header of remote peer.
+    ///
+    /// This is the best known header yet to be proved.
+    pub requested_best_known_header: Option<HeaderView>,
+    /// Proved best known header of remote peer.
+    pub proved_best_known_header: Option<HeaderView>,
 }
 
 #[derive(Deserialize)]
@@ -155,6 +194,11 @@ pub struct TransactionRpcImpl {
 
 pub struct ChainRpcImpl {
     storage: Storage,
+}
+
+pub struct NetRpcImpl {
+    network_controller: NetworkController,
+    peers: Arc<Peers>,
 }
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
@@ -561,6 +605,69 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
     }
 }
 
+impl NetRpc for NetRpcImpl {
+    fn get_peers(&self) -> Result<Vec<RemoteNode>> {
+        let peers: Vec<RemoteNode> = self
+            .network_controller
+            .connected_peers()
+            .iter()
+            .map(|(peer_index, peer)| {
+                let mut addresses = vec![&peer.connected_addr];
+                addresses.extend(peer.listened_addrs.iter());
+
+                let node_addresses = addresses
+                    .iter()
+                    .map(|addr| {
+                        let score = self
+                            .network_controller
+                            .addr_info(addr)
+                            .map(|addr_info| addr_info.score)
+                            .unwrap_or(1);
+                        let non_negative_score = if score > 0 { score as u64 } else { 0 };
+                        NodeAddress {
+                            address: addr.to_string(),
+                            score: non_negative_score.into(),
+                        }
+                    })
+                    .collect();
+
+                RemoteNode {
+                    version: peer
+                        .identify_info
+                        .as_ref()
+                        .map(|info| info.client_version.clone())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    node_id: extract_peer_id(&peer.connected_addr)
+                        .map(|peer_id| peer_id.to_base58())
+                        .unwrap_or_default(),
+                    addresses: node_addresses,
+                    connected_duration: (std::time::Instant::now()
+                        .saturating_duration_since(peer.connected_time)
+                        .as_millis() as u64)
+                        .into(),
+                    sync_state: self.peers.get_state(peer_index).map(|state| PeerSyncState {
+                        requested_best_known_header: state
+                            .get_prove_request()
+                            .map(|request| request.get_last_header().header().to_owned().into()),
+                        proved_best_known_header: state
+                            .get_prove_state()
+                            .map(|request| request.get_last_header().header().to_owned().into()),
+                    }),
+                    protocols: peer
+                        .protocols
+                        .iter()
+                        .map(|(protocol_id, protocol_version)| RemoteNodeProtocol {
+                            id: (protocol_id.value() as u64).into(),
+                            version: protocol_version.clone(),
+                        })
+                        .collect(),
+                }
+            })
+            .collect();
+        Ok(peers)
+    }
+}
+
 const MAX_PREFIX_SEARCH_SIZE: usize = u16::max_value() as usize;
 
 // a helper fn to build query options from search paramters, returns prefix, from_key, direction and skip offset
@@ -714,6 +821,7 @@ impl Service {
         &self,
         network_controller: NetworkController,
         storage: Storage,
+        peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
     ) -> Server {
         let mut io_handler = IoHandler::new();
@@ -724,13 +832,18 @@ impl Service {
             storage: storage.clone(),
         };
         let transaction_rpc_impl = TransactionRpcImpl {
-            network_controller,
+            network_controller: network_controller.clone(),
             pending_txs,
             storage,
+        };
+        let net_rpc_impl = NetRpcImpl {
+            network_controller,
+            peers,
         };
         io_handler.extend_with(block_filter_rpc_impl.to_delegate());
         io_handler.extend_with(chain_rpc_impl.to_delegate());
         io_handler.extend_with(transaction_rpc_impl.to_delegate());
+        io_handler.extend_with(net_rpc_impl.to_delegate());
 
         ServerBuilder::new(io_handler)
             .cors(DomainsValidation::AllowOnly(vec![

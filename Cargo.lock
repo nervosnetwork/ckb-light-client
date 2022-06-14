@@ -442,6 +442,7 @@ dependencies = [
  "ckb-types",
  "clap 2.34.0",
  "ctrlc",
+ "dashmap",
  "env_logger",
  "faketime",
  "golomb-coded-set",

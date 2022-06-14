@@ -70,7 +70,7 @@ impl<'a> SendLastStateProcess<'a> {
                 .expect("checked: it should be existed since it's already requested")
                 .get_request()
                 .to_owned();
-            self.protocol.mut_peers().update_timestamp(self.peer, now);
+            self.protocol.peers().update_timestamp(self.peer, now);
 
             content
         } else {
@@ -86,7 +86,7 @@ impl<'a> SendLastStateProcess<'a> {
                 content.clone(),
             );
             self.protocol
-                .mut_peers()
+                .peers()
                 .submit_prove_request(self.peer, prove_request);
 
             content

@@ -386,7 +386,7 @@ impl<'a> SendBlockProofProcess<'a> {
             );
             prove_request.skip_check_tau();
             self.protocol
-                .mut_peers()
+                .peers()
                 .submit_prove_request(self.peer, prove_request);
 
             let message = packed::LightClientMessage::new_builder()
@@ -397,7 +397,7 @@ impl<'a> SendBlockProofProcess<'a> {
             let prove_state =
                 ProveState::new_from_request(prove_request.to_owned(), last_n_headers);
             self.protocol
-                .mut_peers()
+                .peers()
                 .commit_prove_state(self.peer, prove_state);
         }
 
