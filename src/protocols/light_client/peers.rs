@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use ckb_network::PeerIndex;
 use ckb_types::{
     core::{BlockNumber, HeaderView},
@@ -7,11 +5,12 @@ use ckb_types::{
     utilities::merkle_mountain_range::VerifiableHeader,
     U256,
 };
+use dashmap::DashMap;
 use faketime::unix_time_as_millis;
 
 #[derive(Default, Clone)]
 pub struct Peers {
-    inner: HashMap<PeerIndex, Peer>,
+    inner: DashMap<PeerIndex, Peer>,
 }
 
 #[derive(Default, Clone)]
@@ -176,37 +175,39 @@ impl Peer {
 }
 
 impl Peers {
-    pub(crate) fn add_peer(&mut self, index: PeerIndex) {
+    pub(crate) fn add_peer(&self, index: PeerIndex) {
         let now = unix_time_as_millis();
         let peer = Peer::new(now);
         self.inner.insert(index, peer);
     }
 
-    pub(crate) fn remove_peer(&mut self, index: PeerIndex) {
+    pub(crate) fn remove_peer(&self, index: PeerIndex) {
         self.inner.remove(&index);
     }
 
-    pub(crate) fn get_state(&self, index: &PeerIndex) -> Option<&PeerState> {
-        self.inner.get(&index).map(|peer| &peer.state)
+    // Peers is a DashMap, return an owned PeerState to avoid the dead lock when
+    // also need to update Peers later.
+    pub(crate) fn get_state(&self, index: &PeerIndex) -> Option<PeerState> {
+        self.inner.get(&index).map(|peer| peer.state.clone())
     }
 
-    pub(crate) fn update_timestamp(&mut self, index: PeerIndex, timestamp: u64) {
-        if let Some(peer) = self.inner.get_mut(&index) {
+    pub(crate) fn update_timestamp(&self, index: PeerIndex, timestamp: u64) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.update_timestamp = timestamp;
         }
     }
 
-    pub(crate) fn submit_prove_request(&mut self, index: PeerIndex, request: ProveRequest) {
+    pub(crate) fn submit_prove_request(&self, index: PeerIndex, request: ProveRequest) {
         let now = unix_time_as_millis();
-        if let Some(peer) = self.inner.get_mut(&index) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.state.submit_prove_request(request);
             peer.update_timestamp = now;
         }
     }
 
-    pub(crate) fn commit_prove_state(&mut self, index: PeerIndex, state: ProveState) {
+    pub(crate) fn commit_prove_state(&self, index: PeerIndex, state: ProveState) {
         let now = unix_time_as_millis();
-        if let Some(peer) = self.inner.get_mut(&index) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.state.commit_prove_state(state);
             peer.update_timestamp = now;
         }
@@ -215,9 +216,11 @@ impl Peers {
     pub(crate) fn get_peers_which_require_updating(&self, before_timestamp: u64) -> Vec<PeerIndex> {
         self.inner
             .iter()
-            .filter_map(|(index, peer)| {
-                if !peer.state.is_ready() || peer.update_timestamp < before_timestamp {
-                    Some(*index)
+            .filter_map(|item| {
+                if !item.value().state.is_ready()
+                    || item.value().update_timestamp < before_timestamp
+                {
+                    Some(*item.key())
                 } else {
                     None
                 }
@@ -228,9 +231,9 @@ impl Peers {
     pub(crate) fn get_peers_which_are_proved(&self) -> Vec<(PeerIndex, ProveState)> {
         self.inner
             .iter()
-            .filter_map(|(index, peer)| {
-                if let Some(state) = peer.state.get_prove_state() {
-                    Some((*index, state.to_owned()))
+            .filter_map(|item| {
+                if let Some(state) = item.value().state.get_prove_state() {
+                    Some((*item.key(), state.to_owned()))
                 } else {
                     None
                 }
