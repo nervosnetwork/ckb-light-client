@@ -63,14 +63,15 @@ impl Storage {
             }
         } else {
             let mut batch = self.batch();
+            let block_hash = block.calc_header_hash();
             batch
                 .put_kv(Key::MetaKey(TIP_HEADER_KEY), block.header().as_slice())
                 .expect("batch put should be ok");
             batch
-                .put_kv(
-                    Key::BlockHash(&block.calc_header_hash()),
-                    block.header().as_slice(),
-                )
+                .put_kv(Key::BlockHash(&block_hash), block.header().as_slice())
+                .expect("batch put should be ok");
+            batch
+                .put_kv(Key::BlockNumber(0), block_hash.as_slice())
                 .expect("batch put should be ok");
             block
                 .transactions()
@@ -254,17 +255,24 @@ impl Storage {
                     });
             });
         if filter_matched {
+            let block_hash = block.calc_header_hash();
             batch
                 .put(
-                    Key::BlockHash(&block.calc_header_hash()).into_vec(),
+                    Key::BlockHash(&block_hash).into_vec(),
                     block.header().as_slice(),
+                )
+                .expect("batch put should be ok");
+            batch
+                .put(
+                    Key::BlockNumber(block.header().raw().number().unpack()).into_vec(),
+                    block_hash.as_slice(),
                 )
                 .expect("batch put should be ok");
         }
         batch.commit().expect("batch commit should be ok");
     }
 
-    pub fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, TxIndex, Transaction)> {
+    fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, TxIndex, Transaction)> {
         self.get(Key::TxHash(tx_hash).into_vec())
             .map(|v| {
                 v.map(|v| {
@@ -276,6 +284,28 @@ impl Storage {
                 })
             })
             .expect("db get should be ok")
+    }
+
+    pub fn get_transaction_with_header(&self, tx_hash: &Byte32) -> Option<(Transaction, Header)> {
+        self.get_transaction(tx_hash)
+            .map(|(block_number, _tx_index, tx)| {
+                let block_hash = Byte32::from_slice(
+                    &self
+                        .get(Key::BlockNumber(block_number).into_vec())
+                        .expect("db get should be ok")
+                        .expect("stored block number / hash mapping"),
+                )
+                .expect("stored block hash should be OK");
+
+                let header = Header::from_slice(
+                    &self
+                        .get(Key::BlockHash(&block_hash).into_vec())
+                        .expect("db get should be ok")
+                        .expect("stored block hash / header mapping"),
+                )
+                .expect("stored header should be OK");
+                (tx, header)
+            })
     }
 }
 
@@ -370,7 +400,8 @@ pub enum CellType {
 /// | 96           | TxLockScript       | TxHash                   |
 /// | 128          | TxTypeScript       | TxHash                   |
 /// | 160          | BlockHash          | Header                   |
-/// | 192          | MetaKey            | MetaValue                |
+/// | 192          | BlockNumber        | BlockHash                |
+/// | 224          | MetaKey            | MetaValue                |
 /// +--------------+--------------------+--------------------------+
 ///
 pub enum Key<'a> {
@@ -380,6 +411,7 @@ pub enum Key<'a> {
     TxLockScript(&'a Script, BlockNumber, TxIndex, CellIndex, CellType),
     TxTypeScript(&'a Script, BlockNumber, TxIndex, CellIndex, CellType),
     BlockHash(&'a Byte32),
+    BlockNumber(BlockNumber),
     MetaKey(&'a str),
 }
 
@@ -387,6 +419,7 @@ pub enum Value<'a> {
     Transaction(BlockNumber, TxIndex, &'a Transaction),
     TxHash(&'a Byte32),
     Header(&'a Header),
+    BlockHash(&'a Byte32),
     MetaValue(Vec<u8>),
 }
 
@@ -398,7 +431,8 @@ pub enum KeyPrefix {
     TxLockScript = 96,
     TxTypeScript = 128,
     BlockHash = 160,
-    MetaKey = 192,
+    BlockNumber = 192,
+    MetaKey = 224,
 }
 
 impl<'a> Key<'a> {
@@ -444,6 +478,10 @@ impl<'a> From<Key<'a>> for Vec<u8> {
                 encoded.push(KeyPrefix::BlockHash as u8);
                 encoded.extend_from_slice(block_hash.as_slice());
             }
+            Key::BlockNumber(block_number) => {
+                encoded.push(KeyPrefix::BlockNumber as u8);
+                encoded.extend_from_slice(&block_number.to_le_bytes());
+            }
             Key::MetaKey(meta_key) => {
                 encoded.push(KeyPrefix::MetaKey as u8);
                 encoded.extend_from_slice(meta_key.as_bytes());
@@ -465,6 +503,7 @@ impl<'a> From<Value<'a>> for Vec<u8> {
             }
             Value::TxHash(tx_hash) => tx_hash.as_slice().into(),
             Value::Header(header) => header.as_slice().into(),
+            Value::BlockHash(block_hash) => block_hash.as_slice().into(),
             Value::MetaValue(meta_value) => meta_value,
         }
     }
