@@ -3,56 +3,34 @@ use std::collections::{hash_map::Entry, HashMap, HashSet};
 use ckb_chain_spec::consensus::Consensus;
 use ckb_error::Error;
 use ckb_script::{TransactionScriptsVerifier, TxVerifyEnv};
-use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
-    bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus, ResolvedTransaction},
         error::OutPointError,
         Cycle, DepType, HeaderView, TransactionView,
     },
-    packed::{Byte32, OutPoint, OutPointVec},
+    packed::{OutPoint, OutPointVec},
     prelude::Entity,
 };
 
-#[derive(Default)]
-pub struct DataLoader {}
+use crate::storage::Storage;
 
-impl CellDataProvider for DataLoader {
-    // we load all cells data eagerly in Storage's CellProivder impl
-    fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
-        unreachable!()
-    }
-
-    fn get_cell_data_hash(&self, out_point: &OutPoint) -> Option<Byte32> {
-        unreachable!()
-    }
-}
-
-impl HeaderProvider for DataLoader {
-    // TODO retrieve header from full node when tx's header deps is not empty
-    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
-        todo!()
-    }
-}
-
-pub fn verify_tx<CP: CellProvider>(
-    cell_provider: &CP,
+pub fn verify_tx(
+    storage: &Storage,
     tip_header: &HeaderView,
     transaction: TransactionView,
     max_cycles: Cycle,
 ) -> Result<Cycle, Error> {
-    let rtx = resolve_tx(cell_provider, transaction)?;
+    let rtx = resolve_tx(storage, transaction)?;
     let consensus = Consensus::default();
-    let data_loader = DataLoader::default();
     let tx_env = TxVerifyEnv::new_submit(tip_header);
 
-    let verifier = TransactionScriptsVerifier::new(&rtx, &consensus, &data_loader, &tx_env);
+    let verifier = TransactionScriptsVerifier::new(&rtx, &consensus, storage, &tx_env);
     verifier.verify(max_cycles)
 }
 
-fn resolve_tx<CP: CellProvider>(
-    cell_provider: &CP,
+fn resolve_tx(
+    storage: &Storage,
     transaction: TransactionView,
 ) -> Result<ResolvedTransaction, OutPointError> {
     let (mut resolved_inputs, mut resolved_cell_deps, mut resolved_dep_groups) = (
@@ -68,7 +46,7 @@ fn resolve_tx<CP: CellProvider>(
             match resolved_cells.entry((out_point.clone(), eager_load)) {
                 Entry::Occupied(entry) => Ok(entry.get().clone()),
                 Entry::Vacant(entry) => {
-                    let cell_status = cell_provider.cell(out_point, eager_load);
+                    let cell_status = storage.cell(out_point, eager_load);
                     match cell_status {
                         CellStatus::Dead => Err(OutPointError::Dead(out_point.clone())),
                         CellStatus::Unknown => Err(OutPointError::Unknown(out_point.clone())),
