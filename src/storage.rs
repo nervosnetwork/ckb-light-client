@@ -1,9 +1,11 @@
 use std::{collections::HashMap, path::Path, sync::Arc};
 
+use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
+    bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber,
+        BlockNumber, HeaderView,
     },
     packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
@@ -61,7 +63,15 @@ impl Storage {
             }
         } else {
             let mut batch = self.batch();
-            batch.put_kv(Key::MetaKey(TIP_HEADER_KEY), block.header().as_slice());
+            batch
+                .put_kv(Key::MetaKey(TIP_HEADER_KEY), block.header().as_slice())
+                .expect("batch put should be ok");
+            batch
+                .put_kv(
+                    Key::BlockHash(&block.calc_header_hash()),
+                    block.header().as_slice(),
+                )
+                .expect("batch put should be ok");
             block
                 .transactions()
                 .into_iter()
@@ -147,6 +157,7 @@ impl Storage {
     pub fn filter_block(&self, block: Block) {
         let scripts = self.get_filter_scripts();
         let block_number: BlockNumber = block.header().raw().number().unpack();
+        let mut filter_matched = false;
         let mut batch = self.batch();
         block
             .transactions()
@@ -170,6 +181,7 @@ impl Storage {
                             {
                                 let script = previous_output.lock();
                                 if scripts.contains_key(&script) {
+                                    filter_matched = true;
                                     // delete utxo
                                     let key = Key::CellLockScript(
                                         &script,
@@ -209,6 +221,7 @@ impl Storage {
                     .for_each(|(output_index, output)| {
                         let script = output.lock();
                         if scripts.contains_key(&script) {
+                            filter_matched = true;
                             let tx_hash = tx.calc_tx_hash();
                             // insert utxo
                             let key = Key::CellLockScript(
@@ -240,6 +253,14 @@ impl Storage {
                         }
                     });
             });
+        if filter_matched {
+            batch
+                .put(
+                    Key::BlockHash(&block.calc_header_hash()).into_vec(),
+                    block.header().as_slice(),
+                )
+                .expect("batch put should be ok");
+        }
         batch.commit().expect("batch commit should be ok");
     }
 
@@ -286,6 +307,25 @@ impl CellProvider for Storage {
     }
 }
 
+impl CellDataProvider for Storage {
+    // we load all cells data eagerly in Storage's CellProivder impl
+    fn get_cell_data(&self, _out_point: &OutPoint) -> Option<Bytes> {
+        unreachable!()
+    }
+
+    fn get_cell_data_hash(&self, _out_point: &OutPoint) -> Option<Byte32> {
+        unreachable!()
+    }
+}
+
+impl HeaderProvider for Storage {
+    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
+        self.get(Key::BlockHash(hash).into_vec())
+            .map(|v| v.map(|v| Header::from_slice(&v).expect("stored Header").into_view()))
+            .expect("db get should be ok")
+    }
+}
+
 pub struct Batch {
     db: Arc<DB>,
     wb: WriteBatch,
@@ -329,7 +369,8 @@ pub enum CellType {
 /// | 64           | CellTypeScript     | TxHash                   |
 /// | 96           | TxLockScript       | TxHash                   |
 /// | 128          | TxTypeScript       | TxHash                   |
-/// | 160          | MetaKey            | MetaValue                |
+/// | 160          | BlockHash          | Header                   |
+/// | 192          | MetaKey            | MetaValue                |
 /// +--------------+--------------------+--------------------------+
 ///
 pub enum Key<'a> {
@@ -338,12 +379,14 @@ pub enum Key<'a> {
     CellTypeScript(&'a Script, BlockNumber, TxIndex, OutputIndex),
     TxLockScript(&'a Script, BlockNumber, TxIndex, CellIndex, CellType),
     TxTypeScript(&'a Script, BlockNumber, TxIndex, CellIndex, CellType),
+    BlockHash(&'a Byte32),
     MetaKey(&'a str),
 }
 
 pub enum Value<'a> {
     Transaction(BlockNumber, TxIndex, &'a Transaction),
     TxHash(&'a Byte32),
+    Header(&'a Header),
     MetaValue(Vec<u8>),
 }
 
@@ -354,7 +397,8 @@ pub enum KeyPrefix {
     CellTypeScript = 64,
     TxLockScript = 96,
     TxTypeScript = 128,
-    MetaKey = 160,
+    BlockHash = 160,
+    MetaKey = 192,
 }
 
 impl<'a> Key<'a> {
@@ -396,6 +440,10 @@ impl<'a> From<Key<'a>> for Vec<u8> {
                     CellType::Output => encoded.push(1),
                 }
             }
+            Key::BlockHash(block_hash) => {
+                encoded.push(KeyPrefix::BlockHash as u8);
+                encoded.extend_from_slice(block_hash.as_slice());
+            }
             Key::MetaKey(meta_key) => {
                 encoded.push(KeyPrefix::MetaKey as u8);
                 encoded.extend_from_slice(meta_key.as_bytes());
@@ -416,6 +464,7 @@ impl<'a> From<Value<'a>> for Vec<u8> {
                 encoded
             }
             Value::TxHash(tx_hash) => tx_hash.as_slice().into(),
+            Value::Header(header) => header.as_slice().into(),
             Value::MetaValue(meta_value) => meta_value,
         }
     }

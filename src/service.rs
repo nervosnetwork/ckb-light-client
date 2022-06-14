@@ -3,6 +3,7 @@ use ckb_jsonrpc_types::{
     TransactionView, Uint32, Uint64,
 };
 use ckb_network::{NetworkController, SupportProtocols};
+use ckb_traits::HeaderProvider;
 use ckb_types::{
     core::{self, Cycle},
     packed,
@@ -71,6 +72,9 @@ pub trait TransactionRpc {
 pub trait ChainRpc {
     #[rpc(name = "get_tip_header")]
     fn get_tip_header(&self) -> Result<HeaderView>;
+
+    #[rpc(name = "get_header")]
+    fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>>;
 }
 
 #[derive(Deserialize, Serialize)]
@@ -689,6 +693,10 @@ impl ChainRpc for ChainRpcImpl {
     fn get_tip_header(&self) -> Result<HeaderView> {
         Ok(self.storage.get_tip_header().into_view().into())
     }
+
+    fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
+        Ok(self.storage.get_header(&block_hash.pack()).map(Into::into))
+    }
 }
 
 pub(crate) struct Service {
@@ -1148,6 +1156,16 @@ mod tests {
             .unwrap();
 
         assert_eq!(0, capacity.value(), "lock_script2 is not filtered");
+
+        // test get_header rpc
+        let rpc = ChainRpcImpl {
+            storage: storage.clone(),
+        };
+        let header = rpc
+            .get_header(pre_block.header().hash().unpack())
+            .unwrap()
+            .unwrap();
+        assert_eq!(pre_block.header().number(), header.inner.number.value(),);
     }
 
     #[test]
