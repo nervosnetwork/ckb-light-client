@@ -77,7 +77,16 @@ impl CKBProtocolHandler for LightClientProtocol {
         };
 
         let item_name = msg.item_name();
-        let status = self.try_process(nc.as_ref(), peer, msg);
+        let status = self.try_process(nc.as_ref(), peer, msg.clone());
+        if status.is_ok()
+            && matches!(
+                msg,
+                packed::LightClientMessageUnionReader::SendBlockProof(_)
+            )
+        {
+            self.update_best_state();
+        }
+
         if let Some(ban_time) = status.should_ban() {
             error!(
                 "process {} from {}, ban {:?} since result is {}",
@@ -154,7 +163,10 @@ impl LightClientProtocol {
             self.get_last_state(nc, peer);
             self.peers().update_timestamp(peer, now);
         }
+        self.update_best_state();
+    }
 
+    fn update_best_state(&mut self) {
         let mut best: Option<(PeerIndex, ProveState)> = None;
         for (curr_peer, curr_state) in self.peers().get_peers_which_are_proved() {
             if best.is_none() {
