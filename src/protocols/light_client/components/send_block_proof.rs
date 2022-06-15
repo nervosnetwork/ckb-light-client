@@ -80,8 +80,10 @@ impl<'a> SendBlockProofProcess<'a> {
                     .next()
                     .map(|inner| inner.to_entity())
                     .expect("checked: first last-N header should be existed");
-                let verifiable_header =
-                    VerifiableHeader::new_from_header_with_chain_root(first_last_n_header.clone());
+                let verifiable_header = VerifiableHeader::new_from_header_with_chain_root(
+                    first_last_n_header.clone(),
+                    mmr_activated_number,
+                );
                 if !verifiable_header.is_valid(mmr_activated_number, None) {
                     let header = verifiable_header.header();
                     error!(
@@ -124,6 +126,7 @@ impl<'a> SendBlockProofProcess<'a> {
                 let header_with_chain_root = item.to_entity();
                 let verifiable_header = VerifiableHeader::new_from_header_with_chain_root(
                     header_with_chain_root.clone(),
+                    mmr_activated_number,
                 );
                 let header = verifiable_header.header();
                 // Chain root for any sampled blocks should be valid.
@@ -401,6 +404,7 @@ impl<'a> SendBlockProofProcess<'a> {
                 .commit_prove_state(self.peer, prove_state);
         }
 
+        trace!("block proof verify passed");
         Status::ok()
     }
 }
