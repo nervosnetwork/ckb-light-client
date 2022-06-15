@@ -1311,6 +1311,90 @@ mod tests {
             .unwrap();
         assert_eq!(transaction.hash, pre_tx0.hash().unpack());
         assert_eq!(header.hash, pre_block.header().hash().unpack());
+
+        // test rollback_filtered_transactions
+        // rollback 2 blocks
+        storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), total_blocks)]));
+        storage.rollback_filtered_transactions((total_blocks - 1).into());
+        storage.rollback_filtered_transactions((total_blocks - 2).into());
+        let rpc = BlockFilterRpcImpl {
+            storage: storage.clone(),
+        };
+
+        // test get_cells rpc after rollback
+        let cells_page_1 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+        let cells_page_2 = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                150.into(),
+                Some(cells_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!(
+            total_blocks as usize - 1,
+            cells_page_1.objects.len() + cells_page_2.objects.len(),
+            "total size should be cellbase cells count + 1 (last block live cell) - 2 (rollbacked blocks cells)"
+        );
+
+        // test get_transactions rpc after rollback
+        let txs_page_1 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                500.into(),
+                None,
+            )
+            .unwrap();
+        let txs_page_2 = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    script_type: ScriptType::Lock,
+                    filter: None,
+                },
+                Order::Asc,
+                500.into(),
+                Some(txs_page_1.last_cursor),
+            )
+            .unwrap();
+
+        assert_eq!((total_blocks - 2) as usize * 3 - 1, txs_page_1.objects.len() + txs_page_2.objects.len(), "total size should be cellbase tx count + (total_block - 2) * 2 - 1 (genesis block only has one tx)");
+
+        // test get_cells_capacity rpc after rollback
+        let capacity = rpc
+            .get_cells_capacity(SearchKey {
+                script: lock_script1.clone().into(),
+                script_type: ScriptType::Lock,
+                filter: None,
+            })
+            .unwrap();
+
+        assert_eq!(
+            1000 * 100000000 * (total_blocks - 1),
+            capacity.value(),
+            "cellbases + last block live cell - 2 (rollbacked blocks cells)"
+        );
     }
 
     #[test]
