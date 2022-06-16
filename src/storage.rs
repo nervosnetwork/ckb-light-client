@@ -99,7 +99,7 @@ impl Storage {
             .take_while(|(key, _value)| key.starts_with(&key_prefix))
             .map(|(key, value)| {
                 let script = Script::from_slice(&key[key_prefix.len()..]).expect("stored Script");
-                let block_number = BlockNumber::from_le_bytes(
+                let block_number = BlockNumber::from_be_bytes(
                     value.as_ref().try_into().expect("stored BlockNumber"),
                 );
                 (script, block_number)
@@ -112,7 +112,7 @@ impl Storage {
         for (script, block_number) in scripts {
             let mut key = Key::MetaKey("FILTER_SCRIPTS").into_vec();
             key.extend_from_slice(script.as_slice());
-            let value = block_number.to_le_bytes().to_vec();
+            let value = block_number.to_be_bytes().to_vec();
             batch.put(key, value).expect("batch put should be ok");
         }
         batch.commit().expect("batch commit should be ok");
@@ -143,12 +143,12 @@ impl Storage {
             .iterator(mode)
             .take_while(|(key, _value)| key.starts_with(&key_prefix))
             .for_each(|(key, value)| {
-                let stored_block_number = BlockNumber::from_le_bytes(
+                let stored_block_number = BlockNumber::from_be_bytes(
                     value.as_ref().try_into().expect("stored BlockNumber"),
                 );
                 if stored_block_number < block_number {
                     batch
-                        .put(key, block_number.to_le_bytes().to_vec())
+                        .put(key, block_number.to_be_bytes().to_vec())
                         .expect("batch put should be ok")
                 }
             });
@@ -269,6 +269,98 @@ impl Storage {
                 )
                 .expect("batch put should be ok");
         }
+        batch.commit().expect("batch commit should be ok");
+    }
+
+    pub fn rollback_filtered_transactions(&self, block_number: BlockNumber) {
+        let scripts = self.get_filter_scripts();
+        let mut batch = self.batch();
+
+        for (script, filtered_block_number) in scripts {
+            if filtered_block_number >= block_number {
+                let mut key_prefix = Vec::new();
+                key_prefix.push(KeyPrefix::TxLockScript as u8);
+                key_prefix.extend_from_slice(&extract_raw_data(&script));
+                key_prefix.extend_from_slice(&block_number.to_be_bytes());
+                let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+
+                self.db
+                    .iterator(mode)
+                    .take_while(|(key, _value)| key.starts_with(&key_prefix))
+                    .for_each(|(key, value)| {
+                        let key_len = key.len();
+                        let tx_index = TxIndex::from_be_bytes(
+                            key[key_len - 9..key_len - 5]
+                                .try_into()
+                                .expect("stored TxIndex"),
+                        );
+                        let cell_index = CellIndex::from_be_bytes(
+                            key[key_len - 5..key_len - 1]
+                                .try_into()
+                                .expect("stored CellIndex"),
+                        );
+                        let tx_hash =
+                            packed::Byte32Reader::from_slice_should_be_ok(&value).to_entity();
+                        if key[key_len - 1] == 0 {
+                            let (_, _, tx) = self
+                                .get_transaction(&tx_hash)
+                                .expect("stored transaction history");
+                            let input = tx.raw().inputs().get(cell_index as usize).unwrap();
+                            if let Some((
+                                generated_by_block_number,
+                                generated_by_tx_index,
+                                previous_tx,
+                            )) = self.get_transaction(&input.previous_output().tx_hash())
+                            {
+                                let key = Key::CellLockScript(
+                                    &script,
+                                    generated_by_block_number,
+                                    generated_by_tx_index,
+                                    previous_tx
+                                        .raw()
+                                        .inputs()
+                                        .get(cell_index as usize)
+                                        .expect("input index should be checked")
+                                        .previous_output()
+                                        .index()
+                                        .unpack(),
+                                );
+                                batch
+                                    .put_kv(key, previous_tx.calc_tx_hash().as_slice())
+                                    .expect("batch put should be ok");
+                            };
+                            // delete tx history
+                            let key = Key::TxLockScript(
+                                &script,
+                                block_number,
+                                tx_index,
+                                cell_index,
+                                CellType::Input,
+                            )
+                            .into_vec();
+                            batch.delete(key).expect("batch delete should be ok");
+                        } else {
+                            // delete utxo
+                            let key =
+                                Key::CellLockScript(&script, block_number, tx_index, cell_index)
+                                    .into_vec();
+                            batch.delete(key).expect("batch delete should be ok");
+
+                            // delete tx history
+                            let key = Key::TxLockScript(
+                                &script,
+                                block_number,
+                                tx_index,
+                                cell_index,
+                                CellType::Output,
+                            )
+                            .into_vec();
+                            batch.delete(key).expect("batch delete should be ok");
+                        };
+                    });
+            }
+        }
+
         batch.commit().expect("batch commit should be ok");
     }
 
@@ -480,7 +572,7 @@ impl<'a> From<Key<'a>> for Vec<u8> {
             }
             Key::BlockNumber(block_number) => {
                 encoded.push(KeyPrefix::BlockNumber as u8);
-                encoded.extend_from_slice(&block_number.to_le_bytes());
+                encoded.extend_from_slice(&block_number.to_be_bytes());
             }
             Key::MetaKey(meta_key) => {
                 encoded.push(KeyPrefix::MetaKey as u8);
