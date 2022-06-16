@@ -1,3 +1,4 @@
+use ckb_chain_spec::consensus::Consensus;
 use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
     RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
@@ -199,6 +200,7 @@ pub struct TransactionRpcImpl {
     network_controller: NetworkController,
     pending_txs: Arc<RwLock<PendingTxs>>,
     storage: Storage,
+    consensus: Consensus,
 }
 
 pub struct ChainRpcImpl {
@@ -785,8 +787,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let tip_header = self.storage.get_tip_header().into_view();
-        let cycles = verify_tx(&self.storage, &tip_header, tx.clone(), MAX_CYCLES)
+        let cycles = verify_tx(&self.storage, &self.consensus, tx.clone(), MAX_CYCLES)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
             .write()
@@ -842,6 +843,7 @@ impl Service {
         &self,
         network_controller: NetworkController,
         storage: Storage,
+        consensus: Consensus,
         peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
     ) -> Server {
@@ -856,6 +858,7 @@ impl Service {
             network_controller: network_controller.clone(),
             pending_txs,
             storage,
+            consensus,
         };
         let net_rpc_impl = NetRpcImpl {
             network_controller,
