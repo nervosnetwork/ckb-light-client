@@ -982,8 +982,8 @@ mod tests {
             .header(HeaderBuilder::default().number(0.pack()).build())
             .build();
 
+        storage.init_genesis_block(block0.data());
         storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), 0)]));
-        storage.filter_block(block0.data());
 
         let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
         let total_blocks = 255;
@@ -1413,7 +1413,6 @@ mod tests {
             .hash_type(ScriptHashType::Data.into())
             .args(Bytes::from(b"lock_script1".to_vec()).pack())
             .build();
-        storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), 0)]));
 
         let tx00 = TransactionBuilder::default()
             .output(
@@ -1436,7 +1435,8 @@ mod tests {
             .transaction(tx00.clone())
             .header(HeaderBuilder::default().number(0.pack()).build())
             .build();
-        storage.filter_block(block0.data());
+        storage.init_genesis_block(block0.data());
+        storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), 0)]));
 
         let lock_script2 = ScriptBuilder::default()
             .code_hash(H256(rand::random()).pack())

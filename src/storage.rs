@@ -16,6 +16,8 @@ use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 use crate::error::Result;
 
 const TIP_HEADER_KEY: &str = "TIP_HEADER";
+const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
+const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 
 #[derive(Clone)]
 pub struct Storage {
@@ -51,9 +53,11 @@ impl Storage {
 
     pub fn init_genesis_block(&self, block: Block) {
         let genesis_hash = block.calc_header_hash();
-        let key_prefix = Key::MetaKey("GENESIS_HASH").into_vec();
-        if let Some(stored_genesis_hash) =
-            self.get(key_prefix.as_slice()).expect("get genesis hash")
+        let genesis_block_key = Key::MetaKey(GENESIS_BLOCK_KEY).into_vec();
+        if let Some(stored_genesis_hash) = self
+            .get(genesis_block_key.as_slice())
+            .expect("get genesis block")
+            .map(|v| v[0..32].to_vec())
         {
             if genesis_hash.as_slice() != stored_genesis_hash.as_slice() {
                 panic!(
@@ -73,25 +77,67 @@ impl Storage {
             batch
                 .put_kv(Key::BlockNumber(0), block_hash.as_slice())
                 .expect("batch put should be ok");
+            let mut genesis_hash_and_txs_hash = genesis_hash.as_slice().to_vec();
             block
                 .transactions()
                 .into_iter()
                 .enumerate()
                 .for_each(|(tx_index, tx)| {
                     let tx_hash = tx.calc_tx_hash();
+                    genesis_hash_and_txs_hash.extend_from_slice(tx_hash.as_slice());
                     let key = Key::TxHash(&tx_hash).into_vec();
                     let value = Value::Transaction(0, tx_index as TxIndex, &tx);
                     batch.put_kv(key, value).expect("batch put should be ok");
                 });
             batch
-                .put_kv(key_prefix, genesis_hash.as_slice())
+                .put_kv(genesis_block_key, genesis_hash_and_txs_hash.as_slice())
                 .expect("batch put should be ok");
             batch.commit().expect("batch commit should be ok");
         }
     }
 
+    fn get_genesis_block(&self) -> Block {
+        let genesis_hash_and_txs_hash = self
+            .get(Key::MetaKey(GENESIS_BLOCK_KEY).into_vec())
+            .expect("get genesis block")
+            .expect("inited storage");
+        let genesis_hash = Byte32::from_slice(&genesis_hash_and_txs_hash[0..32])
+            .expect("stored genesis block hash");
+        let genesis_header = Header::from_slice(
+            &self
+                .get(Key::BlockHash(&genesis_hash).into_vec())
+                .expect("db get should be ok")
+                .expect("stored block hash / header mapping"),
+        )
+        .expect("stored header should be OK");
+
+        let transactions: Vec<Transaction> = genesis_hash_and_txs_hash[32..]
+            .chunks_exact(32)
+            .map(|tx_hash| {
+                Transaction::from_slice(
+                    &self
+                        .get(
+                            Key::TxHash(
+                                &Byte32::from_slice(&tx_hash)
+                                    .expect("stored genesis block tx hash"),
+                            )
+                            .into_vec(),
+                        )
+                        .expect("db get should be ok")
+                        .expect("stored genesis block tx")[12..],
+                )
+                .expect("stored Transaction")
+            })
+            .collect();
+
+        Block::new_builder()
+            .header(genesis_header)
+            .transactions(transactions.pack())
+            .build()
+    }
+
     pub fn get_filter_scripts(&self) -> HashMap<Script, BlockNumber> {
-        let key_prefix = Key::MetaKey("FILTER_SCRIPTS").into_vec();
+        let key_prefix = Key::MetaKey(FILTER_SCRIPTS_KEY).into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
 
         self.db
@@ -109,13 +155,26 @@ impl Storage {
 
     pub fn update_filter_scripts(&self, scripts: HashMap<Script, BlockNumber>) {
         let mut batch = self.batch();
+        // update min block number to 1 when it's setup as 0, because sync protocol will ban us when requesting genesis block data
+        let mut should_filter_genesis_block = false;
         for (script, block_number) in scripts {
-            let mut key = Key::MetaKey("FILTER_SCRIPTS").into_vec();
+            let mut key = Key::MetaKey(FILTER_SCRIPTS_KEY).into_vec();
             key.extend_from_slice(script.as_slice());
-            let value = block_number.to_be_bytes().to_vec();
+            let value = if block_number == 0 {
+                should_filter_genesis_block = true;
+                1u64.to_be_bytes().to_vec()
+            } else {
+                block_number.to_be_bytes().to_vec()
+            };
+
             batch.put(key, value).expect("batch put should be ok");
         }
         batch.commit().expect("batch commit should be ok");
+
+        if should_filter_genesis_block {
+            let block = self.get_genesis_block();
+            self.filter_block(block);
+        }
     }
 
     pub fn update_tip_header(&self, tip_header: &Header) {
@@ -135,7 +194,7 @@ impl Storage {
     }
 
     pub fn update_block_number(&self, block_number: BlockNumber) {
-        let key_prefix = Key::MetaKey("FILTER_SCRIPTS").into_vec();
+        let key_prefix = Key::MetaKey(FILTER_SCRIPTS_KEY).into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
 
         let mut batch = self.batch();
