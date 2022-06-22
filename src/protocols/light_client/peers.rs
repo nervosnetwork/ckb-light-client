@@ -41,6 +41,7 @@ pub(crate) struct ProveRequest {
 #[derive(Clone)]
 pub(crate) struct ProveState {
     last_state: LastState,
+    reorg_last_headers: Vec<HeaderView>,
     last_headers: Vec<HeaderView>,
 }
 
@@ -92,10 +93,15 @@ impl ProveRequest {
 }
 
 impl ProveState {
-    pub(crate) fn new_from_request(request: ProveRequest, last_headers: Vec<HeaderView>) -> Self {
+    pub(crate) fn new_from_request(
+        request: ProveRequest,
+        reorg_last_headers: Vec<HeaderView>,
+        last_headers: Vec<HeaderView>,
+    ) -> Self {
         let ProveRequest { last_state, .. } = request;
         Self {
             last_state,
+            reorg_last_headers,
             last_headers,
         }
     }
@@ -114,6 +120,10 @@ impl ProveState {
         total_difficulty: &U256,
     ) -> bool {
         self.get_last_header() == last_header && self.get_total_difficulty() == total_difficulty
+    }
+
+    pub(crate) fn get_reorg_last_headers(&self) -> &[HeaderView] {
+        &self.reorg_last_headers[..]
     }
 
     pub(crate) fn get_last_headers(&self) -> &[HeaderView] {

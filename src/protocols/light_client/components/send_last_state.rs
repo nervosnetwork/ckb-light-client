@@ -1,5 +1,5 @@
 use super::super::{
-    peers::ProveRequest, prelude::*, LastState, LightClientProtocol, Status, StatusCode,
+    peers::ProveRequest, LastState, LightClientProtocol, Status, StatusCode,
 };
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256};
@@ -10,7 +10,7 @@ pub(crate) struct SendLastStateProcess<'a> {
     message: packed::SendLastStateReader<'a>,
     protocol: &'a mut LightClientProtocol,
     peer: PeerIndex,
-    nc: &'a dyn CKBProtocolContext,
+    _nc: &'a dyn CKBProtocolContext,
 }
 
 impl<'a> SendLastStateProcess<'a> {
@@ -18,13 +18,13 @@ impl<'a> SendLastStateProcess<'a> {
         message: packed::SendLastStateReader<'a>,
         protocol: &'a mut LightClientProtocol,
         peer: PeerIndex,
-        nc: &'a dyn CKBProtocolContext,
+        _nc: &'a dyn CKBProtocolContext,
     ) -> Self {
         Self {
             message,
             protocol,
             peer,
-            nc,
+            _nc,
         }
     }
 
@@ -70,37 +70,21 @@ impl<'a> SendLastStateProcess<'a> {
             .unwrap_or(false);
 
         // Send the old request again.
-        let content = if is_requested {
+        if is_requested {
             let now = unix_time_as_millis();
-            let content = peer_state
-                .get_prove_request()
-                .expect("checked: it should be existed since it's already requested")
-                .get_request()
-                .to_owned();
             self.protocol.peers().update_timestamp(self.peer, now);
-
-            content
         } else {
             let content = self.protocol.build_prove_request_content(
                 &peer_state,
                 &tip_header,
                 &tip_total_difficulty,
             );
-            let prove_request = ProveRequest::new(
-                LastState::new(tip_header, tip_total_difficulty),
-                content.clone(),
-            );
+            let prove_request =
+                ProveRequest::new(LastState::new(tip_header, tip_total_difficulty), content);
             self.protocol
                 .peers()
                 .submit_prove_request(self.peer, prove_request);
-
-            content
-        };
-
-        let message = packed::LightClientMessage::new_builder()
-            .set(content)
-            .build();
-        self.nc.reply(self.peer, &message);
+        }
 
         Status::ok()
     }

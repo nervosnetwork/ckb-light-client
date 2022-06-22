@@ -433,14 +433,15 @@ impl<'a> SendBlockSamplesProcess<'a> {
                 .build();
             self.nc.reply(self.peer, &message);
         } else {
-            let prove_state =
-                ProveState::new_from_request(prove_request.to_owned(), last_n_headers);
+            let prove_state = ProveState::new_from_request(
+                prove_request.to_owned(),
+                reorg_last_n_headers,
+                last_n_headers,
+            );
             self.protocol
                 .peers()
                 .commit_prove_state(self.peer, prove_state);
         }
-
-        // FIXME: rollback storage when reorg_last_n_headers is not empty
 
         trace!("block proof verify passed");
         Status::ok()
