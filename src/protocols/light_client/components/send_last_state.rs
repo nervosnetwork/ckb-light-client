@@ -1,10 +1,10 @@
-use ckb_network::{CKBProtocolContext, PeerIndex};
-use ckb_types::{
-    core::BlockNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256,
+use super::super::{
+    peers::ProveRequest, prelude::*, LastState, LightClientProtocol, Status, StatusCode,
 };
+use ckb_network::{CKBProtocolContext, PeerIndex};
+use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256};
 use faketime::unix_time_as_millis;
-
-use super::super::{peers::ProveRequest, prelude::*, LightClientProtocol, Status, StatusCode};
+use log::trace;
 
 pub(crate) struct SendLastStateProcess<'a> {
     message: packed::SendLastStateReader<'a>,
@@ -29,11 +29,10 @@ impl<'a> SendLastStateProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
-        let mmr_activated_number: BlockNumber = self.message.mmr_activated_number().unpack();
-        let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
-        let last_total_difficulty: U256 = self.message.total_difficulty().unpack();
+        let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
+        let tip_total_difficulty: U256 = self.message.total_difficulty().unpack();
 
-        if !last_header.is_valid(mmr_activated_number, None) {
+        if !tip_header.is_valid(self.protocol.mmr_activated_number(), None) {
             return StatusCode::InvalidLastState.into();
         }
 
@@ -43,11 +42,21 @@ impl<'a> SendLastStateProcess<'a> {
             .get_state(&self.peer)
             .expect("checked: should have state");
 
+        if peer_state
+            .get_last_state()
+            .map(|last_state| last_state.total_difficulty < tip_total_difficulty)
+            .unwrap_or(true)
+        {
+            trace!("peer {}: update last state", self.peer);
+            self.protocol.peers().update_last_state(
+                self.peer,
+                LastState::new(tip_header.clone(), tip_total_difficulty.clone()),
+            );
+        }
+
         let is_proved = peer_state
             .get_prove_state()
-            .map(|inner| {
-                inner.is_same_as(mmr_activated_number, &last_header, &last_total_difficulty)
-            })
+            .map(|inner| inner.is_same_as(&tip_header, &tip_total_difficulty))
             .unwrap_or(false);
 
         // Skipped is the state is proved.
@@ -57,9 +66,7 @@ impl<'a> SendLastStateProcess<'a> {
 
         let is_requested = peer_state
             .get_prove_request()
-            .map(|inner| {
-                inner.is_same_as(mmr_activated_number, &last_header, &last_total_difficulty)
-            })
+            .map(|inner| inner.is_same_as(&tip_header, &tip_total_difficulty))
             .unwrap_or(false);
 
         // Send the old request again.
@@ -76,13 +83,11 @@ impl<'a> SendLastStateProcess<'a> {
         } else {
             let content = self.protocol.build_prove_request_content(
                 &peer_state,
-                &last_header,
-                &last_total_difficulty,
+                &tip_header,
+                &tip_total_difficulty,
             );
             let prove_request = ProveRequest::new(
-                mmr_activated_number,
-                last_header,
-                last_total_difficulty,
+                LastState::new(tip_header, tip_total_difficulty),
                 content.clone(),
             );
             self.protocol

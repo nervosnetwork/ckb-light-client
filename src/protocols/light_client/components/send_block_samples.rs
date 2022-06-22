@@ -4,6 +4,7 @@ use ckb_constant::consensus::TAU;
 use ckb_merkle_mountain_range::leaf_index_to_pos;
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::{
+    core::BlockNumber,
     packed,
     prelude::*,
     utilities::{
@@ -12,22 +13,23 @@ use ckb_types::{
     },
     U256,
 };
-use log::{error, info, trace};
+use log::{error, trace};
 
 use super::super::{
-    peers::ProveRequest, prelude::*, LightClientProtocol, ProveState, Status, StatusCode,
+    peers::ProveRequest, prelude::*, LastState, LightClientProtocol, ProveState, Status, StatusCode,
 };
+use crate::protocols::LAST_N_BLOCKS;
 
-pub(crate) struct SendBlockProofProcess<'a> {
-    message: packed::SendBlockProofReader<'a>,
+pub(crate) struct SendBlockSamplesProcess<'a> {
+    message: packed::SendBlockSamplesReader<'a>,
     protocol: &'a mut LightClientProtocol,
     peer: PeerIndex,
     nc: &'a dyn CKBProtocolContext,
 }
 
-impl<'a> SendBlockProofProcess<'a> {
+impl<'a> SendBlockSamplesProcess<'a> {
     pub(crate) fn new(
-        message: packed::SendBlockProofReader<'a>,
+        message: packed::SendBlockSamplesReader<'a>,
         protocol: &'a mut LightClientProtocol,
         peer: PeerIndex,
         nc: &'a dyn CKBProtocolContext,
@@ -55,12 +57,12 @@ impl<'a> SendBlockProofProcess<'a> {
             return StatusCode::PeerIsNotOnProcess.into();
         };
         let last_header = prove_request.get_last_header();
-        let mmr_activated_number = prove_request.get_mmr_activated_number();
         let last_total_difficulty = prove_request.get_total_difficulty();
 
         let chain_root = self.message.root().to_entity();
         let proof: MMRProof = self.message.proof().unpack();
 
+        let mmr_activated_number = self.protocol.mmr_activated_number();
         // Check if the response is match the request.
         {
             let prev_request = prove_request.get_request();
@@ -108,9 +110,8 @@ impl<'a> SendBlockProofProcess<'a> {
                         .collect();
                 }
 
-                let last_n_blocks: u64 = prev_request.last_n_blocks().unpack();
                 // Last-N blocks should be satisfied the follow condition.
-                if self.message.last_n_headers().len() as u64 > last_n_blocks
+                if self.message.last_n_headers().len() as u64 > LAST_N_BLOCKS
                     && total_difficulty < difficulty_boundary
                 {
                     error!(
@@ -176,6 +177,12 @@ impl<'a> SendBlockProofProcess<'a> {
             }
         }
 
+        let reorg_last_n_headers = self
+            .message
+            .reorg_last_n_headers()
+            .iter()
+            .map(|header| header.to_entity().header().into_view())
+            .collect::<Vec<_>>();
         let sampled_headers = self
             .message
             .sampled_headers()
@@ -188,6 +195,13 @@ impl<'a> SendBlockProofProcess<'a> {
             .iter()
             .map(|header| header.to_entity().header().into_view())
             .collect::<Vec<_>>();
+        trace!(
+            "peer {}: reorg_last_n_headers: {}, sampled_headers: {}, last_n_headers: {}",
+            self.peer,
+            reorg_last_n_headers.len(),
+            sampled_headers.len(),
+            last_n_headers.len()
+        );
 
         // Check epoch difficulties.
         let failed_to_verify_tau = if prove_request.if_skip_check_tau() {
@@ -279,7 +293,11 @@ impl<'a> SendBlockProofProcess<'a> {
 
         // Check POW.
         let pow_engine = self.protocol.pow_engine();
-        for header in sampled_headers.iter().chain(last_n_headers.iter()) {
+        for header in reorg_last_n_headers
+            .iter()
+            .chain(sampled_headers.iter())
+            .chain(last_n_headers.iter())
+        {
             if !pow_engine.verify(&header.data()) {
                 let errmsg = format!(
                     "failed to verify nonce for block#{}, hash: {:#x}",
@@ -290,7 +308,28 @@ impl<'a> SendBlockProofProcess<'a> {
             }
         }
 
+        if let Some(header) = reorg_last_n_headers.iter().last() {
+            let start_number: BlockNumber = prove_request.get_request().start_number().unpack();
+            if header.number() != start_number - 1 {
+                let errmsg = format!(
+                    "failed to verify reorg last block number for block#{}, hash: {:#x}",
+                    header.number(),
+                    header.hash()
+                );
+                return StatusCode::InvalidReorgHeaders.with_context(errmsg);
+            }
+        }
         // Check parent hashes for the continuous headers.
+        for headers in reorg_last_n_headers.windows(2) {
+            if headers[0].hash() != headers[1].parent_hash() {
+                let errmsg = format!(
+                    "failed to verify parent hash for block#{}, hash: {:#x}",
+                    headers[1].number(),
+                    headers[1].hash()
+                );
+                return StatusCode::InvalidParentHash.with_context(errmsg);
+            }
+        }
         for headers in last_n_headers.windows(2) {
             if headers[0].hash() != headers[1].parent_hash() {
                 let errmsg = format!(
@@ -302,7 +341,61 @@ impl<'a> SendBlockProofProcess<'a> {
             }
         }
 
-        // If no sampled headers, we can skip the check for the MMR proof.
+        // Verify MMR proof
+        let digests_with_positions = {
+            let res = reorg_last_n_headers
+                .iter()
+                .chain(sampled_headers.iter())
+                .chain(last_n_headers.iter())
+                .map(|header| {
+                    let index = header.number();
+                    let position = leaf_index_to_pos(index);
+                    let digest = header.digest();
+                    digest.verify()?;
+                    Ok((position, digest))
+                })
+                .collect::<Result<Vec<_>, String>>();
+            match res {
+                Ok(tmp) => tmp,
+                Err(err) => {
+                    let errmsg = format!("failed to verify all digest since {}", err);
+                    return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
+                }
+            }
+        };
+        let verify_result = match proof.verify(chain_root.clone(), digests_with_positions) {
+            Ok(verify_result) => verify_result,
+            Err(err) => {
+                let errmsg = format!("failed to do verify the proof since {}", err);
+                return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
+            }
+        };
+        if verify_result {
+            trace!("peer {}: verify mmr proof passed", self.peer);
+        } else {
+            error!("peer {}: verify mmr proof failed", self.peer);
+            return StatusCode::FailedToVerifyTheProof.into();
+        }
+        let expected_root_hash = chain_root.calc_mmr_hash();
+        let check_extra_hash_result =
+            last_header.is_valid(mmr_activated_number, Some(&expected_root_hash));
+        if check_extra_hash_result {
+            trace!(
+                "passed: verify extra hash for block-{} ({:#x})",
+                last_header.header().number(),
+                last_header.header().hash(),
+            );
+        } else {
+            error!(
+                "failed: verify extra hash for block-{} ({:#x})",
+                last_header.header().number(),
+                last_header.header().hash(),
+            );
+            let errmsg = "failed to do verify the extra hash";
+            return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
+        };
+
+        // If no sampled headers, we can skip the check for total difficulty.
         if !sampled_headers.is_empty() {
             // Check total difficulty.
             if let Some(prove_state) = peer_state.get_prove_state() {
@@ -317,61 +410,6 @@ impl<'a> SendBlockProofProcess<'a> {
                     return StatusCode::InvalidTotalDifficulty.with_context(msg);
                 }
             }
-
-            let digests_with_positions = {
-                let res = sampled_headers
-                    .iter()
-                    .chain(last_n_headers.iter())
-                    .map(|header| {
-                        let index = header.number();
-                        let position = leaf_index_to_pos(index);
-                        let digest = header.digest();
-                        digest.verify()?;
-                        Ok((position, digest))
-                    })
-                    .collect::<Result<Vec<_>, String>>();
-                match res {
-                    Ok(tmp) => tmp,
-                    Err(err) => {
-                        let errmsg = format!("failed to verify all digest since {}", err);
-                        return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
-                    }
-                }
-            };
-
-            let verify_result = match proof.verify(chain_root.clone(), digests_with_positions) {
-                Ok(verify_result) => verify_result,
-                Err(err) => {
-                    let errmsg = format!("failed to do verify the proof since {}", err);
-                    return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
-                }
-            };
-
-            if verify_result {
-                info!("passed: verify mmr proof");
-            } else {
-                error!("failed: verify mmr proof");
-                return StatusCode::FailedToVerifyTheProof.into();
-            }
-
-            let expected_root_hash = chain_root.calc_mmr_hash();
-            let check_extra_hash_result =
-                last_header.is_valid(mmr_activated_number, Some(&expected_root_hash));
-            if check_extra_hash_result {
-                info!(
-                    "passed: verify extra hash for block-{} ({:#x})",
-                    last_header.header().number(),
-                    last_header.header().hash(),
-                );
-            } else {
-                error!(
-                    "failed: verify extra hash for block-{} ({:#x})",
-                    last_header.header().number(),
-                    last_header.header().hash(),
-                );
-                let errmsg = "failed to do verify the extra hash";
-                return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
-            };
         }
 
         // Failed to verify TAU, ask for new sampled headers.
@@ -382,9 +420,7 @@ impl<'a> SendBlockProofProcess<'a> {
                 &last_total_difficulty,
             );
             let mut prove_request = ProveRequest::new(
-                mmr_activated_number,
-                last_header.clone(),
-                last_total_difficulty.clone(),
+                LastState::new(last_header.clone(), last_total_difficulty.clone()),
                 content.clone(),
             );
             prove_request.skip_check_tau();
@@ -403,6 +439,8 @@ impl<'a> SendBlockProofProcess<'a> {
                 .peers()
                 .commit_prove_state(self.peer, prove_state);
         }
+
+        // FIXME: rollback storage when reorg_last_n_headers is not empty
 
         trace!("block proof verify passed");
         Status::ok()

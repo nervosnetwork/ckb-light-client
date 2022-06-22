@@ -37,10 +37,12 @@ pub enum StatusCode {
     InvalidTotalDifficulty = 425,
     /// Failed to verify the pow.
     InvalidNonce = 426,
+    /// The last header number in reorg_last_n_headers is wrong
+    InvalidReorgHeaders = 427,
     /// Failed to verify the parent hash.
-    InvalidParentHash = 427,
+    InvalidParentHash = 428,
     /// Failed to verify the proof.
-    FailedToVerifyTheProof = 428,
+    FailedToVerifyTheProof = 429,
 
     /// Throws an internal error.
     InternalError = 500,

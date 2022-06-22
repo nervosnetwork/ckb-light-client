@@ -94,6 +94,7 @@ impl Storage {
                 .expect("batch put should be ok");
             batch.commit().expect("batch commit should be ok");
         }
+        self.update_tip_header(&block.header());
     }
 
     fn get_genesis_block(&self) -> Block {

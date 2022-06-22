@@ -4,9 +4,12 @@
 
 use std::sync::Arc;
 
+use ckb_chain_spec::consensus::Consensus;
 use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
-use ckb_pow::{Pow, PowEngine};
-use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256};
+use ckb_pow::PowEngine;
+use ckb_types::{
+    core::BlockNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256,
+};
 use log::{debug, error, info, trace, warn};
 
 mod components;
@@ -17,7 +20,7 @@ mod sampling;
 
 use prelude::*;
 
-pub(crate) use self::peers::{PeerState, Peers, ProveState};
+pub(crate) use self::peers::{LastState, PeerState, Peers, ProveState};
 use super::{
     status::{Status, StatusCode},
     BAD_MESSAGE_BAN_TIME,
@@ -27,7 +30,7 @@ use crate::storage::Storage;
 pub struct LightClientProtocol {
     storage: Storage,
     peers: Arc<Peers>,
-    pow: Pow,
+    consensus: Consensus,
     best: Option<(PeerIndex, ProveState)>,
 }
 
@@ -81,7 +84,7 @@ impl CKBProtocolHandler for LightClientProtocol {
         if status.is_ok()
             && matches!(
                 msg,
-                packed::LightClientMessageUnionReader::SendBlockProof(_)
+                packed::LightClientMessageUnionReader::SendBlockSamples(_)
             )
         {
             self.update_best_state();
@@ -121,8 +124,8 @@ impl LightClientProtocol {
             packed::LightClientMessageUnionReader::SendLastState(reader) => {
                 components::SendLastStateProcess::new(reader, self, peer, nc).execute()
             }
-            packed::LightClientMessageUnionReader::SendBlockProof(reader) => {
-                components::SendBlockProofProcess::new(reader, self, peer, nc).execute()
+            packed::LightClientMessageUnionReader::SendBlockSamples(reader) => {
+                components::SendBlockSamplesProcess::new(reader, self, peer, nc).execute()
             }
             _ => StatusCode::UnexpectedProtocolMessage.into(),
         }
@@ -138,21 +141,24 @@ impl LightClientProtocol {
 }
 
 impl LightClientProtocol {
-    pub(crate) fn new(storage: Storage, peers: Arc<Peers>, pow: Pow) -> Self {
+    pub(crate) fn new(storage: Storage, peers: Arc<Peers>, consensus: Consensus) -> Self {
         Self {
             storage,
             peers,
-            pow,
+            consensus,
             best: None,
         }
     }
 
-    pub(crate) fn peers(&self) -> &Peers {
-        &self.peers
+    pub(crate) fn mmr_activated_number(&self) -> BlockNumber {
+        self.consensus.hardfork_switch().mmr_activated_number()
+    }
+    pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
+        self.consensus.pow_engine()
     }
 
-    pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
-        self.pow.engine()
+    pub(crate) fn peers(&self) -> &Peers {
+        &self.peers
     }
 
     fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
@@ -194,16 +200,17 @@ impl LightClientProtocol {
         peer_state: &PeerState,
         last_header: &VerifiableHeader,
         last_total_difficulty: &U256,
-    ) -> packed::GetBlockProof {
-        let (start_number, start_total_difficulty) = peer_state
+    ) -> packed::GetBlockSamples {
+        let (start_hash, start_number, start_total_difficulty) = peer_state
             .get_prove_state()
             .map(|inner| {
                 (
+                    inner.get_last_header().header().hash(),
                     inner.get_last_header().header().number(),
                     inner.get_total_difficulty().to_owned(),
                 )
             })
-            .unwrap_or((0, U256::zero()));
+            .unwrap_or((Default::default(), 0, U256::zero()));
         let last_number = last_header.header().number();
         let (last_n_blocks, difficulty_boundary, difficulties) = sampling::sample_blocks(
             start_number,
@@ -211,10 +218,10 @@ impl LightClientProtocol {
             last_number,
             last_total_difficulty,
         );
-        packed::GetBlockProof::new_builder()
+        packed::GetBlockSamples::new_builder()
             .last_hash(last_header.header().hash())
+            .start_hash(start_hash)
             .start_number(start_number.pack())
-            .last_n_blocks(last_n_blocks.pack())
             .difficulty_boundary(difficulty_boundary.pack())
             .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
             .build()
