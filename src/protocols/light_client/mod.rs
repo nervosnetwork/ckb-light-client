@@ -82,7 +82,7 @@ impl CKBProtocolHandler for LightClientProtocol {
         };
 
         let item_name = msg.item_name();
-        let status = self.try_process(nc.as_ref(), peer, msg.clone());
+        let status = self.try_process(nc.as_ref(), peer, msg);
         if status.is_ok()
             && matches!(
                 msg,
@@ -210,10 +210,10 @@ impl LightClientProtocol {
                 if let Some((_, last_prove_state)) = last_best.as_ref() {
                     let last_headers: HashMap<_, _> = last_prove_state
                         .get_last_headers()
-                        .into_iter()
+                        .iter()
                         .map(|header| (header.number(), header))
                         .collect();
-                    for reorg_header in reorg_last_headers.into_iter().rev() {
+                    for reorg_header in reorg_last_headers.iter().rev() {
                         if last_headers
                             .get(&reorg_header.number())
                             .map(|header| *header != reorg_header)

@@ -84,36 +84,33 @@ impl CKBProtocolHandler for RelayProtocol {
             }
         };
 
-        match message {
-            packed::RelayMessageUnionReader::GetRelayTransactions(reader) => {
-                let pending_txs = self.pending_txs.read().expect("read access should be OK");
-                let relay_txs: Vec<_> = reader
-                    .tx_hashes()
-                    .iter()
-                    .filter_map(|tx_hash| {
-                        pending_txs.get(tx_hash.to_entity()).map(|(tx, cycles)| {
-                            packed::RelayTransaction::new_builder()
-                                .transaction(tx)
-                                .cycles(cycles.pack())
-                                .build()
-                        })
+        if let packed::RelayMessageUnionReader::GetRelayTransactions(reader) = message {
+            let pending_txs = self.pending_txs.read().expect("read access should be OK");
+            let relay_txs: Vec<_> = reader
+                .tx_hashes()
+                .iter()
+                .filter_map(|tx_hash| {
+                    pending_txs.get(tx_hash.to_entity()).map(|(tx, cycles)| {
+                        packed::RelayTransaction::new_builder()
+                            .transaction(tx)
+                            .cycles(cycles.pack())
+                            .build()
                     })
-                    .collect();
+                })
+                .collect();
 
-                let content = packed::RelayTransactions::new_builder()
-                    .transactions(relay_txs.pack())
-                    .build();
-                let msg = packed::RelayMessage::new_builder().set(content).build();
-                if let Err(err) = nc.send_message_to(peer, msg.as_bytes()) {
-                    warn!(
-                        "RelayProtocol failed to send RelayTransactions message to peer={} since {:?}",
-                        peer, err
-                    );
-                }
+            let content = packed::RelayTransactions::new_builder()
+                .transactions(relay_txs.pack())
+                .build();
+            let msg = packed::RelayMessage::new_builder().set(content).build();
+            if let Err(err) = nc.send_message_to(peer, msg.as_bytes()) {
+                warn!(
+                    "RelayProtocol failed to send RelayTransactions message to peer={} since {:?}",
+                    peer, err
+                );
             }
-            _ => {
-                // ignore other messages
-            }
+        } else {
+            // ignore other messages
         }
     }
 }

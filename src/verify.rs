@@ -29,6 +29,7 @@ pub fn verify_tx(
     verifier.verify(max_cycles)
 }
 
+#[allow(clippy::mutable_key_type)]
 fn resolve_tx(
     storage: &Storage,
     transaction: TransactionView,
