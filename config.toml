@@ -15,12 +15,18 @@ listen_addresses = ["/ip4/0.0.0.0/tcp/8116"]
 
 # Node connects to nodes listed here to discovery other peers when there's no local stored peers.
 # When chain.spec is changed, this usually should also be changed to the bootnodes in the new chain.
-bootnodes = ["/ip4/52.221.65.114/tcp/8115/p2p/QmcNN4VGBTmVvWsrsQPu3diXJpRFQ2cvqvZUezq7WD96Y7"]
+bootnodes = [
+    "/ip4/52.221.65.114/tcp/8115/p2p/QmcNN4VGBTmVvWsrsQPu3diXJpRFQ2cvqvZUezq7WD96Y7",
+    "/ip4/127.0.0.1/tcp/8115/p2p/QmUwUvGeRrrER1i9LiBtgGGw5FHaXnSU3as8qcNZxhNx48"
+]
 
 ### Whitelist-only mode
 whitelist_only = true
 ### Whitelist peers connecting from the given IP addresses
-whitelist_peers = ["/ip4/52.221.65.114/tcp/8115/p2p/QmcNN4VGBTmVvWsrsQPu3diXJpRFQ2cvqvZUezq7WD96Y7"]
+whitelist_peers = [
+    "/ip4/52.221.65.114/tcp/8115/p2p/QmcNN4VGBTmVvWsrsQPu3diXJpRFQ2cvqvZUezq7WD96Y7",
+    "/ip4/127.0.0.1/tcp/8115/p2p/QmUwUvGeRrrER1i9LiBtgGGw5FHaXnSU3as8qcNZxhNx48"
+]
 
 max_peers = 5000
 max_outbound_peers = 2500

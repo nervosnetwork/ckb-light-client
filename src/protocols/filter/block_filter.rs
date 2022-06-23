@@ -183,8 +183,10 @@ impl CKBProtocolHandler for FilterProtocol {
                     .max_by_key(|(_, prove_state)| prove_state.get_total_difficulty())
                 {
                     let start_number = self.pending_peer.min_block_number();
+                    let prove_state_number = prove_state.get_last_header().header().number();
+                    debug!("found proved peer {}, start_number: {}, prove_state number: {:?}", peer, start_number, prove_state.get_last_header().header().number());
                     if self.pending_peer.should_ask()
-                        && prove_state.get_last_header().header().number() >= start_number
+                        && prove_state_number >= start_number
                     {
                         let content = packed::GetBlockFilters::new_builder()
                             .start_number(start_number.pack())
@@ -200,6 +202,8 @@ impl CKBProtocolHandler for FilterProtocol {
                             error!("{}", error_message);
                         }
                     }
+                } else {
+                    debug!("cannot find peers which are proved");
                 }
             }
             _ => unreachable!(),
