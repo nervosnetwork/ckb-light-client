@@ -1,6 +1,4 @@
-use super::super::{
-    peers::ProveRequest, LastState, LightClientProtocol, Status, StatusCode,
-};
+use super::super::{peers::ProveRequest, LastState, LightClientProtocol, Status, StatusCode};
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256};
 use faketime::unix_time_as_millis;

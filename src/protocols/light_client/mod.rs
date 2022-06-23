@@ -180,9 +180,7 @@ impl LightClientProtocol {
 
     fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
         let now = faketime::unix_time_as_millis();
-        let before = now - constant::REFRESH_PEERS_INTERVAL.as_millis() as u64;
-
-        for peer in self.peers().get_peers_which_require_updating(before) {
+        for peer in self.peers().get_peers_which_require_updating() {
             self.get_block_samples(nc, peer);
             self.peers().update_timestamp(peer, now);
         }
