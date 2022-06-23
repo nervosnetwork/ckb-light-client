@@ -1,9 +1,6 @@
 use ckb_network::PeerIndex;
 use ckb_types::{
-    core::{BlockNumber, HeaderView},
-    packed,
-    utilities::merkle_mountain_range::VerifiableHeader,
-    U256,
+    core::HeaderView, packed, utilities::merkle_mountain_range::VerifiableHeader, U256,
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
@@ -20,72 +17,69 @@ pub struct Peer {
     update_timestamp: u64,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
+pub(crate) struct LastState {
+    pub tip_header: VerifiableHeader,
+    pub total_difficulty: U256,
+}
+
+#[derive(Clone)]
 pub(crate) struct PeerState {
+    // Save the header instead of the request message
+    last_state: Option<LastState>,
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ProveRequest {
-    mmr_activated_number: BlockNumber,
-    last_header: VerifiableHeader,
-    total_difficulty: U256,
-
-    request: packed::GetBlockProof,
-
+    last_state: LastState,
+    request: packed::GetBlockSamples,
     skip_check_tau: bool,
 }
 
 #[derive(Clone)]
 pub(crate) struct ProveState {
-    mmr_activated_number: BlockNumber,
-    last_header: VerifiableHeader,
-    total_difficulty: U256,
-
+    last_state: LastState,
+    reorg_last_headers: Vec<HeaderView>,
     last_headers: Vec<HeaderView>,
 }
 
-impl ProveRequest {
-    pub(crate) fn new(
-        mmr_activated_number: BlockNumber,
-        last_header: VerifiableHeader,
-        total_difficulty: U256,
-        request: packed::GetBlockProof,
-    ) -> Self {
-        Self {
-            mmr_activated_number,
-            last_header,
+impl LastState {
+    pub(crate) fn new(tip_header: VerifiableHeader, total_difficulty: U256) -> LastState {
+        LastState {
+            tip_header,
             total_difficulty,
+        }
+    }
+}
+
+impl ProveRequest {
+    pub(crate) fn new(last_state: LastState, request: packed::GetBlockSamples) -> Self {
+        Self {
+            last_state,
             request,
             skip_check_tau: false,
         }
     }
 
-    pub(crate) fn get_mmr_activated_number(&self) -> BlockNumber {
-        self.mmr_activated_number
-    }
-
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
-        &self.last_header
+        &self.last_state.tip_header
     }
 
     pub(crate) fn get_total_difficulty(&self) -> &U256 {
-        &self.total_difficulty
+        &self.last_state.total_difficulty
     }
 
     pub(crate) fn is_same_as(
         &self,
-        mmr_activated_number: BlockNumber,
         last_header: &VerifiableHeader,
         total_difficulty: &U256,
     ) -> bool {
-        self.get_mmr_activated_number() == mmr_activated_number
-            && self.get_last_header() == last_header
-            && self.get_total_difficulty() == total_difficulty
+        self.get_last_header() == last_header && self.get_total_difficulty() == total_difficulty
     }
 
-    pub(crate) fn get_request(&self) -> &packed::GetBlockProof {
+    pub(crate) fn get_request(&self) -> &packed::GetBlockSamples {
         &self.request
     }
 
@@ -99,46 +93,51 @@ impl ProveRequest {
 }
 
 impl ProveState {
-    pub(crate) fn new_from_request(request: ProveRequest, last_headers: Vec<HeaderView>) -> Self {
-        let ProveRequest {
-            mmr_activated_number,
-            last_header,
-            total_difficulty,
-            ..
-        } = request;
+    pub(crate) fn new_from_request(
+        request: ProveRequest,
+        reorg_last_headers: Vec<HeaderView>,
+        last_headers: Vec<HeaderView>,
+    ) -> Self {
+        let ProveRequest { last_state, .. } = request;
         Self {
-            mmr_activated_number,
-            last_header,
-            total_difficulty,
+            last_state,
+            reorg_last_headers,
             last_headers,
         }
     }
 
-    pub(crate) fn get_mmr_activated_number(&self) -> BlockNumber {
-        self.mmr_activated_number
-    }
-
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
-        &self.last_header
+        &self.last_state.tip_header
     }
 
     pub(crate) fn get_total_difficulty(&self) -> &U256 {
-        &self.total_difficulty
+        &self.last_state.total_difficulty
     }
 
     pub(crate) fn is_same_as(
         &self,
-        mmr_activated_number: BlockNumber,
         last_header: &VerifiableHeader,
         total_difficulty: &U256,
     ) -> bool {
-        self.get_mmr_activated_number() == mmr_activated_number
-            && self.get_last_header() == last_header
-            && self.get_total_difficulty() == total_difficulty
+        self.get_last_header() == last_header && self.get_total_difficulty() == total_difficulty
+    }
+
+    pub(crate) fn get_reorg_last_headers(&self) -> &[HeaderView] {
+        &self.reorg_last_headers[..]
     }
 
     pub(crate) fn get_last_headers(&self) -> &[HeaderView] {
         &self.last_headers[..]
+    }
+}
+
+impl Default for PeerState {
+    fn default() -> PeerState {
+        PeerState {
+            last_state: None,
+            prove_request: None,
+            prove_state: None,
+        }
     }
 }
 
@@ -147,12 +146,20 @@ impl PeerState {
         self.prove_request.is_some() || self.prove_state.is_some()
     }
 
+    pub(crate) fn get_last_state(&self) -> Option<&LastState> {
+        self.last_state.as_ref()
+    }
+
     pub(crate) fn get_prove_request(&self) -> Option<&ProveRequest> {
         self.prove_request.as_ref()
     }
 
     pub(crate) fn get_prove_state(&self) -> Option<&ProveState> {
         self.prove_state.as_ref()
+    }
+
+    fn update_last_state(&mut self, last_state: LastState) {
+        self.last_state = Some(last_state);
     }
 
     fn submit_prove_request(&mut self, request: ProveRequest) {
@@ -189,6 +196,12 @@ impl Peers {
     // also need to update Peers later.
     pub(crate) fn get_state(&self, index: &PeerIndex) -> Option<PeerState> {
         self.inner.get(&index).map(|peer| peer.state.clone())
+    }
+
+    pub(crate) fn update_last_state(&self, index: PeerIndex, last_state: LastState) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state.update_last_state(last_state);
+        }
     }
 
     pub(crate) fn update_timestamp(&self, index: PeerIndex, timestamp: u64) {

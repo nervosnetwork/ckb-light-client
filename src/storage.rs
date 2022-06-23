@@ -9,13 +9,14 @@ use ckb_types::{
     },
     packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
+    U256,
 };
 
 use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 
 use crate::error::Result;
 
-const TIP_HEADER_KEY: &str = "TIP_HEADER";
+const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 
@@ -69,7 +70,7 @@ impl Storage {
             let mut batch = self.batch();
             let block_hash = block.calc_header_hash();
             batch
-                .put_kv(Key::MetaKey(TIP_HEADER_KEY), block.header().as_slice())
+                .put_kv(Key::MetaKey(LAST_STATE_KEY), block.header().as_slice())
                 .expect("batch put should be ok");
             batch
                 .put_kv(Key::BlockHash(&block_hash), block.header().as_slice())
@@ -94,6 +95,7 @@ impl Storage {
                 .expect("batch put should be ok");
             batch.commit().expect("batch commit should be ok");
         }
+        self.update_last_state(&U256::zero(), &block.header());
     }
 
     fn get_genesis_block(&self) -> Block {
@@ -177,20 +179,32 @@ impl Storage {
         }
     }
 
-    pub fn update_tip_header(&self, tip_header: &Header) {
-        let key = Key::MetaKey(TIP_HEADER_KEY).into_vec();
+    pub fn update_last_state(&self, total_difficulty: &U256, tip_header: &Header) {
+        let key = Key::MetaKey(LAST_STATE_KEY).into_vec();
+        let mut value = total_difficulty.to_le_bytes().to_vec();
+        value.extend(tip_header.as_slice());
         self.db
-            .put(key, tip_header.as_slice())
-            .expect("db put tip header should be ok");
+            .put(key, &value)
+            .expect("db put last state should be ok");
+    }
+
+    pub fn get_last_state(&self) -> (U256, Header) {
+        let key = Key::MetaKey(LAST_STATE_KEY).into_vec();
+        self.db
+            .get_pinned(&key)
+            .expect("db get last state should be ok")
+            .map(|data| {
+                let mut total_difficulty_bytes = [0u8; 32];
+                total_difficulty_bytes.copy_from_slice(&data[0..32]);
+                let total_difficulty = U256::from_le_bytes(&total_difficulty_bytes);
+                let header = packed::HeaderReader::from_slice_should_be_ok(&data[32..]).to_entity();
+                (total_difficulty, header)
+            })
+            .expect("tip header should be inited")
     }
 
     pub fn get_tip_header(&self) -> Header {
-        let key = Key::MetaKey(TIP_HEADER_KEY).into_vec();
-        self.db
-            .get_pinned(&key)
-            .expect("db get tip header should be ok")
-            .map(|data| packed::HeaderReader::from_slice_should_be_ok(&data).to_entity())
-            .expect("tip header should be inited")
+        self.get_last_state().1
     }
 
     pub fn update_block_number(&self, block_number: BlockNumber) {

@@ -93,14 +93,13 @@ pub(crate) fn sample_blocks(
     start_difficulty: &U256,
     last_number: BlockNumber,
     last_difficulty: &U256,
-) -> (BlockNumber, U256, Vec<U256>) {
-    let last_n_blocks = LAST_N_BLOCKS;
+) -> (U256, Vec<U256>) {
     let blocks_count = last_number - start_number;
-    let mut samples_count = if blocks_count <= last_n_blocks {
+    let mut samples_count = if blocks_count <= LAST_N_BLOCKS {
         trace!(
             "sampling: no sampled blocks since the blocks count ({}<={}) is too small",
             blocks_count,
-            last_n_blocks
+            LAST_N_BLOCKS
         );
         0
     } else {
@@ -134,5 +133,5 @@ pub(crate) fn sample_blocks(
     );
     let mut difficulties: Vec<_> = pdf.sampling(samples_count).into_iter().collect();
     difficulties.sort();
-    (last_n_blocks, difficulty_boundary, difficulties)
+    (difficulty_boundary, difficulties)
 }

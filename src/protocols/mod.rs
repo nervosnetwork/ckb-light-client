@@ -16,4 +16,4 @@ pub(crate) use synchronizer::SyncProtocol;
 
 pub const BAD_MESSAGE_BAN_TIME: Duration = Duration::from_secs(5 * 60);
 
-pub const LAST_N_BLOCKS: BlockNumber = 500;
+pub const LAST_N_BLOCKS: BlockNumber = 100;

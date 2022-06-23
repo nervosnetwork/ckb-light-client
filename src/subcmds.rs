@@ -62,7 +62,7 @@ impl RunConfig {
         let light_client: Box<dyn CKBProtocolHandler> = Box::new(LightClientProtocol::new(
             storage.clone(),
             Arc::clone(&peers),
-            consensus.pow.clone(),
+            consensus.clone(),
         ));
         let filter_protocol = FilterProtocol::new(storage.clone());
 
