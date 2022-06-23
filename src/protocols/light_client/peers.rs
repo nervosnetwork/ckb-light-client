@@ -23,7 +23,7 @@ pub(crate) struct LastState {
     pub total_difficulty: U256,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct PeerState {
     // Save the header instead of the request message
     last_state: Option<LastState>,
@@ -131,21 +131,7 @@ impl ProveState {
     }
 }
 
-impl Default for PeerState {
-    fn default() -> PeerState {
-        PeerState {
-            last_state: None,
-            prove_request: None,
-            prove_state: None,
-        }
-    }
-}
-
 impl PeerState {
-    pub(crate) fn is_ready(&self) -> bool {
-        self.prove_request.is_some() || self.prove_state.is_some()
-    }
-
     pub(crate) fn get_last_state(&self) -> Option<&LastState> {
         self.last_state.as_ref()
     }
@@ -195,7 +181,7 @@ impl Peers {
     // Peers is a DashMap, return an owned PeerState to avoid the dead lock when
     // also need to update Peers later.
     pub(crate) fn get_state(&self, index: &PeerIndex) -> Option<PeerState> {
-        self.inner.get(&index).map(|peer| peer.state.clone())
+        self.inner.get(index).map(|peer| peer.state.clone())
     }
 
     pub(crate) fn update_last_state(&self, index: PeerIndex, last_state: LastState) {
@@ -243,11 +229,10 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                if let Some(state) = item.value().state.get_prove_state() {
-                    Some((*item.key(), state.to_owned()))
-                } else {
-                    None
-                }
+                item.value()
+                    .state
+                    .get_prove_state()
+                    .map(|state| (*item.key(), state.to_owned()))
             })
             .collect()
     }

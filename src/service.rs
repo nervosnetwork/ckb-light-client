@@ -212,6 +212,7 @@ pub struct NetRpcImpl {
     peers: Arc<Peers>,
 }
 
+#[allow(clippy::mutable_key_type)]
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
         let scripts = scripts
@@ -537,11 +538,6 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                     key[key.len() - 4..]
                         .try_into()
                         .expect("stored output_index"),
-                );
-                let tx_index = u32::from_be_bytes(
-                    key[key.len() - 8..key.len() - 4]
-                        .try_into()
-                        .expect("stored tx_index"),
                 );
                 let block_number = u64::from_be_bytes(
                     key[key.len() - 16..key.len() - 8]

@@ -89,7 +89,7 @@ impl RunConfig {
             ),
         ];
 
-        let (handle, stop_handler) = new_global_runtime();
+        let (handle, _stop_handler) = new_global_runtime();
         let exit_handler = DefaultExitHandler::default();
 
         let network_controller = NetworkService::new(

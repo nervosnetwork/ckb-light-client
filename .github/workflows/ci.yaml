@@ -3,7 +3,7 @@ on:
   push:
     branches: [ master, develop ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, develop ]
 defaults:
   run:
     shell: bash
@@ -56,7 +56,7 @@ jobs:
         rust: [ stable ]
         os: [ ubuntu-latest, macos-latest, windows-latest ]
         include:
-          - rust: 1.56.1 # MSRV, same as ckb/rust-toolchain
+          - rust: 1.59.0
             os: ubuntu-latest
       fail-fast: true
       max-parallel: 4

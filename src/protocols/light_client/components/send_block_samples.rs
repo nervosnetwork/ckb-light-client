@@ -207,88 +207,85 @@ impl<'a> SendBlockSamplesProcess<'a> {
         let failed_to_verify_tau = if prove_request.if_skip_check_tau() {
             trace!("peer {} skip checking TAU since the flag is set", self.peer);
             false
-        } else {
-            if !sampled_headers.is_empty() {
-                let start_header = sampled_headers
-                    .first()
-                    .expect("checked: start header should be existed");
-                let end_header = last_n_headers
-                    .last()
-                    .expect("checked: end header should be existed");
-                // Check difficulties.
-                let start_epoch = start_header.epoch();
-                let end_epoch = end_header.epoch();
-                let start_compact_target = start_header.compact_target();
-                let end_compact_target = end_header.compact_target();
-                if start_epoch.number() == end_epoch.number() {
-                    if start_compact_target != end_compact_target {
-                        error!("failed: different compact targets for a same epoch");
-                        return StatusCode::InvalidCompactTarget.into();
-                    }
-                    trace!(
-                        "peer {} skip checking TAU since headers in the same epoch",
-                        self.peer
-                    );
-                    false
-                } else {
-                    // How many times are epochs switched?
-                    let epochs_switch_count = end_epoch.number() - start_epoch.number();
-
-                    let start_block_difficulty = compact_to_difficulty(start_compact_target);
-                    let end_block_difficulty = compact_to_difficulty(end_compact_target);
-                    let start_epoch_difficulty =
-                        start_block_difficulty.clone() * start_epoch.length();
-                    let end_epoch_difficulty = end_block_difficulty.clone() * end_epoch.length();
-
-                    let tau = TAU;
-                    let tau_u256 = U256::from(TAU);
-
-                    match start_epoch_difficulty.cmp(&end_epoch_difficulty) {
-                        Ordering::Equal => {
-                            trace!(
-                                "peer {}: end epoch difficulty is {} \
-                                and it's same as the start epoch",
-                                self.peer,
-                                end_epoch_difficulty,
-                            );
-                            false
-                        }
-                        Ordering::Less => {
-                            let mut end_epoch_difficulty_max = start_epoch_difficulty;
-                            for _ in 0..epochs_switch_count {
-                                end_epoch_difficulty_max =
-                                    end_epoch_difficulty_max.saturating_mul(&tau_u256);
-                            }
-                            trace!(
-                                "peer {}: end epoch difficulty is {} and upper limit is {}",
-                                self.peer,
-                                end_epoch_difficulty,
-                                end_epoch_difficulty_max
-                            );
-                            end_epoch_difficulty > end_epoch_difficulty_max
-                        }
-                        Ordering::Greater => {
-                            let mut end_epoch_difficulty_min = start_epoch_difficulty;
-                            for _ in 0..epochs_switch_count {
-                                end_epoch_difficulty_min = end_epoch_difficulty_min / tau;
-                            }
-                            trace!(
-                                "peer {}: end epoch difficulty is {} and lower limit is {}",
-                                self.peer,
-                                end_epoch_difficulty,
-                                end_epoch_difficulty_min
-                            );
-                            end_epoch_difficulty < end_epoch_difficulty_min
-                        }
-                    }
+        } else if !sampled_headers.is_empty() {
+            let start_header = sampled_headers
+                .first()
+                .expect("checked: start header should be existed");
+            let end_header = last_n_headers
+                .last()
+                .expect("checked: end header should be existed");
+            // Check difficulties.
+            let start_epoch = start_header.epoch();
+            let end_epoch = end_header.epoch();
+            let start_compact_target = start_header.compact_target();
+            let end_compact_target = end_header.compact_target();
+            if start_epoch.number() == end_epoch.number() {
+                if start_compact_target != end_compact_target {
+                    error!("failed: different compact targets for a same epoch");
+                    return StatusCode::InvalidCompactTarget.into();
                 }
-            } else {
                 trace!(
-                    "peer {} skip checking TAU since no sampled headers",
+                    "peer {} skip checking TAU since headers in the same epoch",
                     self.peer
                 );
                 false
+            } else {
+                // How many times are epochs switched?
+                let epochs_switch_count = end_epoch.number() - start_epoch.number();
+
+                let start_block_difficulty = compact_to_difficulty(start_compact_target);
+                let end_block_difficulty = compact_to_difficulty(end_compact_target);
+                let start_epoch_difficulty = start_block_difficulty * start_epoch.length();
+                let end_epoch_difficulty = end_block_difficulty * end_epoch.length();
+
+                let tau = TAU;
+                let tau_u256 = U256::from(TAU);
+
+                match start_epoch_difficulty.cmp(&end_epoch_difficulty) {
+                    Ordering::Equal => {
+                        trace!(
+                            "peer {}: end epoch difficulty is {} \
+                            and it's same as the start epoch",
+                            self.peer,
+                            end_epoch_difficulty,
+                        );
+                        false
+                    }
+                    Ordering::Less => {
+                        let mut end_epoch_difficulty_max = start_epoch_difficulty;
+                        for _ in 0..epochs_switch_count {
+                            end_epoch_difficulty_max =
+                                end_epoch_difficulty_max.saturating_mul(&tau_u256);
+                        }
+                        trace!(
+                            "peer {}: end epoch difficulty is {} and upper limit is {}",
+                            self.peer,
+                            end_epoch_difficulty,
+                            end_epoch_difficulty_max
+                        );
+                        end_epoch_difficulty > end_epoch_difficulty_max
+                    }
+                    Ordering::Greater => {
+                        let mut end_epoch_difficulty_min = start_epoch_difficulty;
+                        for _ in 0..epochs_switch_count {
+                            end_epoch_difficulty_min /= tau;
+                        }
+                        trace!(
+                            "peer {}: end epoch difficulty is {} and lower limit is {}",
+                            self.peer,
+                            end_epoch_difficulty,
+                            end_epoch_difficulty_min
+                        );
+                        end_epoch_difficulty < end_epoch_difficulty_min
+                    }
+                }
             }
+        } else {
+            trace!(
+                "peer {} skip checking TAU since no sampled headers",
+                self.peer
+            );
+            false
         };
 
         // Check POW.
@@ -416,8 +413,8 @@ impl<'a> SendBlockSamplesProcess<'a> {
         if failed_to_verify_tau {
             let content = self.protocol.build_prove_request_content(
                 &peer_state,
-                &last_header,
-                &last_total_difficulty,
+                last_header,
+                last_total_difficulty,
             );
             let mut prove_request = ProveRequest::new(
                 LastState::new(last_header.clone(), last_total_difficulty.clone()),
@@ -604,15 +601,13 @@ fn calculate_tau_exponent_when_increased(
     rhs: &U256,
     limit: u64,
 ) -> Option<u64> {
-    let mut k = 0;
     let mut tmp = lhs.clone();
     let tau_u256 = U256::from(tau);
-    for _ in 0..limit {
+    for k in 0..limit {
         tmp = tmp.saturating_mul(&tau_u256);
         if tmp >= *rhs {
             return Some(k);
         }
-        k += 1;
     }
     None
 }
@@ -628,14 +623,12 @@ fn calculate_tau_exponent_when_decreased(
     rhs: &U256,
     limit: u64,
 ) -> Option<u64> {
-    let mut k = 0;
     let mut tmp = lhs.clone();
-    for _ in 0..limit {
+    for k in 0..limit {
         tmp /= tau;
         if tmp <= *rhs {
             return Some(k);
         }
-        k += 1;
     }
     None
 }

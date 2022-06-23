@@ -25,6 +25,7 @@ pub struct Storage {
     pub(crate) db: Arc<DB>,
 }
 
+#[allow(clippy::mutable_key_type)]
 impl Storage {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let db = Arc::new(DB::open_default(path).expect("Failed to open rocksdb"));
@@ -38,12 +39,12 @@ impl Storage {
             .map_err(Into::into)
     }
 
-    fn exists<K: AsRef<[u8]>>(&self, key: K) -> Result<bool> {
-        self.db
-            .get(key.as_ref())
-            .map(|v| v.is_some())
-            .map_err(Into::into)
-    }
+    // fn exists<K: AsRef<[u8]>>(&self, key: K) -> Result<bool> {
+    //     self.db
+    //         .get(key.as_ref())
+    //         .map(|v| v.is_some())
+    //         .map_err(Into::into)
+    // }
 
     fn batch(&self) -> Batch {
         Batch {
@@ -54,7 +55,7 @@ impl Storage {
 
     pub fn init_genesis_block(&self, block: Block) {
         let genesis_hash = block.calc_header_hash();
-        let genesis_block_key = Key::MetaKey(GENESIS_BLOCK_KEY).into_vec();
+        let genesis_block_key = Key::Meta(GENESIS_BLOCK_KEY).into_vec();
         if let Some(stored_genesis_hash) = self
             .get(genesis_block_key.as_slice())
             .expect("get genesis block")
@@ -70,7 +71,7 @@ impl Storage {
             let mut batch = self.batch();
             let block_hash = block.calc_header_hash();
             batch
-                .put_kv(Key::MetaKey(LAST_STATE_KEY), block.header().as_slice())
+                .put_kv(Key::Meta(LAST_STATE_KEY), block.header().as_slice())
                 .expect("batch put should be ok");
             batch
                 .put_kv(Key::BlockHash(&block_hash), block.header().as_slice())
@@ -100,7 +101,7 @@ impl Storage {
 
     fn get_genesis_block(&self) -> Block {
         let genesis_hash_and_txs_hash = self
-            .get(Key::MetaKey(GENESIS_BLOCK_KEY).into_vec())
+            .get(Key::Meta(GENESIS_BLOCK_KEY).into_vec())
             .expect("get genesis block")
             .expect("inited storage");
         let genesis_hash = Byte32::from_slice(&genesis_hash_and_txs_hash[0..32])
@@ -120,8 +121,7 @@ impl Storage {
                     &self
                         .get(
                             Key::TxHash(
-                                &Byte32::from_slice(&tx_hash)
-                                    .expect("stored genesis block tx hash"),
+                                &Byte32::from_slice(tx_hash).expect("stored genesis block tx hash"),
                             )
                             .into_vec(),
                         )
@@ -139,7 +139,7 @@ impl Storage {
     }
 
     pub fn get_filter_scripts(&self) -> HashMap<Script, BlockNumber> {
-        let key_prefix = Key::MetaKey(FILTER_SCRIPTS_KEY).into_vec();
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
 
         self.db
@@ -160,7 +160,7 @@ impl Storage {
         // update min block number to 1 when it's setup as 0, because sync protocol will ban us when requesting genesis block data
         let mut should_filter_genesis_block = false;
         for (script, block_number) in scripts {
-            let mut key = Key::MetaKey(FILTER_SCRIPTS_KEY).into_vec();
+            let mut key = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
             key.extend_from_slice(script.as_slice());
             let value = if block_number == 0 {
                 should_filter_genesis_block = true;
@@ -180,7 +180,7 @@ impl Storage {
     }
 
     pub fn update_last_state(&self, total_difficulty: &U256, tip_header: &Header) {
-        let key = Key::MetaKey(LAST_STATE_KEY).into_vec();
+        let key = Key::Meta(LAST_STATE_KEY).into_vec();
         let mut value = total_difficulty.to_le_bytes().to_vec();
         value.extend(tip_header.as_slice());
         self.db
@@ -189,7 +189,7 @@ impl Storage {
     }
 
     pub fn get_last_state(&self) -> (U256, Header) {
-        let key = Key::MetaKey(LAST_STATE_KEY).into_vec();
+        let key = Key::Meta(LAST_STATE_KEY).into_vec();
         self.db
             .get_pinned(&key)
             .expect("db get last state should be ok")
@@ -208,7 +208,7 @@ impl Storage {
     }
 
     pub fn update_block_number(&self, block_number: BlockNumber) {
-        let key_prefix = Key::MetaKey(FILTER_SCRIPTS_KEY).into_vec();
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
 
         let mut batch = self.batch();
@@ -221,7 +221,7 @@ impl Storage {
                 );
                 if stored_block_number < block_number {
                     batch
-                        .put(key, block_number.to_be_bytes().to_vec())
+                        .put(key, block_number.to_be_bytes())
                         .expect("batch put should be ok")
                 }
             });
@@ -351,8 +351,7 @@ impl Storage {
 
         for (script, filtered_block_number) in scripts {
             if filtered_block_number >= block_number {
-                let mut key_prefix = Vec::new();
-                key_prefix.push(KeyPrefix::TxLockScript as u8);
+                let mut key_prefix = vec![KeyPrefix::TxLockScript as u8];
                 key_prefix.extend_from_slice(&extract_raw_data(&script));
                 key_prefix.extend_from_slice(&block_number.to_be_bytes());
                 let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
@@ -566,7 +565,7 @@ pub enum CellType {
 /// | 128          | TxTypeScript       | TxHash                   |
 /// | 160          | BlockHash          | Header                   |
 /// | 192          | BlockNumber        | BlockHash                |
-/// | 224          | MetaKey            | MetaValue                |
+/// | 224          | Meta               | Meta                |
 /// +--------------+--------------------+--------------------------+
 ///
 pub enum Key<'a> {
@@ -577,7 +576,7 @@ pub enum Key<'a> {
     TxTypeScript(&'a Script, BlockNumber, TxIndex, CellIndex, CellType),
     BlockHash(&'a Byte32),
     BlockNumber(BlockNumber),
-    MetaKey(&'a str),
+    Meta(&'a str),
 }
 
 pub enum Value<'a> {
@@ -585,7 +584,7 @@ pub enum Value<'a> {
     TxHash(&'a Byte32),
     Header(&'a Header),
     BlockHash(&'a Byte32),
-    MetaValue(Vec<u8>),
+    Meta(Vec<u8>),
 }
 
 #[repr(u8)]
@@ -597,7 +596,7 @@ pub enum KeyPrefix {
     TxTypeScript = 128,
     BlockHash = 160,
     BlockNumber = 192,
-    MetaKey = 224,
+    Meta = 224,
 }
 
 impl<'a> Key<'a> {
@@ -647,8 +646,8 @@ impl<'a> From<Key<'a>> for Vec<u8> {
                 encoded.push(KeyPrefix::BlockNumber as u8);
                 encoded.extend_from_slice(&block_number.to_be_bytes());
             }
-            Key::MetaKey(meta_key) => {
-                encoded.push(KeyPrefix::MetaKey as u8);
+            Key::Meta(meta_key) => {
+                encoded.push(KeyPrefix::Meta as u8);
                 encoded.extend_from_slice(meta_key.as_bytes());
             }
         }
@@ -669,7 +668,7 @@ impl<'a> From<Value<'a>> for Vec<u8> {
             Value::TxHash(tx_hash) => tx_hash.as_slice().into(),
             Value::Header(header) => header.as_slice().into(),
             Value::BlockHash(block_hash) => block_hash.as_slice().into(),
-            Value::MetaValue(meta_value) => meta_value,
+            Value::Meta(meta_value) => meta_value,
         }
     }
 }

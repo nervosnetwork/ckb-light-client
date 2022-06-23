@@ -105,7 +105,7 @@ impl FilterProtocol {
 
 impl FilterProtocol {
     fn try_process(
-        &mut self,
+        &self,
         nc: Arc<dyn CKBProtocolContext + Sync>,
         peer: PeerIndex,
         message: packed::BlockFilterMessageUnionReader<'_>,
@@ -113,7 +113,7 @@ impl FilterProtocol {
         match message {
             // TODO: implement check points message processing
             packed::BlockFilterMessageUnionReader::BlockFilters(reader) => {
-                components::BlockFiltersProcess::new(reader, &self, nc, peer).execute()
+                components::BlockFiltersProcess::new(reader, self, nc, peer).execute()
             }
             _ => StatusCode::UnexpectedProtocolMessage.into(),
         }
@@ -184,10 +184,13 @@ impl CKBProtocolHandler for FilterProtocol {
                 {
                     let start_number = self.pending_peer.min_block_number();
                     let prove_state_number = prove_state.get_last_header().header().number();
-                    debug!("found proved peer {}, start_number: {}, prove_state number: {:?}", peer, start_number, prove_state.get_last_header().header().number());
-                    if self.pending_peer.should_ask()
-                        && prove_state_number >= start_number
-                    {
+                    debug!(
+                        "found proved peer {}, start_number: {}, prove_state number: {:?}",
+                        peer,
+                        start_number,
+                        prove_state.get_last_header().header().number()
+                    );
+                    if self.pending_peer.should_ask() && prove_state_number >= start_number {
                         let content = packed::GetBlockFilters::new_builder()
                             .start_number(start_number.pack())
                             .build();
