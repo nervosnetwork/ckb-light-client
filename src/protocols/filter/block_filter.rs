@@ -1,5 +1,5 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
-use crate::protocols::{Status, StatusCode};
+use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
 use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
@@ -20,12 +20,15 @@ const GCS_M: u64 = 784930;
 
 pub struct PendingGetBlockFiltersPeer {
     pub(crate) storage: Storage,
-    pub(crate) peer: Option<PeerIndex>,
     pub(crate) last_ask_time: Arc<RwLock<Option<Instant>>>,
 }
 
 impl PendingGetBlockFiltersPeer {
-    pub fn check_filters_data(&self, block_filters: packed::BlockFilters) -> Vec<packed::Byte32> {
+    pub fn check_filters_data(
+        &self,
+        block_filters: packed::BlockFilters,
+        limit: usize,
+    ) -> Vec<packed::Byte32> {
         let reader = GCSFilterReader::new(0, 0, GCS_M, GCS_P);
         let script_hashes = self
             .storage
@@ -36,6 +39,7 @@ impl PendingGetBlockFiltersPeer {
         block_filters
             .filters()
             .into_iter()
+            .take(limit)
             .enumerate()
             .filter_map(|(index, block_filter)| {
                 let mut input = Cursor::new(block_filter.raw_data());
@@ -61,7 +65,7 @@ impl PendingGetBlockFiltersPeer {
     }
 
     pub fn should_ask(&self) -> bool {
-        (self.peer.is_some() && !self.storage.get_filter_scripts().is_empty())
+        !self.storage.get_filter_scripts().is_empty()
             && (self.last_ask_time.read().unwrap().is_none()
                 || self.last_ask_time.read().unwrap().unwrap().elapsed()
                     > GET_BLOCK_FILTERS_TIMEOUT)
@@ -84,17 +88,17 @@ impl PendingGetBlockFiltersPeer {
 
 pub struct FilterProtocol {
     pub(crate) pending_peer: PendingGetBlockFiltersPeer,
+    pub(crate) peers: Arc<Peers>,
 }
 
 impl FilterProtocol {
-    pub fn new(storage: Storage) -> Self {
-        // TODO: only support one peer in current POC code, need to support multiple peers fetching block filters in future
+    pub fn new(storage: Storage, peers: Arc<Peers>) -> Self {
         Self {
             pending_peer: PendingGetBlockFiltersPeer {
                 storage,
-                peer: None,
                 last_ask_time: Arc::new(RwLock::new(None)),
             },
+            peers,
         }
     }
 }
@@ -128,13 +132,11 @@ impl CKBProtocolHandler for FilterProtocol {
         peer: PeerIndex,
         version: &str,
     ) {
-        info!("FilterProtocol({}).connected peer={}", version, peer);
-        self.pending_peer.peer = Some(peer);
+        debug!("FilterProtocol({}).connected peer={}", version, peer);
     }
 
     fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
-        info!("FilterProtocol.disconnected peer={}", peer);
-        self.pending_peer.peer = None;
+        debug!("FilterProtocol.disconnected peer={}", peer);
     }
 
     fn received(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex, data: Bytes) {
@@ -174,22 +176,34 @@ impl CKBProtocolHandler for FilterProtocol {
     fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
         match token {
             GET_BLOCK_FILTERS_TOKEN => {
-                if self.pending_peer.should_ask() {
-                    let content = packed::GetBlockFilters::new_builder()
-                        .start_number(self.pending_peer.min_block_number().pack())
-                        .build();
-
-                    let message = packed::BlockFilterMessage::new_builder()
-                        .set(content)
-                        .build();
-
-                    if let Err(err) =
-                        nc.send_message_to(self.pending_peer.peer.unwrap(), message.as_bytes())
+                if let Some((peer, prove_state)) = self
+                    .peers
+                    .get_peers_which_are_proved()
+                    .iter()
+                    .max_by_key(|(_, prove_state)| prove_state.get_total_difficulty())
+                {
+                    let start_number = self.pending_peer.min_block_number();
+                    let prove_state_number = prove_state.get_last_header().header().number();
+                    debug!("found proved peer {}, start_number: {}, prove_state number: {:?}", peer, start_number, prove_state.get_last_header().header().number());
+                    if self.pending_peer.should_ask()
+                        && prove_state_number >= start_number
                     {
-                        let error_message =
-                            format!("nc.send_message BlockFilterMessage, error: {:?}", err);
-                        error!("{}", error_message);
+                        let content = packed::GetBlockFilters::new_builder()
+                            .start_number(start_number.pack())
+                            .build();
+
+                        let message = packed::BlockFilterMessage::new_builder()
+                            .set(content)
+                            .build();
+
+                        if let Err(err) = nc.send_message_to(*peer, message.as_bytes()) {
+                            let error_message =
+                                format!("nc.send_message BlockFilterMessage, error: {:?}", err);
+                            error!("{}", error_message);
+                        }
                     }
+                } else {
+                    debug!("cannot find peers which are proved");
                 }
             }
             _ => unreachable!(),

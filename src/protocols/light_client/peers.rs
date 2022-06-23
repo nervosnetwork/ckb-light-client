@@ -17,7 +17,7 @@ pub struct Peer {
     update_timestamp: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct LastState {
     pub tip_header: VerifiableHeader,
     pub total_difficulty: U256,
@@ -38,7 +38,7 @@ pub(crate) struct ProveRequest {
     skip_check_tau: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) struct ProveState {
     last_state: LastState,
     reorg_last_headers: Vec<HeaderView>,

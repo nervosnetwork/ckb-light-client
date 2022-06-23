@@ -64,7 +64,7 @@ impl RunConfig {
             Arc::clone(&peers),
             consensus.clone(),
         ));
-        let filter_protocol = FilterProtocol::new(storage.clone());
+        let filter_protocol = FilterProtocol::new(storage.clone(), Arc::clone(&peers));
 
         let protocols = vec![
             CKBProtocol::new_with_support_protocol(
