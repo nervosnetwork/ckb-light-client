@@ -23,7 +23,7 @@ pub(crate) struct LastState {
     pub total_difficulty: U256,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct PeerState {
     // Save the header instead of the request message
     last_state: Option<LastState>,
@@ -128,16 +128,6 @@ impl ProveState {
 
     pub(crate) fn get_last_headers(&self) -> &[HeaderView] {
         &self.last_headers[..]
-    }
-}
-
-impl Default for PeerState {
-    fn default() -> PeerState {
-        PeerState {
-            last_state: None,
-            prove_request: None,
-            prove_state: None,
-        }
     }
 }
 

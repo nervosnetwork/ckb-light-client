@@ -221,7 +221,7 @@ impl Storage {
                 );
                 if stored_block_number < block_number {
                     batch
-                        .put(key, block_number.to_be_bytes().to_vec())
+                        .put(key, block_number.to_be_bytes())
                         .expect("batch put should be ok")
                 }
             });
