@@ -114,6 +114,12 @@ impl<'a> SendBlockSamplesProcess<'a> {
                 if self.message.last_n_headers().len() as u64 > LAST_N_BLOCKS
                     && total_difficulty < difficulty_boundary
                 {
+                    trace!(
+                        "last_n_headers.len(): {}, total_difficulty: {}, difficulty_boundary: {}",
+                        self.message.last_n_headers().len(),
+                        total_difficulty,
+                        difficulty_boundary,
+                    );
                     error!(
                         "failed: total difficulty of any last-N blocks \
                         should be greater than the difficulty boundary \
