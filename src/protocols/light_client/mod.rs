@@ -11,6 +11,7 @@ use ckb_pow::PowEngine;
 use ckb_types::{
     core::BlockNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256,
 };
+use faketime::unix_time_as_millis;
 use log::{debug, error, info, trace, warn};
 
 mod components;
@@ -21,7 +22,7 @@ mod sampling;
 
 use prelude::*;
 
-pub(crate) use self::peers::{LastState, PeerState, Peers, ProveState};
+pub(crate) use self::peers::{LastState, PeerState, Peers, ProveRequest, ProveState};
 use super::{
     status::{Status, StatusCode},
     BAD_MESSAGE_BAN_TIME,
@@ -142,13 +143,51 @@ impl LightClientProtocol {
     }
 
     fn get_block_samples(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
-        if let Some(content) = self
+        let peer_state = self
             .peers()
             .get_state(&peer)
-            .expect("checked: should have state")
+            .expect("checked: should have state");
+
+        if let Some(last_state) = peer_state.get_last_state() {
+            let tip_header = &last_state.tip_header;
+            let tip_total_difficulty = &last_state.total_difficulty;
+
+            let is_proved = peer_state
+                .get_prove_state()
+                .map(|inner| inner.is_same_as(tip_header, tip_total_difficulty))
+                .unwrap_or(false);
+
+            // Skipped is the state is proved.
+            if is_proved {
+                return;
+            }
+            let is_requested = peer_state
+                .get_prove_request()
+                .map(|inner| inner.is_same_as(tip_header, tip_total_difficulty))
+                .unwrap_or(false);
+
+            // Send the old request again.
+            if is_requested {
+                let now = unix_time_as_millis();
+                self.peers().update_timestamp(peer, now);
+            } else {
+                let content =
+                    self.build_prove_request_content(&peer_state, tip_header, tip_total_difficulty);
+                let prove_request = ProveRequest::new(last_state.clone(), content);
+                self.peers().submit_prove_request(peer, prove_request);
+            }
+        }
+
+        // Copy the updated peer state again
+        let peer_state = self
+            .peers()
+            .get_state(&peer)
+            .expect("checked: should have state");
+        if let Some(content) = peer_state
             .get_prove_request()
             .map(|request| request.get_request().to_owned())
         {
+            trace!("peer {}: send get block samples", peer);
             let message = packed::LightClientMessage::new_builder()
                 .set(content)
                 .build();
@@ -180,7 +219,8 @@ impl LightClientProtocol {
 
     fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
         let now = faketime::unix_time_as_millis();
-        for peer in self.peers().get_peers_which_require_updating() {
+        let before = now - constant::REFRESH_PEERS_DURATION.as_millis() as u64;
+        for peer in self.peers().get_peers_which_require_updating(before) {
             self.get_block_samples(nc, peer);
             self.peers().update_timestamp(peer, now);
         }

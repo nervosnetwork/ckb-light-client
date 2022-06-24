@@ -212,11 +212,11 @@ impl Peers {
         }
     }
 
-    pub(crate) fn get_peers_which_require_updating(&self) -> Vec<PeerIndex> {
+    pub(crate) fn get_peers_which_require_updating(&self, before_timestamp: u64) -> Vec<PeerIndex> {
         self.inner
             .iter()
             .filter_map(|item| {
-                if item.value().state.get_prove_request().is_some() {
+                if item.value().update_timestamp < before_timestamp {
                     Some(*item.key())
                 } else {
                     None
