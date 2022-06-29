@@ -130,6 +130,9 @@ impl LightClientProtocol {
             packed::LightClientMessageUnionReader::SendBlockSamples(reader) => {
                 components::SendBlockSamplesProcess::new(reader, self, peer, nc).execute()
             }
+            packed::LightClientMessageUnionReader::SendBlockProof(reader) => {
+                components::SendBlockProofProcess::new(reader, self, peer, nc).execute()
+            }
             _ => StatusCode::UnexpectedProtocolMessage.into(),
         }
     }
