@@ -29,6 +29,7 @@ pub(crate) struct PeerState {
     last_state: Option<LastState>,
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
+    block_proof_request: Option<packed::GetBlockProof>,
 }
 
 #[derive(Clone)]
@@ -144,6 +145,14 @@ impl PeerState {
         self.prove_state.as_ref()
     }
 
+    pub(crate) fn get_block_proof_request(&self) -> Option<&packed::GetBlockProof> {
+        self.block_proof_request.as_ref()
+    }
+
+    fn update_block_proof_request(&mut self, request: Option<packed::GetBlockProof>) {
+        self.block_proof_request = request;
+    }
+
     fn update_last_state(&mut self, last_state: LastState) {
         self.last_state = Some(last_state);
     }
@@ -193,6 +202,16 @@ impl Peers {
     pub(crate) fn update_timestamp(&self, index: PeerIndex, timestamp: u64) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.update_timestamp = timestamp;
+        }
+    }
+
+    pub(crate) fn update_block_proof_request(
+        &self,
+        index: PeerIndex,
+        request: Option<packed::GetBlockProof>,
+    ) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state.update_block_proof_request(request);
         }
     }
 

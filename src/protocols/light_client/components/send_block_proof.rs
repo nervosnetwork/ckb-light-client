@@ -31,6 +31,26 @@ impl<'a> SendBlockProofProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
+        if self.message.as_slice() == packed::SendBlockProof::default().as_slice() {
+            // The tip_hash is not on the chain, just ignore the message and wait for timeout retry.
+            return Status::ok();
+        }
+
+        let peer_state = self
+            .protocol
+            .peers()
+            .get_state(&self.peer)
+            .expect("checked: should have state");
+        let request = if let Some(request) = peer_state.get_block_proof_request() {
+            request
+        } else {
+            error!(
+                "peer {}: SendBlockProof response without a GetBlockProof request",
+                self.peer
+            );
+            return StatusCode::PeerIsNotOnProcess.into();
+        };
+
         let root = self.message.root().to_entity();
         let proof: MMRProof = self.message.proof().unpack();
         let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
@@ -40,6 +60,26 @@ impl<'a> SendBlockProofProcess<'a> {
             .iter()
             .map(|header| header.to_entity().into_view())
             .collect();
+
+        // check request match the response
+        if tip_header.header().hash() != request.tip_hash() {
+            error!("peer {}: tip hash not match the request", self.peer);
+            return StatusCode::InvalidSendBlockProof.into();
+        }
+        if headers
+            .iter()
+            .map(|header| header.hash())
+            .collect::<Vec<_>>()
+            != request.block_hashes().into_iter().collect::<Vec<_>>()
+        {
+            error!("peer {}: block hashes not match the request", self.peer);
+            return StatusCode::InvalidSendBlockProof.into();
+        }
+        self.protocol
+            .peers
+            .update_block_proof_request(self.peer, None);
+
+        // Check PoW
         let pow_engine = self.protocol.pow_engine();
         for header in headers.iter().chain(Some(tip_header.header())) {
             if !pow_engine.verify(&header.data()) {
@@ -51,6 +91,8 @@ impl<'a> SendBlockProofProcess<'a> {
                 return StatusCode::InvalidNonce.with_context(errmsg);
             }
         }
+
+        // Verify the proof
         let digests_with_positions = {
             let res = headers
                 .iter()

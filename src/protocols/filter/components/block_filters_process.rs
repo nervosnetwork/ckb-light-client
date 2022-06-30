@@ -94,7 +94,7 @@ impl<'a> BlockFiltersProcess<'a> {
                     .build();
 
                 let message = packed::LightClientMessage::new_builder()
-                    .set(content)
+                    .set(content.clone())
                     .build();
 
                 if let Err(err) = self.nc.send_message(
@@ -106,6 +106,10 @@ impl<'a> BlockFiltersProcess<'a> {
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
                     return StatusCode::Network.with_context(error_message);
+                } else {
+                    self.filter
+                        .peers
+                        .update_block_proof_request(self.peer, Some(content));
                 }
             }
 
