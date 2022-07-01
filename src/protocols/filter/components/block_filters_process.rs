@@ -109,7 +109,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 } else {
                     self.filter
                         .peers
-                        .update_block_proof_request(self.peer, Some(content));
+                        .push_block_proof_request(self.peer, content);
                 }
             }
 

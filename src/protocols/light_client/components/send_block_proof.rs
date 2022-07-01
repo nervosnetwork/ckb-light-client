@@ -36,20 +36,16 @@ impl<'a> SendBlockProofProcess<'a> {
             return Status::ok();
         }
 
-        let peer_state = self
-            .protocol
-            .peers()
-            .get_state(&self.peer)
-            .expect("checked: should have state");
-        let request = if let Some(request) = peer_state.get_block_proof_request() {
-            request
-        } else {
-            error!(
-                "peer {}: SendBlockProof response without a GetBlockProof request",
-                self.peer
-            );
-            return StatusCode::PeerIsNotOnProcess.into();
-        };
+        let request =
+            if let Some(request) = self.protocol.peers().pop_block_proof_request(self.peer) {
+                request
+            } else {
+                error!(
+                    "peer {}: SendBlockProof response without a GetBlockProof request",
+                    self.peer
+                );
+                return StatusCode::PeerIsNotOnProcess.into();
+            };
 
         let root = self.message.root().to_entity();
         let proof: MMRProof = self.message.proof().unpack();
@@ -66,18 +62,15 @@ impl<'a> SendBlockProofProcess<'a> {
             error!("peer {}: tip hash not match the request", self.peer);
             return StatusCode::InvalidSendBlockProof.into();
         }
-        if headers
+        let request_hashes = request.block_hashes().into_iter().collect::<Vec<_>>();
+        let response_hashes = headers
             .iter()
             .map(|header| header.hash())
-            .collect::<Vec<_>>()
-            != request.block_hashes().into_iter().collect::<Vec<_>>()
-        {
+            .collect::<Vec<_>>();
+        if request_hashes != response_hashes {
             error!("peer {}: block hashes not match the request", self.peer);
             return StatusCode::InvalidSendBlockProof.into();
         }
-        self.protocol
-            .peers
-            .update_block_proof_request(self.peer, None);
 
         // Check PoW
         let pow_engine = self.protocol.pow_engine();

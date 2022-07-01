@@ -4,6 +4,7 @@ use ckb_types::{
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
+use std::collections::VecDeque;
 
 #[derive(Default, Clone)]
 pub struct Peers {
@@ -29,7 +30,7 @@ pub(crate) struct PeerState {
     last_state: Option<LastState>,
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
-    block_proof_request: Option<packed::GetBlockProof>,
+    block_proof_request: VecDeque<packed::GetBlockProof>,
 }
 
 #[derive(Clone)]
@@ -145,12 +146,11 @@ impl PeerState {
         self.prove_state.as_ref()
     }
 
-    pub(crate) fn get_block_proof_request(&self) -> Option<&packed::GetBlockProof> {
-        self.block_proof_request.as_ref()
+    fn push_block_proof_request(&mut self, request: packed::GetBlockProof) {
+        self.block_proof_request.push_back(request);
     }
-
-    fn update_block_proof_request(&mut self, request: Option<packed::GetBlockProof>) {
-        self.block_proof_request = request;
+    fn pop_block_proof_request(&mut self) -> Option<packed::GetBlockProof> {
+        self.block_proof_request.pop_front()
     }
 
     fn update_last_state(&mut self, last_state: LastState) {
@@ -205,14 +205,22 @@ impl Peers {
         }
     }
 
-    pub(crate) fn update_block_proof_request(
+    pub(crate) fn push_block_proof_request(
         &self,
         index: PeerIndex,
-        request: Option<packed::GetBlockProof>,
+        request: packed::GetBlockProof,
     ) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_block_proof_request(request);
+            peer.state.push_block_proof_request(request);
         }
+    }
+    pub(crate) fn pop_block_proof_request(
+        &self,
+        index: PeerIndex,
+    ) -> Option<packed::GetBlockProof> {
+        self.inner
+            .get_mut(&index)
+            .and_then(|mut peer| peer.state.pop_block_proof_request())
     }
 
     pub(crate) fn submit_prove_request(&self, index: PeerIndex, request: ProveRequest) {
