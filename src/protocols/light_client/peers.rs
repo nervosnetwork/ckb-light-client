@@ -233,6 +233,7 @@ impl Peers {
             .get_mut(&index)
             .and_then(|mut peer| peer.state.remove_block_proof_request(request))
     }
+    // check all inflight requests, find peer with too many requests or have timeout request
     pub(crate) fn check_block_proof_requests(&self) -> Vec<PeerIndex> {
         let now = unix_time_as_millis();
         self.inner

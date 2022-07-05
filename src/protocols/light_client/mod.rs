@@ -232,13 +232,13 @@ impl LightClientProtocol {
     fn check_get_block_proof_requests(&self, nc: &dyn CKBProtocolContext) {
         for peer in self.peers().check_block_proof_requests() {
             warn!(
-                "peer {}: too many GetBlockProof inflight requests or respond timeout",
+                "peer {}: too many inflight GetBlockProof requests or respond timeout",
                 peer
             );
             nc.ban_peer(
                 peer,
                 BAD_MESSAGE_BAN_TIME,
-                String::from("too many GetBlockProof inflight requests or respond timeout"),
+                String::from("too many inflight GetBlockProof requests or respond timeout"),
             );
         }
     }
