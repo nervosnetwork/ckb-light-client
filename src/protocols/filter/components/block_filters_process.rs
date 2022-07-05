@@ -3,7 +3,7 @@ use crate::protocols::{Status, StatusCode};
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::core::BlockNumber;
 use ckb_types::{packed, prelude::*};
-use log::{error, info, warn};
+use log::{error, info, trace, warn};
 use std::sync::Arc;
 
 pub struct BlockFiltersProcess<'a> {
@@ -35,14 +35,16 @@ impl<'a> BlockFiltersProcess<'a> {
             return Status::ok();
         }
 
-        let prove_state_block_number = peer_state
+        let (prove_state_block_number, prove_state_block_hash) = if let Some(header) = peer_state
             .expect("checked Some")
             .get_prove_state()
-            .map(|prove_state| prove_state.get_last_header().header().number());
-        if prove_state_block_number.is_none() {
+            .map(|prove_state| prove_state.get_last_header().header())
+        {
+            (header.number(), header.hash())
+        } else {
             warn!("ignoring, peer {} prove state is none", self.peer);
             return Status::ok();
-        }
+        };
 
         let block_filters = self.message.to_entity();
         let start_number: BlockNumber = block_filters.start_number().unpack();
@@ -71,8 +73,6 @@ impl<'a> BlockFiltersProcess<'a> {
             }
 
             // send GetBlock message to peer
-            let prove_state_block_number: BlockNumber =
-                prove_state_block_number.expect("checked Some");
             if prove_state_block_number < start_number {
                 warn!(
                     "ignoring, peer {} prove_state_block_number {} is smaller than start_nuber {}",
@@ -83,20 +83,33 @@ impl<'a> BlockFiltersProcess<'a> {
             let limit = (prove_state_block_number - start_number + 1) as usize;
             let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
             {
-                let content = packed::GetBlocks::new_builder()
+                trace!(
+                    "send get block proof to peer: {}, matched blocks: {}",
+                    self.peer,
+                    possible_match_blocks.len()
+                );
+                let content = packed::GetBlockProof::new_builder()
                     .block_hashes(possible_match_blocks.pack())
+                    .tip_hash(prove_state_block_hash)
                     .build();
 
-                let message = packed::SyncMessage::new_builder().set(content).build();
+                let message = packed::LightClientMessage::new_builder()
+                    .set(content.clone())
+                    .build();
 
                 if let Err(err) = self.nc.send_message(
-                    SupportProtocols::Sync.protocol_id(),
+                    SupportProtocols::LightClient.protocol_id(),
                     self.peer,
                     message.as_bytes(),
                 ) {
-                    let error_message = format!("nc.send_message SyncMessage, error: {:?}", err);
+                    let error_message =
+                        format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
                     return StatusCode::Network.with_context(error_message);
+                } else {
+                    self.filter
+                        .peers
+                        .push_block_proof_request(self.peer, content);
                 }
             }
 
