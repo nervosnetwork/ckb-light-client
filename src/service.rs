@@ -131,6 +131,18 @@ pub struct SearchKey {
     script: Script,
     script_type: ScriptType,
     filter: Option<SearchKeyFilter>,
+    group_by_transaction: Option<bool>,
+}
+
+impl Default for SearchKey {
+    fn default() -> Self {
+        Self {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            filter: None,
+            group_by_transaction: None,
+        }
+    }
 }
 
 #[derive(Deserialize, Default)]
@@ -165,12 +177,36 @@ pub struct Cell {
 }
 
 #[derive(Serialize)]
-pub struct Tx {
+#[serde(untagged)]
+pub enum Tx {
+    Ungrouped(TxWithCell),
+    Grouped(TxWithCells),
+}
+
+impl Tx {
+    pub fn tx_hash(&self) -> H256 {
+        match self {
+            Tx::Ungrouped(tx) => tx.transaction.hash.clone(),
+            Tx::Grouped(tx) => tx.transaction.hash.clone(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+pub struct TxWithCell {
     transaction: TransactionView,
     block_number: BlockNumber,
     tx_index: Uint32,
     io_index: Uint32,
     io_type: CellType,
+}
+
+#[derive(Serialize)]
+pub struct TxWithCells {
+    transaction: TransactionView,
+    block_number: BlockNumber,
+    tx_index: Uint32,
+    cells: Vec<(CellType, Uint32)>,
 }
 
 #[derive(Serialize)]
@@ -491,13 +527,13 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                 }
 
                 last_key = key.to_vec();
-                Some(Tx {
+                Some(Tx::Ungrouped(TxWithCell {
                     transaction: tx.into_view().into(),
                     block_number: block_number.into(),
                     tx_index: tx_index.into(),
                     io_index: io_index.into(),
                     io_type,
-                })
+                }))
             })
             .take(limit.value() as usize)
             .collect::<Vec<_>>();
@@ -737,6 +773,7 @@ fn build_filter_options(
         script: _,
         script_type: _,
         filter,
+        group_by_transaction: _,
     } = search_key;
     let filter = filter.unwrap_or_default();
     let filter_script_prefix = if let Some(script) = filter.script {
@@ -1040,8 +1077,7 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 150.into(),
@@ -1052,8 +1088,7 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 150.into(),
@@ -1071,8 +1106,7 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script2.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 150.into(),
@@ -1090,8 +1124,7 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Desc,
                 150.into(),
@@ -1103,8 +1136,7 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Desc,
                 150.into(),
@@ -1126,13 +1158,11 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
                     filter: Some(SearchKeyFilter {
-                        script: None,
-                        output_data_len_range: None,
-                        output_capacity_range: None,
                         block_range: Some([100.into(), 200.into()]),
+                        ..Default::default()
                     }),
+                    ..Default::default()
                 },
                 Order::Asc,
                 60.into(),
@@ -1144,13 +1174,11 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
                     filter: Some(SearchKeyFilter {
-                        script: None,
-                        output_data_len_range: None,
-                        output_capacity_range: None,
                         block_range: Some([100.into(), 200.into()]),
+                        ..Default::default()
                     }),
+                    ..Default::default()
                 },
                 Order::Asc,
                 60.into(),
@@ -1169,8 +1197,7 @@ mod tests {
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 500.into(),
@@ -1181,8 +1208,7 @@ mod tests {
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 500.into(),
@@ -1196,8 +1222,7 @@ mod tests {
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Desc,
                 500.into(),
@@ -1208,8 +1233,7 @@ mod tests {
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Desc,
                 500.into(),
@@ -1219,21 +1243,19 @@ mod tests {
 
         assert_eq!(total_blocks as usize * 3 - 1, desc_txs_page_1.objects.len() + desc_txs_page_2.objects.len(), "total size should be cellbase tx count + total_block * 2 - 1 (genesis block only has one tx)");
         assert_eq!(
-            desc_txs_page_1.objects.first().unwrap().transaction.hash,
-            txs_page_2.objects.last().unwrap().transaction.hash,
+            desc_txs_page_1.objects.first().unwrap().tx_hash(),
+            txs_page_2.objects.last().unwrap().tx_hash(),
         );
 
         let filter_txs_page_1 = rpc
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
                     filter: Some(SearchKeyFilter {
-                        script: None,
-                        output_data_len_range: None,
-                        output_capacity_range: None,
                         block_range: Some([100.into(), 200.into()]),
+                        ..Default::default()
                     }),
+                    ..Default::default()
                 },
                 Order::Asc,
                 200.into(),
@@ -1245,13 +1267,11 @@ mod tests {
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
                     filter: Some(SearchKeyFilter {
-                        script: None,
-                        output_data_len_range: None,
-                        output_capacity_range: None,
                         block_range: Some([100.into(), 200.into()]),
+                        ..Default::default()
                     }),
+                    ..Default::default()
                 },
                 Order::Asc,
                 200.into(),
@@ -1269,8 +1289,7 @@ mod tests {
         let capacity = rpc
             .get_cells_capacity(SearchKey {
                 script: lock_script1.clone().into(),
-                script_type: ScriptType::Lock,
-                filter: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -1283,8 +1302,7 @@ mod tests {
         let capacity = rpc
             .get_cells_capacity(SearchKey {
                 script: lock_script2.clone().into(),
-                script_type: ScriptType::Lock,
-                filter: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -1325,8 +1343,7 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 150.into(),
@@ -1337,8 +1354,7 @@ mod tests {
             .get_cells(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 150.into(),
@@ -1357,8 +1373,7 @@ mod tests {
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 500.into(),
@@ -1369,8 +1384,7 @@ mod tests {
             .get_transactions(
                 SearchKey {
                     script: lock_script1.clone().into(),
-                    script_type: ScriptType::Lock,
-                    filter: None,
+                    ..Default::default()
                 },
                 Order::Asc,
                 500.into(),
@@ -1384,8 +1398,7 @@ mod tests {
         let capacity = rpc
             .get_cells_capacity(SearchKey {
                 script: lock_script1.clone().into(),
-                script_type: ScriptType::Lock,
-                filter: None,
+                ..Default::default()
             })
             .unwrap();
 
@@ -1491,8 +1504,7 @@ mod tests {
         let capacity = rpc
             .get_cells_capacity(SearchKey {
                 script: lock_script1.clone().into(),
-                script_type: ScriptType::Lock,
-                filter: None,
+                ..Default::default()
             })
             .unwrap();
 
