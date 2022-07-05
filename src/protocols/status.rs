@@ -46,6 +46,8 @@ pub enum StatusCode {
     FailedToVerifyTheProof = 429,
     /// Invalid SendBlockProof response (not match the GetBlockProof request)
     InvalidSendBlockProof = 430,
+    /// Too many inflight GetBlockProof requests
+    TooManyGetBlockProofs = 431,
 
     /// Throws an internal error.
     InternalError = 500,

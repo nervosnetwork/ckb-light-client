@@ -29,14 +29,14 @@ impl<'a> BlockFiltersProcess<'a> {
     }
 
     pub fn execute(self) -> Status {
-        let peer_state = self.filter.peers.get_state(&self.peer);
-        if peer_state.is_none() {
+        let peer_state_opt = self.filter.peers.get_state(&self.peer);
+        if peer_state_opt.is_none() {
             info!("ignoring, peer {} is disconnected", self.peer);
             return Status::ok();
         }
+        let peer_state = peer_state_opt.expect("checked Some");
 
         let (prove_state_block_number, prove_state_block_hash) = if let Some(header) = peer_state
-            .expect("checked Some")
             .get_prove_state()
             .map(|prove_state| prove_state.get_last_header().header())
         {
@@ -72,10 +72,10 @@ impl<'a> BlockFiltersProcess<'a> {
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
             }
 
-            // send GetBlock message to peer
+            // send GetBlockProof message to peer
             if prove_state_block_number < start_number {
                 warn!(
-                    "ignoring, peer {} prove_state_block_number {} is smaller than start_nuber {}",
+                    "ignoring, peer {} prove_state_block_number {} is smaller than start_number {}",
                     self.peer, prove_state_block_number, start_number
                 );
                 return Status::ok();
@@ -83,33 +83,50 @@ impl<'a> BlockFiltersProcess<'a> {
             let limit = (prove_state_block_number - start_number + 1) as usize;
             let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
             {
-                trace!(
-                    "send get block proof to peer: {}, matched blocks: {}",
-                    self.peer,
-                    possible_match_blocks.len()
-                );
+                if !peer_state.can_insert_block_proof_request() {
+                    warn!(
+                        "peer {} has too many inflight GetBlockProof requests",
+                        self.peer
+                    );
+                    return StatusCode::TooManyGetBlockProofs.into();
+                }
+
+                let blocks_len = possible_match_blocks.len();
                 let content = packed::GetBlockProof::new_builder()
                     .block_hashes(possible_match_blocks.pack())
                     .tip_hash(prove_state_block_hash)
                     .build();
 
-                let message = packed::LightClientMessage::new_builder()
-                    .set(content.clone())
-                    .build();
-
-                if let Err(err) = self.nc.send_message(
-                    SupportProtocols::LightClient.protocol_id(),
-                    self.peer,
-                    message.as_bytes(),
-                ) {
-                    let error_message =
-                        format!("nc.send_message LightClientMessage, error: {:?}", err);
-                    error!("{}", error_message);
-                    return StatusCode::Network.with_context(error_message);
+                if peer_state.contains_block_proof_request(&content) {
+                    trace!(
+                        "already have get block proof request to peer: {}, matched blocks: {}",
+                        self.peer,
+                        blocks_len,
+                    );
                 } else {
-                    self.filter
-                        .peers
-                        .push_block_proof_request(self.peer, content);
+                    trace!(
+                        "send get block proof to peer: {}, matched blocks: {}",
+                        self.peer,
+                        blocks_len,
+                    );
+                    let message = packed::LightClientMessage::new_builder()
+                        .set(content.clone())
+                        .build();
+
+                    if let Err(err) = self.nc.send_message(
+                        SupportProtocols::LightClient.protocol_id(),
+                        self.peer,
+                        message.as_bytes(),
+                    ) {
+                        let error_message =
+                            format!("nc.send_message LightClientMessage, error: {:?}", err);
+                        error!("{}", error_message);
+                        return StatusCode::Network.with_context(error_message);
+                    } else {
+                        self.filter
+                            .peers
+                            .insert_block_proof_request(self.peer, content);
+                    }
                 }
             }
 

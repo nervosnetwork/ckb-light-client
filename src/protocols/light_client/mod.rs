@@ -27,6 +27,7 @@ use super::{
     status::{Status, StatusCode},
     BAD_MESSAGE_BAN_TIME,
 };
+
 use crate::protocols::LAST_N_BLOCKS;
 use crate::storage::Storage;
 
@@ -43,6 +44,11 @@ impl CKBProtocolHandler for LightClientProtocol {
         nc.set_notify(
             constant::REFRESH_PEERS_DURATION,
             constant::REFRESH_PEERS_TOKEN,
+        )
+        .expect("set_notify should be ok");
+        nc.set_notify(
+            constant::CHECK_GET_BLOCK_PROOFS_DURATION,
+            constant::CHECK_GET_BLOCK_PROOFS_TOKEN,
         )
         .expect("set_notify should be ok");
     }
@@ -110,6 +116,9 @@ impl CKBProtocolHandler for LightClientProtocol {
         match token {
             constant::REFRESH_PEERS_TOKEN => {
                 self.refresh_all_peers(nc.as_ref());
+            }
+            constant::CHECK_GET_BLOCK_PROOFS_TOKEN => {
+                self.check_get_block_proof_requests(nc.as_ref());
             }
             _ => unreachable!(),
         }
@@ -218,6 +227,20 @@ impl LightClientProtocol {
 
     pub(crate) fn peers(&self) -> &Peers {
         &self.peers
+    }
+
+    fn check_get_block_proof_requests(&self, nc: &dyn CKBProtocolContext) {
+        for peer in self.peers().check_block_proof_requests() {
+            warn!(
+                "peer {}: too many GetBlockProof inflight requests or respond timeout",
+                peer
+            );
+            nc.ban_peer(
+                peer,
+                BAD_MESSAGE_BAN_TIME,
+                String::from("too many GetBlockProof inflight requests or respond timeout"),
+            );
+        }
     }
 
     fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
