@@ -36,17 +36,6 @@ impl<'a> SendBlockProofProcess<'a> {
             return Status::ok();
         }
 
-        let request =
-            if let Some(request) = self.protocol.peers().pop_block_proof_request(self.peer) {
-                request
-            } else {
-                error!(
-                    "peer {}: SendBlockProof response without a GetBlockProof request",
-                    self.peer
-                );
-                return StatusCode::PeerIsNotOnProcess.into();
-            };
-
         let root = self.message.root().to_entity();
         let proof: MMRProof = self.message.proof().unpack();
         let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
@@ -58,18 +47,25 @@ impl<'a> SendBlockProofProcess<'a> {
             .collect();
 
         // check request match the response
-        if tip_header.header().hash() != request.tip_hash() {
-            error!("peer {}: tip hash not match the request", self.peer);
-            return StatusCode::InvalidSendBlockProof.into();
-        }
-        let request_hashes = request.block_hashes().into_iter().collect::<Vec<_>>();
         let response_hashes = headers
             .iter()
             .map(|header| header.hash())
             .collect::<Vec<_>>();
-        if request_hashes != response_hashes {
-            error!("peer {}: block hashes not match the request", self.peer);
-            return StatusCode::InvalidSendBlockProof.into();
+        let expected_request = packed::GetBlockProof::new_builder()
+            .block_hashes(response_hashes.pack())
+            .tip_hash(tip_header.header().hash())
+            .build();
+        if self
+            .protocol
+            .peers()
+            .remove_block_proof_request(self.peer, &expected_request)
+            .is_none()
+        {
+            error!(
+                "peer {}: SendBlockProof response without a GetBlockProof request",
+                self.peer
+            );
+            return StatusCode::PeerIsNotOnProcess.into();
         }
 
         // Check PoW
