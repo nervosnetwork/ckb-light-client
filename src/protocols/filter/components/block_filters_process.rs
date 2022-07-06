@@ -88,44 +88,43 @@ impl<'a> BlockFiltersProcess<'a> {
                         "peer {} has too many inflight GetBlockProof requests",
                         self.peer
                     );
-                    return StatusCode::TooManyGetBlockProofs.into();
-                }
-
-                let blocks_len = possible_match_blocks.len();
-                let content = packed::GetBlockProof::new_builder()
-                    .block_hashes(possible_match_blocks.pack())
-                    .tip_hash(prove_state_block_hash)
-                    .build();
-
-                if peer_state.contains_block_proof_request(&content) {
-                    trace!(
-                        "already have get block proof request to peer: {}, matched blocks: {}",
-                        self.peer,
-                        blocks_len,
-                    );
                 } else {
-                    trace!(
-                        "send get block proof to peer: {}, matched blocks: {}",
-                        self.peer,
-                        blocks_len,
-                    );
-                    let message = packed::LightClientMessage::new_builder()
-                        .set(content.clone())
+                    let blocks_len = possible_match_blocks.len();
+                    let content = packed::GetBlockProof::new_builder()
+                        .block_hashes(possible_match_blocks.pack())
+                        .tip_hash(prove_state_block_hash)
                         .build();
 
-                    if let Err(err) = self.nc.send_message(
-                        SupportProtocols::LightClient.protocol_id(),
-                        self.peer,
-                        message.as_bytes(),
-                    ) {
-                        let error_message =
-                            format!("nc.send_message LightClientMessage, error: {:?}", err);
-                        error!("{}", error_message);
-                        return StatusCode::Network.with_context(error_message);
+                    if peer_state.contains_block_proof_request(&content) {
+                        trace!(
+                            "already have get block proof request to peer: {}, matched blocks: {}",
+                            self.peer,
+                            blocks_len,
+                        );
                     } else {
-                        self.filter
-                            .peers
-                            .insert_block_proof_request(self.peer, content);
+                        trace!(
+                            "send get block proof to peer: {}, matched blocks: {}",
+                            self.peer,
+                            blocks_len,
+                        );
+                        let message = packed::LightClientMessage::new_builder()
+                            .set(content.clone())
+                            .build();
+
+                        if let Err(err) = self.nc.send_message(
+                            SupportProtocols::LightClient.protocol_id(),
+                            self.peer,
+                            message.as_bytes(),
+                        ) {
+                            let error_message =
+                                format!("nc.send_message LightClientMessage, error: {:?}", err);
+                            error!("{}", error_message);
+                            return StatusCode::Network.with_context(error_message);
+                        } else {
+                            self.filter
+                                .peers
+                                .insert_block_proof_request(self.peer, content);
+                        }
                     }
                 }
             }

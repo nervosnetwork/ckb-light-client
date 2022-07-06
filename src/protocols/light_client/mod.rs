@@ -235,11 +235,12 @@ impl LightClientProtocol {
                 "peer {}: too many inflight GetBlockProof requests or respond timeout",
                 peer
             );
-            nc.ban_peer(
+            if let Err(err) = nc.disconnect(
                 peer,
-                BAD_MESSAGE_BAN_TIME,
-                String::from("too many inflight GetBlockProof requests or respond timeout"),
-            );
+                "too many inflight GetBlockProof requests or respond timeout",
+            ) {
+                error!("disconnect peer({}) error: {}", peer, err);
+            };
         }
     }
 
