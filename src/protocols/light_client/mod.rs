@@ -182,11 +182,13 @@ impl LightClientProtocol {
             if is_requested {
                 let now = unix_time_as_millis();
                 self.peers().update_timestamp(peer, now);
-            } else {
-                let content =
-                    self.build_prove_request_content(&peer_state, tip_header, tip_total_difficulty);
+            } else if let Some(content) =
+                self.build_prove_request_content(&peer_state, tip_header, tip_total_difficulty)
+            {
                 let prove_request = ProveRequest::new(last_state.clone(), content);
                 self.peers().submit_prove_request(peer, prove_request);
+            } else {
+                warn!("peer {}: build prove request failed", peer);
             }
         }
 
@@ -317,7 +319,7 @@ impl LightClientProtocol {
         peer_state: &PeerState,
         last_header: &VerifiableHeader,
         last_total_difficulty: &U256,
-    ) -> packed::GetBlockSamples {
+    ) -> Option<packed::GetBlockSamples> {
         let (start_hash, start_number, start_total_difficulty) = peer_state
             .get_prove_state()
             .map(|inner| {
@@ -329,12 +331,20 @@ impl LightClientProtocol {
             })
             .unwrap_or_else(|| {
                 let (total_difficulty, last_tip) = self.storage.get_last_state();
+                if &total_difficulty > last_total_difficulty {
+                    warn!("the last state total_difficulty in storage greater than the data in memory");
+                    warn!("storage.total_difficulty: {}, storage.last_tip: {:?}", total_difficulty, last_tip);
+                    warn!("memory.total_difficulty: {}, memory.last_tip: {:?}", last_total_difficulty, last_header.header().data());
+                }
                 (
                     last_tip.calc_header_hash(),
                     last_tip.raw().number().unpack(),
                     total_difficulty,
                 )
             });
+        if &start_total_difficulty > last_total_difficulty {
+            return None;
+        }
         let last_number = last_header.header().number();
         let (difficulty_boundary, difficulties) = sampling::sample_blocks(
             start_number,
@@ -342,12 +352,14 @@ impl LightClientProtocol {
             last_number,
             last_total_difficulty,
         );
-        packed::GetBlockSamples::new_builder()
-            .last_hash(last_header.header().hash())
-            .start_hash(start_hash)
-            .start_number(start_number.pack())
-            .difficulty_boundary(difficulty_boundary.pack())
-            .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
-            .build()
+        Some(
+            packed::GetBlockSamples::new_builder()
+                .last_hash(last_header.header().hash())
+                .start_hash(start_hash)
+                .start_number(start_number.pack())
+                .difficulty_boundary(difficulty_boundary.pack())
+                .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
+                .build(),
+        )
     }
 }

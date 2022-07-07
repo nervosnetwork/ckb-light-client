@@ -417,24 +417,27 @@ impl<'a> SendBlockSamplesProcess<'a> {
 
         // Failed to verify TAU, ask for new sampled headers.
         if failed_to_verify_tau {
-            let content = self.protocol.build_prove_request_content(
+            if let Some(content) = self.protocol.build_prove_request_content(
                 &peer_state,
                 last_header,
                 last_total_difficulty,
-            );
-            let mut prove_request = ProveRequest::new(
-                LastState::new(last_header.clone(), last_total_difficulty.clone()),
-                content.clone(),
-            );
-            prove_request.skip_check_tau();
-            self.protocol
-                .peers()
-                .submit_prove_request(self.peer, prove_request);
+            ) {
+                let mut prove_request = ProveRequest::new(
+                    LastState::new(last_header.clone(), last_total_difficulty.clone()),
+                    content.clone(),
+                );
+                prove_request.skip_check_tau();
+                self.protocol
+                    .peers()
+                    .submit_prove_request(self.peer, prove_request);
 
-            let message = packed::LightClientMessage::new_builder()
-                .set(content)
-                .build();
-            self.nc.reply(self.peer, &message);
+                let message = packed::LightClientMessage::new_builder()
+                    .set(content)
+                    .build();
+                self.nc.reply(self.peer, &message);
+            } else {
+                log::warn!("peer {}, build prove request failed", self.peer);
+            }
         } else {
             let prove_state = ProveState::new_from_request(
                 prove_request.to_owned(),
