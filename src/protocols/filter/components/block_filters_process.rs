@@ -82,31 +82,27 @@ impl<'a> BlockFiltersProcess<'a> {
             }
             let limit = (prove_state_block_number - start_number + 1) as usize;
             let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
-            {
+            trace!(
+                "peer {}, matched blocks: {}",
+                self.peer,
+                possible_match_blocks.len()
+            );
+            if !possible_match_blocks.is_empty() {
                 if !peer_state.can_insert_block_proof_request() {
                     warn!(
                         "peer {} has too many inflight GetBlockProof requests",
                         self.peer
                     );
                 } else {
-                    let blocks_len = possible_match_blocks.len();
                     let content = packed::GetBlockProof::new_builder()
                         .block_hashes(possible_match_blocks.pack())
                         .tip_hash(prove_state_block_hash)
                         .build();
 
                     if peer_state.contains_block_proof_request(&content) {
-                        trace!(
-                            "already have get block proof request to peer: {}, matched blocks: {}",
-                            self.peer,
-                            blocks_len,
-                        );
+                        trace!("already sent block proof request to peer: {}", self.peer,);
                     } else {
-                        trace!(
-                            "send get block proof to peer: {}, matched blocks: {}",
-                            self.peer,
-                            blocks_len,
-                        );
+                        trace!("send block proof request to peer: {}", self.peer,);
                         let message = packed::LightClientMessage::new_builder()
                             .set(content.clone())
                             .build();
