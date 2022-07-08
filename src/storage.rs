@@ -430,6 +430,14 @@ impl Storage {
                             batch.delete(key).expect("batch delete should be ok");
                         };
                     });
+
+                // update script filter block number
+                {
+                    let mut key = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+                    key.extend_from_slice(script.as_slice());
+                    let value = block_number.to_be_bytes().to_vec();
+                    batch.put(key, value).expect("batch put should be ok");
+                }
             }
         }
 

@@ -1559,6 +1559,14 @@ mod tests {
         storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), total_blocks)]));
         storage.rollback_filtered_transactions((total_blocks - 1).into());
         storage.rollback_filtered_transactions((total_blocks - 2).into());
+
+        let scripts = storage.get_filter_scripts();
+        assert_eq!(
+            total_blocks - 2,
+            *scripts.values().max().unwrap(),
+            "rollback should update script filter block number"
+        );
+
         let rpc = BlockFilterRpcImpl {
             storage: storage.clone(),
         };
