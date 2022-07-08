@@ -29,13 +29,11 @@ impl PendingGetBlockFiltersPeer {
         block_filters: packed::BlockFilters,
         limit: usize,
     ) -> Vec<packed::Byte32> {
+        let start_number: BlockNumber = block_filters.start_number().unpack();
         let reader = GCSFilterReader::new(0, 0, GCS_M, GCS_P);
         let script_hashes = self
             .storage
-            .get_filter_scripts()
-            .keys()
-            .map(|script| script.calc_script_hash())
-            .collect::<Vec<_>>();
+            .get_scripts_hash(start_number + limit as BlockNumber);
         block_filters
             .filters()
             .into_iter()
