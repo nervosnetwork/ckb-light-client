@@ -179,6 +179,29 @@ impl Storage {
         }
     }
 
+    // get scripts hash that should be filtered below the given block number
+    pub fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+
+        self.db
+            .iterator(mode)
+            .take_while(|(key, _value)| key.starts_with(&key_prefix))
+            .filter_map(|(key, value)| {
+                let stored_block_number = BlockNumber::from_be_bytes(
+                    value.as_ref().try_into().expect("stored BlockNumber"),
+                );
+                if stored_block_number < block_number {
+                    let script =
+                        Script::from_slice(&key[key_prefix.len()..]).expect("stored Script");
+                    Some(script.calc_script_hash())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
     pub fn update_last_state(&self, total_difficulty: &U256, tip_header: &Header) {
         let key = Key::Meta(LAST_STATE_KEY).into_vec();
         let mut value = total_difficulty.to_le_bytes().to_vec();
