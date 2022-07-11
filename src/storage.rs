@@ -191,7 +191,7 @@ impl Storage {
                 let stored_block_number = BlockNumber::from_be_bytes(
                     value.as_ref().try_into().expect("stored BlockNumber"),
                 );
-                if block_number >= stored_block_number {
+                if stored_block_number < block_number {
                     let script =
                         Script::from_slice(&key[key_prefix.len()..]).expect("stored Script");
                     Some(script.calc_script_hash())
