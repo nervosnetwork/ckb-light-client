@@ -411,14 +411,7 @@ impl Storage {
                                     &script,
                                     generated_by_block_number,
                                     generated_by_tx_index,
-                                    previous_tx
-                                        .raw()
-                                        .inputs()
-                                        .get(cell_index as usize)
-                                        .expect("input index should be checked")
-                                        .previous_output()
-                                        .index()
-                                        .unpack(),
+                                    input.previous_output().index().unpack(),
                                 );
                                 batch
                                     .put_kv(key, previous_tx.calc_tx_hash().as_slice())

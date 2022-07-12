@@ -1743,4 +1743,172 @@ mod tests {
 
         assert_eq!((222 + 3000) * 100000000, capacity.value());
     }
+
+    #[test]
+    fn get_cells_after_rollback_bug() {
+        let storage = new_storage("get_cells_after_rollback_bug");
+        let rpc = BlockFilterRpcImpl {
+            storage: storage.clone(),
+        };
+
+        // setup test data
+        let lock_script1 = ScriptBuilder::default()
+            .code_hash(H256(rand::random()).pack())
+            .hash_type(ScriptHashType::Data.into())
+            .args(Bytes::from(b"lock_script1".to_vec()).pack())
+            .build();
+
+        let lock_script2 = ScriptBuilder::default()
+            .code_hash(H256(rand::random()).pack())
+            .hash_type(ScriptHashType::Data.into())
+            .args(Bytes::from(b"lock_script2".to_vec()).pack())
+            .build();
+
+        let tx00 = TransactionBuilder::default()
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(222).pack())
+                    .lock(lock_script1.clone())
+                    .build(),
+            )
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(333).pack())
+                    .lock(lock_script1.clone())
+                    .build(),
+            )
+            .output_data(Default::default())
+            .output_data(Default::default())
+            .build();
+
+        let block0 = BlockBuilder::default()
+            .transaction(tx00.clone())
+            .header(HeaderBuilder::default().number(0.pack()).build())
+            .build();
+        storage.init_genesis_block(block0.data());
+        storage.update_filter_scripts(HashMap::from([
+            (lock_script1.clone(), 0),
+            (lock_script2.clone(), 0),
+        ]));
+
+        let tx10 = TransactionBuilder::default()
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(100).pack())
+                    .lock(lock_script2.clone())
+                    .build(),
+            )
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(1000).pack())
+                    .lock(lock_script1.clone())
+                    .build(),
+            )
+            .output_data(Default::default())
+            .output_data(Default::default())
+            .build();
+
+        let block1 = BlockBuilder::default()
+            .transaction(tx10.clone())
+            .header(HeaderBuilder::default().number(1.pack()).build())
+            .build();
+        storage.filter_block(block1.data());
+        storage.update_block_number(2);
+
+        let tx20 = TransactionBuilder::default()
+            .input(CellInput::new(OutPoint::new(tx00.hash(), 1), 0))
+            .input(CellInput::new(OutPoint::new(tx10.hash(), 1), 0))
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(5000).pack())
+                    .lock(lock_script2.clone())
+                    .build(),
+            )
+            .output(
+                CellOutputBuilder::default()
+                    .capacity(capacity_bytes!(3000).pack())
+                    .lock(lock_script1.clone())
+                    .build(),
+            )
+            .output_data(Default::default())
+            .output_data(Default::default())
+            .build();
+
+        let block2 = BlockBuilder::default()
+            .transaction(tx20.clone())
+            .header(HeaderBuilder::default().number(2.pack()).build())
+            .build();
+        storage.filter_block(block2.data());
+        storage.update_block_number(3);
+
+        storage.rollback_filtered_transactions(2);
+
+        let capacity = rpc
+            .get_cells_capacity(SearchKey {
+                script: lock_script2.clone().into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(100 * 100000000, capacity.value());
+
+        let cells = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script2.clone().into(),
+                    ..Default::default()
+                },
+                Order::Asc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(1, cells.objects.len());
+
+        let txs = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script2.clone().into(),
+                    ..Default::default()
+                },
+                Order::Asc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(1, txs.objects.len());
+
+        let capacity = rpc
+            .get_cells_capacity(SearchKey {
+                script: lock_script1.clone().into(),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!((1000 + 222 + 333) * 100000000, capacity.value());
+
+        let cells = rpc
+            .get_cells(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    ..Default::default()
+                },
+                Order::Asc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(3, cells.objects.len());
+
+        let txs = rpc
+            .get_transactions(
+                SearchKey {
+                    script: lock_script1.clone().into(),
+                    ..Default::default()
+                },
+                Order::Asc,
+                150.into(),
+                None,
+            )
+            .unwrap();
+        assert_eq!(3, txs.objects.len());
+    }
 }
