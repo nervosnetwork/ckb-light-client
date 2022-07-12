@@ -404,7 +404,7 @@ impl Storage {
                             if let Some((
                                 generated_by_block_number,
                                 generated_by_tx_index,
-                                previous_tx,
+                                _previous_tx,
                             )) = self.get_transaction(&input.previous_output().tx_hash())
                             {
                                 let key = Key::CellLockScript(
@@ -414,7 +414,7 @@ impl Storage {
                                     input.previous_output().index().unpack(),
                                 );
                                 batch
-                                    .put_kv(key, previous_tx.calc_tx_hash().as_slice())
+                                    .put_kv(key, input.previous_output().tx_hash().as_slice())
                                     .expect("batch put should be ok");
                             };
                             // delete tx history
