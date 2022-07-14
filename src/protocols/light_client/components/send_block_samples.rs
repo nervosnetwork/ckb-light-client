@@ -404,7 +404,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
             if let Some(prove_state) = peer_state.get_prove_state() {
                 let prev_last_header = prove_state.get_last_header();
                 let prev_total_difficulty = prove_state.get_total_difficulty();
-                if let Err(msg) = verify_total_difficuly(
+                if let Err(msg) = verify_total_difficulty(
                     prev_last_header,
                     prev_total_difficulty,
                     last_header,
@@ -454,7 +454,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
     }
 }
 
-pub fn verify_total_difficuly(
+pub fn verify_total_difficulty(
     start_verifiable_header: &VerifiableHeader,
     start_total_difficulty: &U256,
     end_verifiable_header: &VerifiableHeader,
@@ -536,17 +536,33 @@ pub fn verify_total_difficuly(
             // `n / 2 >= 1` was checked since the above branch.
             let n = epochs_switch_count;
             let diff = &start_epoch_difficulty;
+            let start_number = start_header.number();
+            let end_number = end_header.number();
             let (aligned_difficulty_min, aligned_difficulty_max) = match difficulty_changes_state {
                 Ordering::Equal => {
                     let min = {
                         let n_decreased = (n + 1) / 2;
                         let n_increased = n - n_decreased - 1;
-                        calculate_min_total_difficulty(diff, tau, n_decreased, n_increased)
+                        calculate_min_total_difficulty(
+                            start_number,
+                            end_number,
+                            diff,
+                            tau,
+                            n_decreased,
+                            n_increased,
+                        )
                     };
                     let max = {
                         let n_increased = (n + 1) / 2;
                         let n_decreased = n - n_increased - 1;
-                        calculate_max_total_difficulty(diff, tau, n_increased, n_decreased)
+                        calculate_max_total_difficulty(
+                            start_number,
+                            end_number,
+                            diff,
+                            tau,
+                            n_increased,
+                            n_decreased,
+                        )
                     };
                     (min, max)
                 }
@@ -554,12 +570,26 @@ pub fn verify_total_difficuly(
                     let min = {
                         let n_decreased = (n - k + 1) / 2;
                         let n_increased = n - n_decreased - 1;
-                        calculate_min_total_difficulty(diff, tau, n_decreased, n_increased)
+                        calculate_min_total_difficulty(
+                            start_number,
+                            end_number,
+                            diff,
+                            tau,
+                            n_decreased,
+                            n_increased,
+                        )
                     };
                     let max = {
                         let n_increased = (n - (k + 1) + 1) / 2 + (k + 1);
                         let n_decreased = n - n_increased - 1;
-                        calculate_max_total_difficulty(diff, tau, n_increased, n_decreased)
+                        calculate_max_total_difficulty(
+                            start_number,
+                            end_number,
+                            diff,
+                            tau,
+                            n_increased,
+                            n_decreased,
+                        )
                     };
                     (min, max)
                 }
@@ -567,12 +597,26 @@ pub fn verify_total_difficuly(
                     let min = {
                         let n_decreased = (n - (k + 1) + 1) / 2 + (k + 1);
                         let n_increased = n - n_decreased - 1;
-                        calculate_min_total_difficulty(diff, tau, n_decreased, n_increased)
+                        calculate_min_total_difficulty(
+                            start_number,
+                            end_number,
+                            diff,
+                            tau,
+                            n_decreased,
+                            n_increased,
+                        )
                     };
                     let max = {
                         let n_increased = (n - k + 1) / 2;
                         let n_decreased = n - n_increased - 1;
-                        calculate_max_total_difficulty(diff, tau, n_increased, n_decreased)
+                        calculate_max_total_difficulty(
+                            start_number,
+                            end_number,
+                            diff,
+                            tau,
+                            n_increased,
+                            n_decreased,
+                        )
                     };
                     (min, max)
                 }
@@ -642,10 +686,34 @@ fn calculate_tau_exponent_when_decreased(
     None
 }
 
+// Checked add u256, if overflow output an error log. NOTE: this function is only
+// for debug purpose, when panic happened we can read the context from the log
+fn checked_add(
+    start_number: u64,
+    end_number: u64,
+    start_epoch_difficulty: &U256,
+    epochs_count_decreased: u64,
+    epochs_count_increased: u64,
+    lhs: &U256,
+    rhs: &U256,
+) -> U256 {
+    if let Some(out) = lhs.checked_add(rhs) {
+        out
+    } else {
+        error!(
+            "start_number: {}, end_number: {}, start_epoch_difficulty: {}, epochs_count_increased: {}, epochs_count_decreased: {}",
+            start_number, end_number, start_epoch_difficulty, epochs_count_decreased, epochs_count_increased,
+        );
+        panic!("U256 add overflow");
+    }
+}
+
 // Calculate min total difficulty.
 // - For the first part of the epochs, the epoch difficulty should be decreased.
 // - For the last part of the epochs, the epoch difficulty should be increased.
 fn calculate_min_total_difficulty(
+    start_number: u64,
+    end_number: u64,
     start_epoch_difficulty: &U256,
     tau: u64,
     epochs_count_decreased: u64,
@@ -655,11 +723,27 @@ fn calculate_min_total_difficulty(
     let mut total = U256::zero();
     let tau_u256 = U256::from(tau);
     for _ in 0..epochs_count_decreased {
-        total += &curr;
+        total = checked_add(
+            start_number,
+            end_number,
+            start_epoch_difficulty,
+            epochs_count_decreased,
+            epochs_count_increased,
+            &total,
+            &curr,
+        );
         curr /= tau;
     }
     for _ in 0..epochs_count_increased {
-        total += &curr;
+        total = checked_add(
+            start_number,
+            end_number,
+            start_epoch_difficulty,
+            epochs_count_decreased,
+            epochs_count_increased,
+            &total,
+            &curr,
+        );
         curr = curr.saturating_mul(&tau_u256);
     }
     total
@@ -669,6 +753,8 @@ fn calculate_min_total_difficulty(
 // - For the first part of the epochs, the epoch difficulty should be increased.
 // - For the last part of the epochs, the epoch difficulty should be decreased.
 fn calculate_max_total_difficulty(
+    start_number: u64,
+    end_number: u64,
     start_epoch_difficulty: &U256,
     tau: u64,
     epochs_count_increased: u64,
@@ -681,11 +767,27 @@ fn calculate_max_total_difficulty(
     let mut total = U256::zero();
     let tau_u256 = U256::from(tau);
     for _ in 0..epochs_count_increased {
-        total += &curr;
+        total = checked_add(
+            start_number,
+            end_number,
+            start_epoch_difficulty,
+            epochs_count_decreased,
+            epochs_count_increased,
+            &total,
+            &curr,
+        );
         curr = curr.saturating_mul(&tau_u256);
     }
     for _ in 0..epochs_count_decreased {
-        total += &curr;
+        total = checked_add(
+            start_number,
+            end_number,
+            start_epoch_difficulty,
+            epochs_count_decreased,
+            epochs_count_increased,
+            &total,
+            &curr,
+        );
         curr /= tau;
     }
     total
