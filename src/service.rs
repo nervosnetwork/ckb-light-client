@@ -1813,7 +1813,7 @@ mod tests {
             .header(HeaderBuilder::default().number(1.pack()).build())
             .build();
         storage.filter_block(block1.data());
-        storage.update_block_number(2);
+        storage.update_block_number(1);
 
         let tx20 = TransactionBuilder::default()
             .input(CellInput::new(OutPoint::new(tx00.hash(), 1), 0))
@@ -1839,7 +1839,7 @@ mod tests {
             .header(HeaderBuilder::default().number(2.pack()).build())
             .build();
         storage.filter_block(block2.data());
-        storage.update_block_number(3);
+        storage.update_block_number(2);
 
         storage.rollback_filtered_transactions(2);
 

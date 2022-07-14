@@ -69,7 +69,7 @@ impl PendingGetBlockFiltersPeer {
                     > GET_BLOCK_FILTERS_TIMEOUT)
     }
 
-    pub fn min_block_number(&self) -> BlockNumber {
+    pub fn min_filtered_block_number(&self) -> BlockNumber {
         self.storage
             .get_filter_scripts()
             .values()
@@ -180,7 +180,7 @@ impl CKBProtocolHandler for FilterProtocol {
                     .iter()
                     .max_by_key(|(_, prove_state)| prove_state.get_total_difficulty())
                 {
-                    let start_number = self.pending_peer.min_block_number();
+                    let start_number = self.pending_peer.min_filtered_block_number() + 1;
                     let prove_state_number = prove_state.get_last_header().header().number();
                     debug!(
                         "found proved peer {}, start_number: {}, prove_state number: {:?}",
