@@ -156,20 +156,15 @@ impl Storage {
     }
 
     pub fn update_filter_scripts(&self, scripts: HashMap<Script, BlockNumber>) {
+        let should_filter_genesis_block =
+            scripts.iter().any(|(_, block_number)| *block_number == 0);
         let mut batch = self.batch();
-        // update min block number to 1 when it's setup as 0, because sync protocol will ban us when requesting genesis block data
-        let mut should_filter_genesis_block = false;
         for (script, block_number) in scripts {
             let mut key = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
             key.extend_from_slice(script.as_slice());
-            let value = if block_number == 0 {
-                should_filter_genesis_block = true;
-                1u64.to_be_bytes().to_vec()
-            } else {
-                block_number.to_be_bytes().to_vec()
-            };
-
-            batch.put(key, value).expect("batch put should be ok");
+            batch
+                .put(key, block_number.to_be_bytes())
+                .expect("batch put should be ok");
         }
         batch.commit().expect("batch commit should be ok");
 

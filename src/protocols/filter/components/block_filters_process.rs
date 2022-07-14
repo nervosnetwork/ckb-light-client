@@ -50,11 +50,12 @@ impl<'a> BlockFiltersProcess<'a> {
         let start_number: BlockNumber = block_filters.start_number().unpack();
         let pending_peer = &self.filter.pending_peer;
 
-        if pending_peer.min_block_number() != start_number {
+        let min_filtered_block_number = pending_peer.min_filtered_block_number();
+        if min_filtered_block_number + 1 != start_number {
             info!(
-                "ignoring, start_number is not match, pending_peer: {}, block_filters: {}",
-                pending_peer.min_block_number(),
-                start_number
+                "ignoring, the start_number of block_filters message {} is not continuous with min_filtered_block_number: {}",
+                start_number,
+                min_filtered_block_number
             );
         } else {
             let filters_count = block_filters.filters().len();
@@ -80,7 +81,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 );
                 return Status::ok();
             }
-            let limit = (prove_state_block_number - start_number + 1) as usize;
+            let limit = (prove_state_block_number - start_number) as usize;
             let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
             trace!(
                 "peer {}, matched blocks: {}",
@@ -125,12 +126,12 @@ impl<'a> BlockFiltersProcess<'a> {
                 }
             }
 
-            let next_batch_start_number = start_number + blocks_count.min(limit) as BlockNumber;
+            let filtered_block_number = start_number + blocks_count.min(limit) as BlockNumber;
+            pending_peer.update_block_number(filtered_block_number);
             // send next batch GetBlockFilters message to peer
-            pending_peer.update_block_number(next_batch_start_number);
             {
                 let content = packed::GetBlockFilters::new_builder()
-                    .start_number((next_batch_start_number).pack())
+                    .start_number((filtered_block_number + 1).pack())
                     .build();
 
                 let message = packed::BlockFilterMessage::new_builder()
