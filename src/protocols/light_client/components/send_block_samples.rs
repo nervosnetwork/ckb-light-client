@@ -704,7 +704,10 @@ fn checked_add(
             "start_number: {}, end_number: {}, start_epoch_difficulty: {}, epochs_count_increased: {}, epochs_count_decreased: {}",
             start_number, end_number, start_epoch_difficulty, epochs_count_decreased, epochs_count_increased,
         );
-        panic!("U256 add overflow");
+        panic!(
+            "U256 add overflow: decreased={}, increased={}",
+            epochs_count_decreased, epochs_count_increased
+        );
     }
 }
 
@@ -791,4 +794,25 @@ fn calculate_max_total_difficulty(
         curr /= tau;
     }
     total
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_min_total_difficulty() {
+        // testnet.block#0x666
+        let start_total_difficulty = U256::from_hex_str("506e23ea1").unwrap();
+        for (epochs_count_decreased, epochs_count_increased) in [(200, 50), (50, 200)] {
+            calculate_min_total_difficulty(
+                0,
+                0,
+                &start_total_difficulty,
+                TAU,
+                epochs_count_decreased,
+                epochs_count_increased,
+            );
+        }
+    }
 }
