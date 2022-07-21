@@ -532,7 +532,7 @@ pub fn verify_total_difficulty(
                 return Err(errmsg);
             }
         } else {
-            // `k <= n` was checked in Step-1.
+            // `k < n` was checked in Step-1.
             // `n / 2 >= 1` was checked since the above branch.
             let n = epochs_switch_count;
             let diff = &start_epoch_difficulty;
@@ -580,8 +580,13 @@ pub fn verify_total_difficulty(
                         )
                     };
                     let max = {
-                        let n_increased = (n - (k + 1) + 1) / 2 + (k + 1);
-                        let n_decreased = n - n_increased - 1;
+                        let mut n_increased = (n - k + 1) / 2 + k;
+                        let mut n_decreased = n - n_increased;
+                        if n_decreased == 0 {
+                            n_increased -= 1;
+                        } else {
+                            n_decreased -= 1;
+                        }
                         calculate_max_total_difficulty(
                             start_number,
                             end_number,
@@ -595,8 +600,13 @@ pub fn verify_total_difficulty(
                 }
                 Ordering::Greater => {
                     let min = {
-                        let n_decreased = (n - (k + 1) + 1) / 2 + (k + 1);
-                        let n_increased = n - n_decreased - 1;
+                        let mut n_decreased = (n - k + 1) / 2 + k;
+                        let mut n_increased = n - n_decreased;
+                        if n_increased == 0 {
+                            n_decreased -= 1;
+                        } else {
+                            n_increased -= 1;
+                        }
                         calculate_min_total_difficulty(
                             start_number,
                             end_number,
@@ -643,7 +653,7 @@ pub fn verify_total_difficulty(
     Ok(())
 }
 
-// Calculate the `k` which satisfied that `lhs * (tau ^ k) <= rhs <= lhs * (tau ^ (k+1))` and ` 0 <= k <= limit`.
+// Calculate the `k` which satisfied that `lhs * (tau ^ k) <= rhs <= lhs * (tau ^ (k+1))` and ` 0 <= k < limit`.
 //
 // Ref: Page 18, 6.1 Variable Difficulty MMR in [FlyClient: Super-Light Clients for Cryptocurrencies].
 //
@@ -665,7 +675,7 @@ fn calculate_tau_exponent_when_increased(
     None
 }
 
-// Calculate the `k` which satisfied that `lhs * (tau ^ (-k)) >= rhs >= lhs * (tau ^ (-k-1))` and ` 0 <= k <= limit`.
+// Calculate the `k` which satisfied that `lhs * (tau ^ (-k)) >= rhs >= lhs * (tau ^ (-k-1))` and ` 0 <= k < limit`.
 //
 // Ref: Page 18, 6.1 Variable Difficulty MMR in [FlyClient: Super-Light Clients for Cryptocurrencies].
 //
