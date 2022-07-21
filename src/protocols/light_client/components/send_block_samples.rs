@@ -773,7 +773,7 @@ fn calculate_max_total_difficulty(
     epochs_count_increased: u64,
     epochs_count_decreased: u64,
 ) -> U256 {
-    let mut curr = start_epoch_difficulty / tau;
+    let mut curr = start_epoch_difficulty * tau;
     if curr == U256::zero() {
         curr = U256::one();
     }
