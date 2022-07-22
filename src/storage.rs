@@ -5,7 +5,7 @@ use ckb_types::{
     bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber, HeaderView,
+        BlockNumber, HeaderView, TransactionInfo,
     },
     packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
@@ -495,7 +495,24 @@ impl Storage {
 impl CellProvider for Storage {
     // assume all cells are live and load data eagerly
     fn cell(&self, out_point: &OutPoint, _eager_load: bool) -> CellStatus {
-        if let Some((_block_number, _tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
+        if let Some((block_number, tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
+            let block_hash = Byte32::from_slice(
+                &self
+                    .get(Key::BlockNumber(block_number).into_vec())
+                    .expect("db get should be ok")
+                    .expect("stored block number / hash mapping"),
+            )
+            .expect("stored block hash should be OK");
+
+            let header = Header::from_slice(
+                &self
+                    .get(Key::BlockHash(&block_hash).into_vec())
+                    .expect("db get should be ok")
+                    .expect("stored block hash / header mapping"),
+            )
+            .expect("stored header should be OK")
+            .into_view();
+
             let output_index = out_point.index().unpack();
             let tx = tx.into_view();
             if let Some(cell_output) = tx.outputs().get(output_index) {
@@ -508,7 +525,12 @@ impl CellProvider for Storage {
                 let cell_meta = CellMeta {
                     out_point: out_point.clone(),
                     cell_output,
-                    transaction_info: None,
+                    transaction_info: Some(TransactionInfo {
+                        block_hash,
+                        block_epoch: header.epoch(),
+                        block_number,
+                        index: tx_index as usize,
+                    }),
                     data_bytes: output_data.len() as u64,
                     mem_cell_data: Some(output_data),
                     mem_cell_data_hash: Some(output_data_data_hash),
