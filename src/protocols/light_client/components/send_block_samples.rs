@@ -454,6 +454,227 @@ impl<'a> SendBlockSamplesProcess<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) enum EpochDifficultyTrend {
+    Unchanged,
+    Increased { start: U256, end: U256 },
+    Decreased { start: U256, end: U256 },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum EstimatedLimit {
+    Min,
+    Max,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum EpochCountGroupByTrend {
+    Increased(u64),
+    Decreased(u64),
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EpochDifficultyTrendDetails {
+    pub(crate) start: EpochCountGroupByTrend,
+    pub(crate) end: EpochCountGroupByTrend,
+}
+
+impl EpochDifficultyTrend {
+    pub(crate) fn new(start_epoch_difficulty: &U256, end_epoch_difficulty: &U256) -> Self {
+        match start_epoch_difficulty.cmp(end_epoch_difficulty) {
+            Ordering::Equal => Self::Unchanged,
+            Ordering::Less => Self::Increased {
+                start: start_epoch_difficulty.clone(),
+                end: end_epoch_difficulty.clone(),
+            },
+            Ordering::Greater => Self::Decreased {
+                start: start_epoch_difficulty.clone(),
+                end: end_epoch_difficulty.clone(),
+            },
+        }
+    }
+
+    // Calculate the `k` which satisfied that
+    // - `0 <= k < limit`;
+    // - If the epoch difficulty was
+    //   - unchanged: `k = 0`.
+    //   - increased: `lhs * (tau ^ k) < rhs <= lhs * (tau ^ (k+1))`.
+    //   - decreased: `lhs * (tau ^ (-k)) > rhs >= lhs * (tau ^ (-k-1))`.
+    //
+    // Ref: Page 18, 6.1 Variable Difficulty MMR in [FlyClient: Super-Light Clients for Cryptocurrencies].
+    //
+    // [FlyClient: Super-Light Clients for Cryptocurrencies]: https://eprint.iacr.org/2019/226.pdf
+    pub(crate) fn calculate_tau_exponent(&self, tau: u64, limit: u64) -> Option<u64> {
+        match self {
+            Self::Unchanged => Some(0),
+            Self::Increased { ref start, ref end } => {
+                let mut tmp = start.clone();
+                let tau_u256 = U256::from(tau);
+                for k in 0..limit {
+                    tmp = tmp.saturating_mul(&tau_u256);
+                    if tmp >= *end {
+                        return Some(k);
+                    }
+                }
+                None
+            }
+
+            Self::Decreased { ref start, ref end } => {
+                let mut tmp = start.clone();
+                for k in 0..limit {
+                    tmp /= tau;
+                    if tmp <= *end {
+                        return Some(k);
+                    }
+                }
+                None
+            }
+        }
+    }
+
+    // Split the epochs into two parts base on the trend of their difficulty changed,
+    // then calculate the length of each parts.
+    //
+    // ### Note
+    //
+    // - To estimate:
+    //   - the minimum limit, decreasing the epoch difficulty at first, then increasing.
+    //   - the maximum limit, increasing the epoch difficulty at first, then decreasing.
+    //
+    // - Both parts of epochs exclude the start block and the end block.
+    pub(crate) fn split_epochs(
+        &self,
+        limit: EstimatedLimit,
+        n: u64,
+        k: u64,
+    ) -> EpochDifficultyTrendDetails {
+        let (increased, decreased) = match (limit, self) {
+            (EstimatedLimit::Min, Self::Unchanged) => {
+                let decreased = (n + 1) / 2;
+                let increased = n - decreased;
+                (increased, decreased)
+            }
+            (EstimatedLimit::Max, Self::Unchanged) => {
+                let increased = (n + 1) / 2;
+                let decreased = n - increased;
+                (increased, decreased)
+            }
+            (EstimatedLimit::Min, Self::Increased { .. }) => {
+                let decreased = (n - k + 1) / 2;
+                let increased = n - decreased;
+                (increased, decreased)
+            }
+            (EstimatedLimit::Max, Self::Increased { .. }) => {
+                let increased = (n - k + 1) / 2 + k;
+                let decreased = n - increased;
+                (increased, decreased)
+            }
+            (EstimatedLimit::Min, Self::Decreased { .. }) => {
+                let decreased = (n - k + 1) / 2 + k;
+                let increased = n - decreased;
+                (increased, decreased)
+            }
+            (EstimatedLimit::Max, Self::Decreased { .. }) => {
+                let increased = (n - k + 1) / 2;
+                let decreased = n - increased;
+                (increased, decreased)
+            }
+        };
+        match limit {
+            EstimatedLimit::Min => EpochDifficultyTrendDetails {
+                start: EpochCountGroupByTrend::Decreased(decreased),
+                end: EpochCountGroupByTrend::Increased(increased),
+            },
+            EstimatedLimit::Max => EpochDifficultyTrendDetails {
+                start: EpochCountGroupByTrend::Increased(increased),
+                end: EpochCountGroupByTrend::Decreased(decreased),
+            },
+        }
+    }
+
+    // Calculate the limit of total difficulty.
+    pub(crate) fn calculate_total_difficulty_limit(
+        &self,
+        start_epoch_difficulty: &U256,
+        tau: u64,
+        details: &EpochDifficultyTrendDetails,
+    ) -> U256 {
+        let mut curr = start_epoch_difficulty.clone();
+        let mut total = U256::zero();
+        let tau_u256 = U256::from(tau);
+        for group in &[details.start, details.end] {
+            match group {
+                EpochCountGroupByTrend::Decreased(epochs_count) => {
+                    let state = "decreased";
+                    for index in 0..*epochs_count {
+                        curr /= tau;
+                        total = total.checked_add(&curr).unwrap_or_else(|| {
+                            panic!(
+                                "overflow when calculate the limit of total difficulty, \
+                                total: {}, current: {}, index: {}/{}, tau: {}, \
+                                state: {}, trend: {:?}, details: {:?}",
+                                total, curr, index, epochs_count, tau, state, self, details
+                            );
+                        })
+                    }
+                }
+                EpochCountGroupByTrend::Increased(epochs_count) => {
+                    let state = "increased";
+                    for index in 0..*epochs_count {
+                        curr = curr.saturating_mul(&tau_u256);
+                        total = total.checked_add(&curr).unwrap_or_else(|| {
+                            panic!(
+                                "overflow when calculate the limit of total difficulty, \
+                                total: {}, current: {}, index: {}/{}, tau: {}, \
+                                state: {}, trend: {:?}, details: {:?}",
+                                total, curr, index, epochs_count, tau, state, self, details
+                            );
+                        })
+                    }
+                }
+            }
+        }
+        total
+    }
+}
+
+impl EpochCountGroupByTrend {
+    pub(crate) fn subtract1(self) -> Self {
+        match self {
+            Self::Increased(count) => Self::Increased(count - 1),
+            Self::Decreased(count) => Self::Decreased(count - 1),
+        }
+    }
+
+    pub(crate) fn epochs_count(self) -> u64 {
+        match self {
+            Self::Increased(count) | Self::Decreased(count) => count,
+        }
+    }
+}
+
+impl EpochDifficultyTrendDetails {
+    pub(crate) fn remove_last_epoch(self) -> Self {
+        let Self { start, end } = self;
+        if end.epochs_count() == 0 {
+            Self {
+                start: start.subtract1(),
+                end,
+            }
+        } else {
+            Self {
+                start,
+                end: end.subtract1(),
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn total_epochs_count(&self) -> u64 {
+        self.start.epochs_count() + self.end.epochs_count()
+    }
+}
+
 pub fn verify_total_difficulty(
     start_verifiable_header: &VerifiableHeader,
     start_total_difficulty: &U256,
@@ -474,40 +695,21 @@ pub fn verify_total_difficulty(
         let end_epoch_difficulty = end_block_difficulty.clone() * end_epoch.length();
         // How many times are epochs switched?
         let epochs_switch_count = end_epoch.number() - start_epoch.number();
-        let difficulty_changes_state = start_epoch_difficulty.cmp(&end_epoch_difficulty);
+        let epoch_difficulty_trend =
+            EpochDifficultyTrend::new(&start_epoch_difficulty, &end_epoch_difficulty);
 
         let tau = TAU;
 
         // Step-1 Check the magnitude of the difficulty changes.
-        let k = match difficulty_changes_state {
-            Ordering::Equal => 0,
-            Ordering::Less => calculate_tau_exponent_when_increased(
-                tau,
-                &start_epoch_difficulty,
-                &end_epoch_difficulty,
-                epochs_switch_count,
-            )
+        let k = epoch_difficulty_trend
+            .calculate_tau_exponent(tau, epochs_switch_count)
             .ok_or_else(|| {
                 format!(
-                    "failed since the epoch difficulty increased \
+                    "failed since the epoch difficulty changed \
                     too fast ({}->{}) during epochs ([{},{}])",
                     start_epoch_difficulty, end_epoch_difficulty, start_epoch, end_epoch
                 )
-            })?,
-            Ordering::Greater => calculate_tau_exponent_when_decreased(
-                tau,
-                &start_epoch_difficulty,
-                &end_epoch_difficulty,
-                epochs_switch_count,
-            )
-            .ok_or_else(|| {
-                format!(
-                    "failed since the epoch difficulty decreased \
-                    too fast ({}->{}) during epochs ([{},{}])",
-                    start_epoch_difficulty, end_epoch_difficulty, start_epoch, end_epoch
-                )
-            })?,
-        };
+            })?;
 
         // Step-2 Check the range of total difficulty.
         let start_epoch_blocks_count = start_epoch.length() - start_epoch.index() - 1;
@@ -532,94 +734,21 @@ pub fn verify_total_difficulty(
                 return Err(errmsg);
             }
         } else {
-            // `k <= n` was checked in Step-1.
+            // `k < n` was checked in Step-1.
             // `n / 2 >= 1` was checked since the above branch.
             let n = epochs_switch_count;
             let diff = &start_epoch_difficulty;
-            let start_number = start_header.number();
-            let end_number = end_header.number();
-            let (aligned_difficulty_min, aligned_difficulty_max) = match difficulty_changes_state {
-                Ordering::Equal => {
-                    let min = {
-                        let n_decreased = (n + 1) / 2;
-                        let n_increased = n - n_decreased - 1;
-                        calculate_min_total_difficulty(
-                            start_number,
-                            end_number,
-                            diff,
-                            tau,
-                            n_decreased,
-                            n_increased,
-                        )
-                    };
-                    let max = {
-                        let n_increased = (n + 1) / 2;
-                        let n_decreased = n - n_increased - 1;
-                        calculate_max_total_difficulty(
-                            start_number,
-                            end_number,
-                            diff,
-                            tau,
-                            n_increased,
-                            n_decreased,
-                        )
-                    };
-                    (min, max)
-                }
-                Ordering::Less => {
-                    let min = {
-                        let n_decreased = (n - k + 1) / 2;
-                        let n_increased = n - n_decreased - 1;
-                        calculate_min_total_difficulty(
-                            start_number,
-                            end_number,
-                            diff,
-                            tau,
-                            n_decreased,
-                            n_increased,
-                        )
-                    };
-                    let max = {
-                        let n_increased = (n - (k + 1) + 1) / 2 + (k + 1);
-                        let n_decreased = n - n_increased - 1;
-                        calculate_max_total_difficulty(
-                            start_number,
-                            end_number,
-                            diff,
-                            tau,
-                            n_increased,
-                            n_decreased,
-                        )
-                    };
-                    (min, max)
-                }
-                Ordering::Greater => {
-                    let min = {
-                        let n_decreased = (n - (k + 1) + 1) / 2 + (k + 1);
-                        let n_increased = n - n_decreased - 1;
-                        calculate_min_total_difficulty(
-                            start_number,
-                            end_number,
-                            diff,
-                            tau,
-                            n_decreased,
-                            n_increased,
-                        )
-                    };
-                    let max = {
-                        let n_increased = (n - k + 1) / 2;
-                        let n_decreased = n - n_increased - 1;
-                        calculate_max_total_difficulty(
-                            start_number,
-                            end_number,
-                            diff,
-                            tau,
-                            n_increased,
-                            n_decreased,
-                        )
-                    };
-                    (min, max)
-                }
+            let aligned_difficulty_min = {
+                let details = epoch_difficulty_trend
+                    .split_epochs(EstimatedLimit::Min, n, k)
+                    .remove_last_epoch();
+                epoch_difficulty_trend.calculate_total_difficulty_limit(diff, tau, &details)
+            };
+            let aligned_difficulty_max = {
+                let details = epoch_difficulty_trend
+                    .split_epochs(EstimatedLimit::Max, n, k)
+                    .remove_last_epoch();
+                epoch_difficulty_trend.calculate_total_difficulty_limit(diff, tau, &details)
             };
             let total_difficulity_min = &unaligned_difficulty_calculated + &aligned_difficulty_min;
             let total_difficulity_max = &unaligned_difficulty_calculated + &aligned_difficulty_max;
@@ -643,176 +772,214 @@ pub fn verify_total_difficulty(
     Ok(())
 }
 
-// Calculate the `k` which satisfied that `lhs * (tau ^ k) <= rhs <= lhs * (tau ^ (k+1))` and ` 0 <= k <= limit`.
-//
-// Ref: Page 18, 6.1 Variable Difficulty MMR in [FlyClient: Super-Light Clients for Cryptocurrencies].
-//
-// [FlyClient: Super-Light Clients for Cryptocurrencies]: https://eprint.iacr.org/2019/226.pdf
-fn calculate_tau_exponent_when_increased(
-    tau: u64,
-    lhs: &U256,
-    rhs: &U256,
-    limit: u64,
-) -> Option<u64> {
-    let mut tmp = lhs.clone();
-    let tau_u256 = U256::from(tau);
-    for k in 0..limit {
-        tmp = tmp.saturating_mul(&tau_u256);
-        if tmp >= *rhs {
-            return Some(k);
-        }
-    }
-    None
-}
-
-// Calculate the `k` which satisfied that `lhs * (tau ^ (-k)) >= rhs >= lhs * (tau ^ (-k-1))` and ` 0 <= k <= limit`.
-//
-// Ref: Page 18, 6.1 Variable Difficulty MMR in [FlyClient: Super-Light Clients for Cryptocurrencies].
-//
-// [FlyClient: Super-Light Clients for Cryptocurrencies]: https://eprint.iacr.org/2019/226.pdf
-fn calculate_tau_exponent_when_decreased(
-    tau: u64,
-    lhs: &U256,
-    rhs: &U256,
-    limit: u64,
-) -> Option<u64> {
-    let mut tmp = lhs.clone();
-    for k in 0..limit {
-        tmp /= tau;
-        if tmp <= *rhs {
-            return Some(k);
-        }
-    }
-    None
-}
-
-// Checked add u256, if overflow output an error log. NOTE: this function is only
-// for debug purpose, when panic happened we can read the context from the log
-fn checked_add(
-    start_number: u64,
-    end_number: u64,
-    start_epoch_difficulty: &U256,
-    epochs_count_decreased: u64,
-    epochs_count_increased: u64,
-    lhs: &U256,
-    rhs: &U256,
-) -> U256 {
-    if let Some(out) = lhs.checked_add(rhs) {
-        out
-    } else {
-        error!(
-            "start_number: {}, end_number: {}, start_epoch_difficulty: {}, epochs_count_increased: {}, epochs_count_decreased: {}",
-            start_number, end_number, start_epoch_difficulty, epochs_count_decreased, epochs_count_increased,
-        );
-        panic!(
-            "U256 add overflow: decreased={}, increased={}",
-            epochs_count_decreased, epochs_count_increased
-        );
-    }
-}
-
-// Calculate min total difficulty.
-// - For the first part of the epochs, the epoch difficulty should be decreased.
-// - For the last part of the epochs, the epoch difficulty should be increased.
-fn calculate_min_total_difficulty(
-    start_number: u64,
-    end_number: u64,
-    start_epoch_difficulty: &U256,
-    tau: u64,
-    epochs_count_decreased: u64,
-    epochs_count_increased: u64,
-) -> U256 {
-    let mut curr = start_epoch_difficulty / tau;
-    let mut total = U256::zero();
-    let tau_u256 = U256::from(tau);
-    for _ in 0..epochs_count_decreased {
-        total = checked_add(
-            start_number,
-            end_number,
-            start_epoch_difficulty,
-            epochs_count_decreased,
-            epochs_count_increased,
-            &total,
-            &curr,
-        );
-        curr /= tau;
-    }
-    for _ in 0..epochs_count_increased {
-        total = checked_add(
-            start_number,
-            end_number,
-            start_epoch_difficulty,
-            epochs_count_decreased,
-            epochs_count_increased,
-            &total,
-            &curr,
-        );
-        curr = curr.saturating_mul(&tau_u256);
-    }
-    total
-}
-
-// Calculate max total difficulty.
-// - For the first part of the epochs, the epoch difficulty should be increased.
-// - For the last part of the epochs, the epoch difficulty should be decreased.
-fn calculate_max_total_difficulty(
-    start_number: u64,
-    end_number: u64,
-    start_epoch_difficulty: &U256,
-    tau: u64,
-    epochs_count_increased: u64,
-    epochs_count_decreased: u64,
-) -> U256 {
-    let mut curr = start_epoch_difficulty / tau;
-    if curr == U256::zero() {
-        curr = U256::one();
-    }
-    let mut total = U256::zero();
-    let tau_u256 = U256::from(tau);
-    for _ in 0..epochs_count_increased {
-        total = checked_add(
-            start_number,
-            end_number,
-            start_epoch_difficulty,
-            epochs_count_decreased,
-            epochs_count_increased,
-            &total,
-            &curr,
-        );
-        curr = curr.saturating_mul(&tau_u256);
-    }
-    for _ in 0..epochs_count_decreased {
-        total = checked_add(
-            start_number,
-            end_number,
-            start_epoch_difficulty,
-            epochs_count_decreased,
-            epochs_count_increased,
-            &total,
-            &curr,
-        );
-        curr /= tau;
-    }
-    total
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use ckb_types::{u256, U256};
+
+    use super::{EpochDifficultyTrend, EstimatedLimit};
 
     #[test]
-    fn test_calculate_min_total_difficulty() {
-        // testnet.block#0x666
-        let start_total_difficulty = U256::from_hex_str("506e23ea1").unwrap();
-        for (epochs_count_decreased, epochs_count_increased) in [(200, 50), (50, 200)] {
-            calculate_min_total_difficulty(
-                0,
-                0,
-                &start_total_difficulty,
-                TAU,
-                epochs_count_decreased,
-                epochs_count_increased,
+    fn test_calculate_tau_exponent() {
+        let tau = 2;
+        let limit_min = 2;
+        let tau_u256 = U256::from(tau);
+        let testcases = [
+            // Unchanged & Increased / Decreased a few
+            (u256!("0x100"), u256!("0x7f"), 1),
+            (u256!("0x100"), u256!("0x80"), 0),
+            (u256!("0x100"), u256!("0xff"), 0),
+            (u256!("0x100"), u256!("0x100"), 0),
+            (u256!("0x100"), u256!("0x101"), 0),
+            (u256!("0x100"), u256!("0x200"), 0),
+            (u256!("0x100"), u256!("0x201"), 1),
+            // Increased a lot
+            (u256!("0xff"), u256!("0x1000"), 4),
+            (u256!("0x100"), u256!("0xfff"), 3),
+            (u256!("0x100"), u256!("0x1000"), 3),
+            (u256!("0x100"), u256!("0x1001"), 4),
+            (u256!("0x101"), u256!("0x1000"), 3),
+            // Decreased a lot
+            (u256!("0x1000"), u256!("0xff"), 4),
+            (u256!("0xfff"), u256!("0x100"), 3),
+            (u256!("0x1000"), u256!("0x100"), 3),
+            (u256!("0x1001"), u256!("0x100"), 3),
+            (u256!("0x1000"), u256!("0x101"), 3),
+        ];
+        for (diff_start, diff_end, k) in testcases {
+            let trend = EpochDifficultyTrend::new(&diff_start, &diff_end);
+            for limit in limit_min..=(limit_min + k + 5) {
+                let actual = trend.calculate_tau_exponent(tau, limit);
+                let expected = if k == 0 || limit > k { Some(k) } else { None };
+                assert_eq!(
+                    actual, expected,
+                    "{:#x} -> {:#x} (limit: {}, tau: {}) expect {:?} but got {:?}",
+                    diff_start, diff_end, limit, tau, expected, actual
+                );
+            }
+            let diff_end_scope = {
+                let mut tmp = diff_start.clone();
+                match trend {
+                    EpochDifficultyTrend::Unchanged => (diff_end == tmp, tmp.clone(), tmp),
+                    EpochDifficultyTrend::Increased { .. } => {
+                        for _ in 0..k {
+                            tmp = tmp.saturating_mul(&tau_u256);
+                        }
+                        let diff_end_lt = tmp.clone();
+                        let diff_end_ge = tmp.saturating_mul(&tau_u256);
+                        let in_scope = diff_end_lt < diff_end && diff_end <= diff_end_ge;
+                        (in_scope, diff_end_lt, diff_end_ge)
+                    }
+                    EpochDifficultyTrend::Decreased { .. } => {
+                        for _ in 0..k {
+                            tmp /= tau;
+                        }
+                        let diff_end_gt = tmp.clone();
+                        let diff_end_le = tmp / tau;
+                        let in_scope = diff_end_gt > diff_end && diff_end >= diff_end_le;
+                        (in_scope, diff_end_gt, diff_end_le)
+                    }
+                }
+            };
+            assert!(
+                diff_end_scope.0,
+                "{:#x} -> {:#x} got a incorrect scope ({:#x}, {:#x}]",
+                diff_start, diff_end, diff_end_scope.1, diff_end_scope.2,
             );
+        }
+    }
+
+    #[test]
+    fn test_split_epochs() {
+        let tau = 2;
+        let testcases = [
+            // Unchanged
+            (u256!("0x100"), u256!("0x100")),
+            // Increased
+            (u256!("0x100"), u256!("0x1000")),
+            // Decreased
+            (u256!("0x1000"), u256!("0x100")),
+        ];
+        for (diff_start, diff_end) in testcases {
+            let trend = EpochDifficultyTrend::new(&diff_start, &diff_end);
+            let k = trend.calculate_tau_exponent(tau, u64::MAX).unwrap();
+            let n_min = if k < 2 { 2 } else { k + 1 };
+            for n in n_min..=(n_min + 10) {
+                for limit in [EstimatedLimit::Min, EstimatedLimit::Max] {
+                    let details = trend.split_epochs(limit, n, k);
+                    let total_epochs_count = details.total_epochs_count();
+                    assert_eq!(
+                        total_epochs_count, n,
+                        "{:#x} -> {:#x} (n: {}, k: {}, {:?}) \
+                        total epochs count should be `n` but got {}",
+                        diff_start, diff_end, n, k, limit, total_epochs_count,
+                    );
+                    let start_epochs_count = details.start.epochs_count();
+                    let end_epochs_count = details.end.epochs_count();
+                    let check_counts = {
+                        let remainder = (n - k) % 2;
+                        match trend {
+                            EpochDifficultyTrend::Unchanged => {
+                                start_epochs_count == end_epochs_count + remainder
+                            }
+                            EpochDifficultyTrend::Increased { .. } => match limit {
+                                EstimatedLimit::Min => {
+                                    start_epochs_count + k == end_epochs_count + remainder
+                                }
+                                EstimatedLimit::Max => {
+                                    start_epochs_count == end_epochs_count + k + remainder
+                                }
+                            },
+                            EpochDifficultyTrend::Decreased { .. } => match limit {
+                                EstimatedLimit::Min => {
+                                    start_epochs_count == end_epochs_count + k + remainder
+                                }
+                                EstimatedLimit::Max => {
+                                    start_epochs_count + k == end_epochs_count + remainder
+                                }
+                            },
+                        }
+                    };
+                    assert!(
+                        check_counts,
+                        "{:#x} -> {:#x} (n: {}, k: {}, {:?}) \
+                        epochs count (start: {}, end: {}) is incorrect",
+                        diff_start, diff_end, n, k, limit, start_epochs_count, end_epochs_count,
+                    );
+                    let total_epochs_count_without_last_epoch =
+                        details.clone().remove_last_epoch().total_epochs_count();
+                    assert_eq!(
+                        total_epochs_count_without_last_epoch,
+                        n - 1,
+                        "{:#x} -> {:#x} (n: {}, k: {}, {:?}) \
+                        total epochs count without last epoch should be `n-1` but got {}",
+                        diff_start,
+                        diff_end,
+                        n,
+                        k,
+                        limit,
+                        total_epochs_count_without_last_epoch,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_calculate_total_difficulty_limit() {
+        let tau = 2;
+        let testcases = [
+            // Unchanged
+            (u256!("0x100"), u256!("0x100")),
+            // Increased
+            (u256!("0x100"), u256!("0x1000")),
+            // Decreased
+            (u256!("0x1000"), u256!("0x100")),
+        ];
+        for (diff_start, diff_end) in testcases {
+            let trend = EpochDifficultyTrend::new(&diff_start, &diff_end);
+            let k = trend.calculate_tau_exponent(tau, u64::MAX).unwrap();
+            let n_min = if k < 2 { 2 } else { k + 1 };
+            for n in n_min..=(n_min + 10) {
+                for limit in [EstimatedLimit::Min, EstimatedLimit::Max] {
+                    let details = trend.split_epochs(limit, n, k).remove_last_epoch();
+                    let actual = trend.calculate_total_difficulty_limit(&diff_start, tau, &details);
+                    let expected = {
+                        let start_epochs_count = details.start.epochs_count();
+                        let end_epochs_count = details.end.epochs_count();
+                        let mut curr = diff_start.clone();
+                        let mut total = U256::zero();
+                        match limit {
+                            EstimatedLimit::Min => {
+                                for _ in 0..start_epochs_count {
+                                    curr /= tau;
+                                    total += &curr;
+                                }
+                                for _ in 0..end_epochs_count {
+                                    curr *= tau;
+                                    total += &curr;
+                                }
+                            }
+                            EstimatedLimit::Max => {
+                                for _ in 0..start_epochs_count {
+                                    curr *= tau;
+                                    total += &curr;
+                                }
+                                for _ in 0..end_epochs_count {
+                                    curr /= tau;
+                                    total += &curr;
+                                }
+                            }
+                        }
+                        total
+                    };
+                    assert_eq!(
+                        actual, expected,
+                        "{:#x} -> {:#x} (tau: {}, n: {}, k: {}, {:?}) \
+                        total difficulty expected {:#x} but got {:#x}",
+                        diff_start, diff_end, tau, n, k, limit, expected, actual,
+                    );
+                }
+            }
         }
     }
 }
