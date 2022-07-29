@@ -62,7 +62,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
         let chain_root = self.message.root().to_entity();
         let proof: MMRProof = self.message.proof().unpack();
 
-        let mmr_activated_number = self.protocol.mmr_activated_number();
+        let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
         // Check if the response is match the request.
         {
             let prev_request = prove_request.get_request();
@@ -84,9 +84,9 @@ impl<'a> SendBlockSamplesProcess<'a> {
                     .expect("checked: first last-N header should be existed");
                 let verifiable_header = VerifiableHeader::new_from_header_with_chain_root(
                     first_last_n_header.clone(),
-                    mmr_activated_number,
+                    mmr_activated_epoch,
                 );
-                if !verifiable_header.is_valid(mmr_activated_number, None) {
+                if !verifiable_header.is_valid(mmr_activated_epoch, None) {
                     let header = verifiable_header.header();
                     error!(
                         "failed: chain root is not valid for first last-N block#{} (hash: {:#x})",
@@ -133,11 +133,11 @@ impl<'a> SendBlockSamplesProcess<'a> {
                 let header_with_chain_root = item.to_entity();
                 let verifiable_header = VerifiableHeader::new_from_header_with_chain_root(
                     header_with_chain_root.clone(),
-                    mmr_activated_number,
+                    mmr_activated_epoch,
                 );
                 let header = verifiable_header.header();
                 // Chain root for any sampled blocks should be valid.
-                if !verifiable_header.is_valid(mmr_activated_number, None) {
+                if !verifiable_header.is_valid(mmr_activated_epoch, None) {
                     error!(
                         "failed: chain root is not valid for sampled block#{} (hash: {:#x})",
                         header.number(),
@@ -381,7 +381,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
         }
         let expected_root_hash = chain_root.calc_mmr_hash();
         let check_extra_hash_result =
-            last_header.is_valid(mmr_activated_number, Some(&expected_root_hash));
+            last_header.is_valid(mmr_activated_epoch, Some(&expected_root_hash));
         if check_extra_hash_result {
             trace!(
                 "passed: verify extra hash for block-{} ({:#x})",

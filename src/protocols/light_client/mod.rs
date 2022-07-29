@@ -228,8 +228,8 @@ impl LightClientProtocol {
         }
     }
 
-    pub(crate) fn mmr_activated_number(&self) -> EpochNumber {
-        self.consensus.hardfork_switch().rfc_tmp1()
+    pub(crate) fn mmr_activated_epoch(&self) -> EpochNumber {
+        self.consensus.hardfork_switch().mmr_activated_epoch()
     }
     pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
         self.consensus.pow_engine()

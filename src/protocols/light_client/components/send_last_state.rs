@@ -29,7 +29,7 @@ impl<'a> SendLastStateProcess<'a> {
         let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
         let tip_total_difficulty: U256 = self.message.total_difficulty().unpack();
 
-        if !tip_header.is_valid(self.protocol.mmr_activated_number(), None) {
+        if !tip_header.is_valid(self.protocol.mmr_activated_epoch(), None) {
             return StatusCode::InvalidLastState.into();
         }
 
