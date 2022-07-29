@@ -1,4 +1,4 @@
-use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::core::{Cycle, TransactionView};
 use ckb_types::{packed, prelude::*};
 use log::{info, trace, warn};
@@ -49,10 +49,11 @@ impl RelayProtocol {
     }
 }
 
+#[async_trait]
 impl CKBProtocolHandler for RelayProtocol {
-    fn init(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>) {}
+    async fn init(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>) {}
 
-    fn connected(
+    async fn connected(
         &mut self,
         _nc: Arc<dyn CKBProtocolContext + Sync>,
         peer: PeerIndex,
@@ -61,11 +62,16 @@ impl CKBProtocolHandler for RelayProtocol {
         info!("RelayProtocol({}).connected peer={}", version, peer);
     }
 
-    fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
+    async fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
         info!("RelayProtocol.disconnected peer={}", peer);
     }
 
-    fn received(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex, data: Bytes) {
+    async fn received(
+        &mut self,
+        nc: Arc<dyn CKBProtocolContext + Sync>,
+        peer: PeerIndex,
+        data: Bytes,
+    ) {
         trace!("RelayProtocol.received peer={}", peer);
 
         let message = match packed::RelayMessageReader::from_compatible_slice(&data) {

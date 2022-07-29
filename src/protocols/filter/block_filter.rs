@@ -1,7 +1,7 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
-use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
 use golomb_coded_set::GCSFilterReader;
 use log::{debug, error, info, trace, warn};
@@ -118,13 +118,15 @@ impl FilterProtocol {
     }
 }
 
+#[async_trait]
 impl CKBProtocolHandler for FilterProtocol {
-    fn init(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>) {
+    async fn init(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>) {
         nc.set_notify(Duration::from_secs(3), GET_BLOCK_FILTERS_TOKEN)
+            .await
             .expect("set_notify should be ok");
     }
 
-    fn connected(
+    async fn connected(
         &mut self,
         _nc: Arc<dyn CKBProtocolContext + Sync>,
         peer: PeerIndex,
@@ -133,11 +135,16 @@ impl CKBProtocolHandler for FilterProtocol {
         debug!("FilterProtocol({}).connected peer={}", version, peer);
     }
 
-    fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
+    async fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
         debug!("FilterProtocol.disconnected peer={}", peer);
     }
 
-    fn received(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex, data: Bytes) {
+    async fn received(
+        &mut self,
+        nc: Arc<dyn CKBProtocolContext + Sync>,
+        peer: PeerIndex,
+        data: Bytes,
+    ) {
         trace!("FilterProtocol.received peer={}", peer);
 
         let msg = match packed::BlockFilterMessageReader::from_slice(&data) {
@@ -171,7 +178,7 @@ impl CKBProtocolHandler for FilterProtocol {
         }
     }
 
-    fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
+    async fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
         match token {
             GET_BLOCK_FILTERS_TOKEN => {
                 if let Some((peer, prove_state)) = self

@@ -122,10 +122,10 @@ impl<'a> SendBlockProofProcess<'a> {
             );
             return StatusCode::FailedToVerifyTheProof.into();
         }
-        let mmr_activated_number = self.protocol.mmr_activated_number();
+        let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
         let expected_root_hash = root.calc_mmr_hash();
         let check_extra_hash_result =
-            tip_header.is_valid(mmr_activated_number, Some(&expected_root_hash));
+            tip_header.is_valid(mmr_activated_epoch, Some(&expected_root_hash));
         if check_extra_hash_result {
             trace!(
                 "passed: verify extra hash for block-{} ({:#x})",

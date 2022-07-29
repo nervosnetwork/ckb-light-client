@@ -1,4 +1,4 @@
-use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{packed, prelude::*};
 use log::{info, trace, warn};
 use std::sync::Arc;
@@ -16,10 +16,11 @@ impl SyncProtocol {
     }
 }
 
+#[async_trait]
 impl CKBProtocolHandler for SyncProtocol {
-    fn init(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>) {}
+    async fn init(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>) {}
 
-    fn connected(
+    async fn connected(
         &mut self,
         _nc: Arc<dyn CKBProtocolContext + Sync>,
         peer: PeerIndex,
@@ -28,11 +29,16 @@ impl CKBProtocolHandler for SyncProtocol {
         info!("SyncProtocol({}).connected peer={}", version, peer);
     }
 
-    fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
+    async fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
         info!("SyncProtocol.disconnected peer={}", peer);
     }
 
-    fn received(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex, data: Bytes) {
+    async fn received(
+        &mut self,
+        nc: Arc<dyn CKBProtocolContext + Sync>,
+        peer: PeerIndex,
+        data: Bytes,
+    ) {
         trace!("SyncProtocol.received peer={}", peer);
 
         let message = match packed::SyncMessageReader::from_compatible_slice(&data) {
