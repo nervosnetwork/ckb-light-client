@@ -3,8 +3,8 @@ use std::sync::{Arc, RwLock};
 use ckb_async_runtime::new_global_runtime;
 use ckb_chain_spec::ChainSpec;
 use ckb_network::{
-    BlockingFlag, CKBProtocol, CKBProtocolHandler, DefaultExitHandler, ExitHandler, NetworkService,
-    NetworkState, SupportProtocols,
+    CKBProtocol, CKBProtocolHandler, DefaultExitHandler, ExitHandler, NetworkService, NetworkState,
+    SupportProtocols,
 };
 use ckb_resource::Resource;
 
@@ -50,11 +50,6 @@ impl RunConfig {
             SupportProtocols::LightClient.protocol_id(),
             SupportProtocols::Filter.protocol_id(),
         ];
-
-        let mut blocking_recv_flag = BlockingFlag::default();
-        blocking_recv_flag.disable_connected();
-        blocking_recv_flag.disable_disconnected();
-        blocking_recv_flag.disable_notify();
 
         let peers = Arc::new(Peers::default());
         let sync_protocol = SyncProtocol::new(storage.clone());
@@ -107,7 +102,7 @@ impl RunConfig {
         })?;
 
         let service = Service::new("127.0.0.1:9000");
-        let rpc_server = service.start(network_controller, storage, consensus, peers, pending_txs);
+        let rpc_server = service.start(network_controller, storage, peers, pending_txs);
 
         let exit_handler_clone = exit_handler.clone();
         ctrlc::set_handler(move || {

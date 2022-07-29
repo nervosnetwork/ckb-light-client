@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ckb_chain_spec::consensus::Consensus;
-use ckb_network::{bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_pow::PowEngine;
 use ckb_types::{
-    core::BlockNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256,
+    core::EpochNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256,
 };
 use faketime::unix_time_as_millis;
 use log::{debug, error, info, trace, warn};
@@ -38,22 +38,25 @@ pub struct LightClientProtocol {
     best: Option<(PeerIndex, ProveState)>,
 }
 
+#[async_trait]
 impl CKBProtocolHandler for LightClientProtocol {
-    fn init(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>) {
+    async fn init(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>) {
         info!("LightClient.protocol initialized");
         nc.set_notify(
             constant::REFRESH_PEERS_DURATION,
             constant::REFRESH_PEERS_TOKEN,
         )
+        .await
         .expect("set_notify should be ok");
         nc.set_notify(
             constant::CHECK_GET_BLOCK_PROOFS_DURATION,
             constant::CHECK_GET_BLOCK_PROOFS_TOKEN,
         )
+        .await
         .expect("set_notify should be ok");
     }
 
-    fn connected(
+    async fn connected(
         &mut self,
         nc: Arc<dyn CKBProtocolContext + Sync>,
         peer: PeerIndex,
@@ -64,12 +67,17 @@ impl CKBProtocolHandler for LightClientProtocol {
         self.get_last_state(nc.as_ref(), peer);
     }
 
-    fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
+    async fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
         info!("LightClient.disconnected peer={}", peer);
         self.peers().remove_peer(peer);
     }
 
-    fn received(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex, data: Bytes) {
+    async fn received(
+        &mut self,
+        nc: Arc<dyn CKBProtocolContext + Sync>,
+        peer: PeerIndex,
+        data: Bytes,
+    ) {
         trace!("LightClient.received peer={}", peer);
 
         let msg = match packed::LightClientMessageReader::from_slice(&data) {
@@ -112,7 +120,7 @@ impl CKBProtocolHandler for LightClientProtocol {
         }
     }
 
-    fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
+    async fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
         match token {
             constant::REFRESH_PEERS_TOKEN => {
                 self.refresh_all_peers(nc.as_ref());
@@ -220,8 +228,8 @@ impl LightClientProtocol {
         }
     }
 
-    pub(crate) fn mmr_activated_number(&self) -> BlockNumber {
-        self.consensus.hardfork_switch().mmr_activated_number()
+    pub(crate) fn mmr_activated_number(&self) -> EpochNumber {
+        self.consensus.hardfork_switch().rfc_tmp1()
     }
     pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
         self.consensus.pow_engine()

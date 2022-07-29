@@ -1,4 +1,3 @@
-use ckb_chain_spec::consensus::Consensus;
 use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
     RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
@@ -237,7 +236,6 @@ pub struct TransactionRpcImpl {
     network_controller: NetworkController,
     pending_txs: Arc<RwLock<PendingTxs>>,
     storage: Storage,
-    consensus: Consensus,
 }
 
 pub struct ChainRpcImpl {
@@ -938,7 +936,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let cycles = verify_tx(&self.storage, &self.consensus, tx.clone(), MAX_CYCLES)
+        let cycles = verify_tx(&self.storage, tx.clone(), MAX_CYCLES)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
             .write()
@@ -994,7 +992,6 @@ impl Service {
         &self,
         network_controller: NetworkController,
         storage: Storage,
-        consensus: Consensus,
         peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
     ) -> Server {
@@ -1009,7 +1006,6 @@ impl Service {
             network_controller: network_controller.clone(),
             pending_txs,
             storage,
-            consensus,
         };
         let net_rpc_impl = NetRpcImpl {
             network_controller,
@@ -1047,8 +1043,8 @@ mod tests {
     use ckb_types::{
         bytes::Bytes,
         core::{
-            capacity_bytes, BlockBuilder, Capacity, HeaderBuilder, ScriptHashType,
-            TransactionBuilder,
+            capacity_bytes, BlockBuilder, Capacity, EpochNumberWithFraction, HeaderBuilder,
+            ScriptHashType, TransactionBuilder,
         },
         packed::{CellInput, CellOutputBuilder, OutPoint, Script, ScriptBuilder},
         H256,
@@ -1130,7 +1126,12 @@ mod tests {
             .transaction(cellbase0)
             .transaction(tx00.clone())
             .transaction(tx01.clone())
-            .header(HeaderBuilder::default().number(0.pack()).build())
+            .header(
+                HeaderBuilder::default()
+                    .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
+                    .number(0.pack())
+                    .build(),
+            )
             .build();
 
         storage.init_genesis_block(block0.data());
@@ -1181,6 +1182,7 @@ mod tests {
                 .transaction(pre_tx1.clone())
                 .header(
                     HeaderBuilder::default()
+                        .epoch(EpochNumberWithFraction::new(0, pre_block.number() + 1, 1000).pack())
                         .number((pre_block.number() + 1).pack())
                         .parent_hash(pre_block.hash())
                         .build(),
@@ -1675,7 +1677,12 @@ mod tests {
 
         let block0 = BlockBuilder::default()
             .transaction(tx00.clone())
-            .header(HeaderBuilder::default().number(0.pack()).build())
+            .header(
+                HeaderBuilder::default()
+                    .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
+                    .number(0.pack())
+                    .build(),
+            )
             .build();
         storage.init_genesis_block(block0.data());
         storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), 0)]));
@@ -1705,7 +1712,12 @@ mod tests {
 
         let block1 = BlockBuilder::default()
             .transaction(tx10.clone())
-            .header(HeaderBuilder::default().number(1.pack()).build())
+            .header(
+                HeaderBuilder::default()
+                    .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
+                    .number(1.pack())
+                    .build(),
+            )
             .build();
         storage.filter_block(block1.data());
 
@@ -1730,7 +1742,12 @@ mod tests {
 
         let block2 = BlockBuilder::default()
             .transaction(tx20.clone())
-            .header(HeaderBuilder::default().number(2.pack()).build())
+            .header(
+                HeaderBuilder::default()
+                    .epoch(EpochNumberWithFraction::new(0, 2, 1000).pack())
+                    .number(2.pack())
+                    .build(),
+            )
             .build();
         storage.filter_block(block2.data());
 
@@ -1783,7 +1800,12 @@ mod tests {
 
         let block0 = BlockBuilder::default()
             .transaction(tx00.clone())
-            .header(HeaderBuilder::default().number(0.pack()).build())
+            .header(
+                HeaderBuilder::default()
+                    .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
+                    .number(0.pack())
+                    .build(),
+            )
             .build();
         storage.init_genesis_block(block0.data());
         storage.update_filter_scripts(HashMap::from([
@@ -1810,7 +1832,12 @@ mod tests {
 
         let block1 = BlockBuilder::default()
             .transaction(tx10.clone())
-            .header(HeaderBuilder::default().number(1.pack()).build())
+            .header(
+                HeaderBuilder::default()
+                    .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
+                    .number(1.pack())
+                    .build(),
+            )
             .build();
         storage.filter_block(block1.data());
         storage.update_block_number(1);
@@ -1836,7 +1863,12 @@ mod tests {
 
         let block2 = BlockBuilder::default()
             .transaction(tx20.clone())
-            .header(HeaderBuilder::default().number(2.pack()).build())
+            .header(
+                HeaderBuilder::default()
+                    .epoch(EpochNumberWithFraction::new(0, 2, 1000).pack())
+                    .number(2.pack())
+                    .build(),
+            )
             .build();
         storage.filter_block(block2.data());
         storage.update_block_number(2);
