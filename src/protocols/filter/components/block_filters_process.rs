@@ -81,7 +81,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 );
                 return Status::ok();
             }
-            let limit = (prove_state_block_number - start_number) as usize;
+            let limit = (prove_state_block_number - start_number + 1) as usize;
             let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
             trace!(
                 "peer {}, matched blocks: {}",
@@ -126,7 +126,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 }
             }
 
-            let filtered_block_number = start_number + blocks_count.min(limit) as BlockNumber;
+            let filtered_block_number = start_number - 1 + blocks_count.min(limit) as BlockNumber;
             pending_peer.update_block_number(filtered_block_number);
             // send next batch GetBlockFilters message to peer
             {
