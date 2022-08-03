@@ -22,7 +22,7 @@ ckb-chain-spec    = { git="https://github.com/nervosnetwork/ckb", rev = "accef85
 ckb-traits        = { git="https://github.com/nervosnetwork/ckb", rev = "accef8575187c1ae65a936e8f3c984328753ad98" }
 ckb-resource      = { git="https://github.com/nervosnetwork/ckb", rev = "accef8575187c1ae65a936e8f3c984328753ad98" }
 ckb-merkle-mountain-range = "0.4.0"
-golomb-coded-set = { git = "https://github.com/TheWaWaR/golomb-coded-set"}
+golomb-coded-set = "0.2.0"
 rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }
 anyhow = "1.0.56"
 thiserror = "1.0.30"

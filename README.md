@@ -22,7 +22,7 @@ A CKB light client based on [FlyClient].
 
 ```
 git clone https://github.com/nervosnetwork/ckb.git
-git checkout light-client
+git checkout light-client-rebase
 make prod
 ```
 
