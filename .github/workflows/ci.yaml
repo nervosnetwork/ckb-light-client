@@ -65,3 +65,37 @@ jobs:
       run: cargo build
     - name: UnitTest
       run: cargo test
+  code_coverage:
+    name: Code Coverage
+    needs: [ test ]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest ]
+    env:
+      OS: ${{ matrix.os }}
+      RUST_TOOLCHAIN: nightly-2022-07-30
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          override: true
+          components: llvm-tools-preview
+      - name: Install Grcov
+        run: grcov --version || cargo install grcov
+      - name: Generate Code Coverage Report of Unit Tests
+        run: |
+          make coverage-run-unittests
+          make coverage-collect-data
+      - name: Upload Code Coverage Report of Unit Tests
+        uses: codecov/codecov-action@v3
+        with:
+          files: coverage-report.info
+          env_vars: OS,RUST_TOOLCHAIN
+          fail_ci_if_error: true
+          flags: unittests
+          verbose: false
