@@ -8,6 +8,9 @@ mod types;
 mod utils;
 mod verify;
 
+#[cfg(test)]
+mod tests;
+
 use config::AppConfig;
 
 fn main() -> anyhow::Result<()> {

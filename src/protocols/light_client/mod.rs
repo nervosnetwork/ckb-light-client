@@ -20,6 +20,9 @@ mod peers;
 mod prelude;
 mod sampling;
 
+#[cfg(test)]
+mod tests;
+
 use prelude::*;
 
 pub(crate) use self::peers::{LastState, PeerState, Peers, ProveRequest, ProveState};
