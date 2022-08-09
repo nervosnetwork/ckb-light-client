@@ -233,7 +233,7 @@ impl LightClientProtocol {
         if self.consensus.is_public_chain() {
             EpochNumber::MAX
         } else {
-            0
+            1
         }
     }
     pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
