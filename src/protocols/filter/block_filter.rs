@@ -3,7 +3,7 @@ use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
 use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
-use golomb_coded_set::GCSFilterReader;
+use golomb_coded_set::{GCSFilterReader, SipHasher24Builder, M, P};
 use log::{debug, error, info, trace, warn};
 use std::io::Cursor;
 use std::sync::RwLock;
@@ -12,11 +12,6 @@ use std::{sync::Arc, time::Duration};
 
 const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
 const GET_BLOCK_FILTERS_TIMEOUT: Duration = Duration::from_secs(15);
-
-// use same value as bip158
-const GCS_P: u8 = 19;
-// M = 1.497137 * 2^P
-const GCS_M: u64 = 784930;
 
 pub struct PendingGetBlockFiltersPeer {
     pub(crate) storage: Storage,
@@ -30,7 +25,7 @@ impl PendingGetBlockFiltersPeer {
         limit: usize,
     ) -> Vec<packed::Byte32> {
         let start_number: BlockNumber = block_filters.start_number().unpack();
-        let reader = GCSFilterReader::new(0, 0, GCS_M, GCS_P);
+        let reader = GCSFilterReader::new(SipHasher24Builder::new(0, 0), M, P);
         let script_hashes = self
             .storage
             .get_scripts_hash(start_number + limit as BlockNumber);
