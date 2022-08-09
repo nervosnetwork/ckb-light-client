@@ -1,7 +1,7 @@
 use std::cmp::Ordering;
 
 use ckb_constant::consensus::TAU;
-use ckb_merkle_mountain_range::leaf_index_to_pos;
+use ckb_merkle_mountain_range::{leaf_index_to_mmr_size, leaf_index_to_pos};
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::{
     core::BlockNumber,
@@ -60,7 +60,16 @@ impl<'a> SendBlockSamplesProcess<'a> {
         let last_total_difficulty = prove_request.get_total_difficulty();
 
         let chain_root = self.message.root().to_entity();
-        let proof: MMRProof = self.message.proof().unpack();
+        let proof: MMRProof = {
+            let mmr_size = leaf_index_to_mmr_size(chain_root.end_number().unpack());
+            let proof = self
+                .message
+                .proof()
+                .iter()
+                .map(|header_digest| header_digest.to_entity())
+                .collect();
+            MMRProof::new(mmr_size, proof)
+        };
 
         let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
         // Check if the response is match the request.
