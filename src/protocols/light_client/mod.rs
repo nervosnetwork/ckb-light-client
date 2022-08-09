@@ -229,7 +229,12 @@ impl LightClientProtocol {
     }
 
     pub(crate) fn mmr_activated_epoch(&self) -> EpochNumber {
-        self.consensus.hardfork_switch().mmr_activated_epoch()
+        // TODO remove this hard code when mmr is activated on testnet
+        if self.consensus.is_public_chain() {
+            EpochNumber::MAX
+        } else {
+            1
+        }
     }
     pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
         self.consensus.pow_engine()

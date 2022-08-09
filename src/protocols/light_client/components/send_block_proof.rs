@@ -1,5 +1,5 @@
 use super::super::{LightClientProtocol, Status, StatusCode};
-use ckb_merkle_mountain_range::leaf_index_to_pos;
+use ckb_merkle_mountain_range::{leaf_index_to_mmr_size, leaf_index_to_pos};
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::{
     packed,
@@ -37,7 +37,16 @@ impl<'a> SendBlockProofProcess<'a> {
         }
 
         let root = self.message.root().to_entity();
-        let proof: MMRProof = self.message.proof().unpack();
+        let proof = {
+            let mmr_size = leaf_index_to_mmr_size(root.end_number().unpack());
+            let proof = self
+                .message
+                .proof()
+                .iter()
+                .map(|header_digest| header_digest.to_entity())
+                .collect();
+            MMRProof::new(mmr_size, proof)
+        };
         let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
         let headers: Vec<_> = self
             .message
