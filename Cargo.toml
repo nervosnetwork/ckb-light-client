@@ -15,7 +15,6 @@ ckb-constant      = { git="https://github.com/nervosnetwork/ckb", rev = "7751525
 ckb-types         = { git="https://github.com/nervosnetwork/ckb", rev = "775152587fe141bcb9db45d89f207be194fab073" }
 ckb-network       = { git="https://github.com/nervosnetwork/ckb", rev = "775152587fe141bcb9db45d89f207be194fab073" }
 ckb-jsonrpc-types = { git="https://github.com/nervosnetwork/ckb", rev = "775152587fe141bcb9db45d89f207be194fab073" }
-ckb-pow           = { git="https://github.com/nervosnetwork/ckb", rev = "775152587fe141bcb9db45d89f207be194fab073" }
 ckb-error         = { git="https://github.com/nervosnetwork/ckb", rev = "775152587fe141bcb9db45d89f207be194fab073" }
 ckb-script        = { git="https://github.com/nervosnetwork/ckb", rev = "775152587fe141bcb9db45d89f207be194fab073" }
 ckb-chain-spec    = { git="https://github.com/nervosnetwork/ckb", rev = "775152587fe141bcb9db45d89f207be194fab073" }

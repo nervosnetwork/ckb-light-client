@@ -1,6 +1,12 @@
-use ckb_types::{u256, U256};
+use ckb_constant::consensus::TAU;
+use ckb_types::{
+    utilities::difficulty_to_compact,
+    {u256, U256},
+};
 
-use super::super::send_block_samples::{EpochDifficultyTrend, EstimatedLimit};
+use super::super::send_block_samples::{
+    verify_tau, verify_total_difficulty, EpochDifficultyTrend, EstimatedLimit,
+};
 
 #[test]
 fn test_calculate_tau_exponent() {
@@ -203,6 +209,403 @@ fn test_calculate_total_difficulty_limit() {
                     diff_start, diff_end, tau, n, k, limit, expected, actual,
                 );
             }
+        }
+    }
+}
+
+#[test]
+fn test_verify_tau() {
+    let tau = TAU;
+    let testcases = [
+        (
+            ((10, 0, 10), u256!("0x3f")),
+            ((10, 9, 10), u256!("0x40")),
+            Err(()),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((10, 9, 10), u256!("0x40")),
+            Ok(false),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((10, 9, 10), u256!("0x41")),
+            Err(()),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((15, 0, 10), u256!("0x1")),
+            Ok(false),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((15, 0, 10), u256!("0x2")),
+            Ok(true),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((15, 0, 10), u256!("0x3")),
+            Ok(true),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((15, 0, 10), u256!("0x7ff")),
+            Ok(true),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((15, 0, 10), u256!("0x800")),
+            Ok(true),
+        ),
+        (
+            ((10, 0, 10), u256!("0x40")),
+            ((15, 0, 10), u256!("0x801")),
+            Ok(false),
+        ),
+    ];
+    for (start_data, end_data, expected_result) in testcases {
+        let (start_epoch_data, start_block_difficulty) = start_data;
+        let start_epoch = epoch!(start_epoch_data);
+        let start_compact_target = difficulty_to_compact(start_block_difficulty.clone());
+        let (end_epoch_data, end_block_difficulty) = end_data;
+        let end_epoch = epoch!(end_epoch_data);
+        let end_compact_target = difficulty_to_compact(end_block_difficulty.clone());
+        let actual_result = verify_tau(
+            start_epoch,
+            start_compact_target,
+            end_epoch,
+            end_compact_target,
+            tau,
+        );
+        match (expected_result, actual_result) {
+            (Ok(expected), Ok(actual)) => {
+                assert_eq!(
+                    expected,
+                    actual,
+                    "verify tau expect {} but got {} \
+                    when epoch: {:#}->{:#}, block-diff: {:#x}->{:#x}",
+                    expected,
+                    actual,
+                    start_epoch,
+                    end_epoch,
+                    start_block_difficulty,
+                    end_block_difficulty,
+                );
+            }
+            (Err(_), Ok(actual)) => {
+                panic!(
+                    "verify tau expect an error but got {} \
+                    when epoch: {:#}->{:#}, block-diff: {:#x}->{:#x}",
+                    actual, start_epoch, end_epoch, start_block_difficulty, end_block_difficulty,
+                );
+            }
+            (Ok(expected), Err(status)) => {
+                panic!(
+                    "verify tau expect {} but got {} \
+                    when epoch: {:#}->{:#}, block-diff: {:#x}->{:#x}",
+                    expected,
+                    status,
+                    start_epoch,
+                    end_epoch,
+                    start_block_difficulty,
+                    end_block_difficulty,
+                );
+            }
+            (Err(_), Err(_)) => {}
+        }
+    }
+}
+
+#[test]
+fn test_verify_total_difficulty_in_same_epoch() {
+    let tau = TAU;
+    let block_difficulty = U256::from(4u32);
+    let compact_target = difficulty_to_compact(block_difficulty.clone());
+    let testcases = [
+        (
+            ((10, 0, 10), u256!("0x100")),
+            ((10, 0, 10), u256!("0x100")),
+            true,
+        ),
+        (
+            ((10, 0, 10), u256!("0x100")),
+            ((10, 1, 10), u256!("0x100")),
+            false,
+        ),
+        (
+            ((10, 0, 10), u256!("0x100")),
+            ((10, 1, 10), u256!("0x103")),
+            false,
+        ),
+        (
+            ((10, 0, 10), u256!("0x100")),
+            ((10, 1, 10), u256!("0x104")),
+            true,
+        ),
+        (
+            ((10, 0, 10), u256!("0x100")),
+            ((10, 1, 10), u256!("0x105")),
+            false,
+        ),
+    ];
+    for (start_data, end_data, expected_result) in testcases {
+        let (start_epoch_data, start_total_difficulty) = start_data;
+        let start_epoch = epoch!(start_epoch_data);
+        let (end_epoch_data, end_total_difficulty) = end_data;
+        let end_epoch = epoch!(end_epoch_data);
+        let result = verify_total_difficulty(
+            start_epoch,
+            compact_target,
+            &start_total_difficulty,
+            end_epoch,
+            compact_target,
+            &end_total_difficulty,
+            tau,
+        );
+        if expected_result {
+            assert!(
+                result.is_ok(),
+                "should be passed but failed when verified total difficulty when \
+                epoch: {:#}->{:#}, block-diff: {:#x}, total-diff: {:#x}->{:#x} \
+                since {}",
+                start_epoch,
+                end_epoch,
+                block_difficulty,
+                start_total_difficulty,
+                end_total_difficulty,
+                result.unwrap_err(),
+            );
+        }
+        let end_total_difficulty_vec = if expected_result {
+            vec![
+                &end_total_difficulty - U256::from(3u32),
+                &end_total_difficulty - U256::from(2u32),
+                &end_total_difficulty - U256::from(1u32),
+                &end_total_difficulty + U256::from(1u32),
+                &end_total_difficulty + U256::from(2u32),
+                &end_total_difficulty + U256::from(3u32),
+            ]
+        } else {
+            vec![end_total_difficulty]
+        };
+        for end_total_difficulty in end_total_difficulty_vec {
+            let result = verify_total_difficulty(
+                start_epoch,
+                compact_target,
+                &start_total_difficulty,
+                end_epoch,
+                compact_target,
+                &end_total_difficulty,
+                tau,
+            );
+            assert!(
+                result.is_err(),
+                "should be failed but passed when verified total difficulty when \
+                epoch: {:#}->{:#}, block-diff: {:#x}, total-diff: {:#x}->{:#x}",
+                start_epoch,
+                end_epoch,
+                block_difficulty,
+                start_total_difficulty,
+                end_total_difficulty,
+            );
+        }
+    }
+}
+
+#[test]
+fn test_verify_total_difficulty_during_two_epochs() {
+    let tau = TAU;
+    let testcases = [
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x1"), u256!("0x119")),
+            false,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x2"), u256!("0x11e")),
+            true,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x3"), u256!("0x123")),
+            true,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x4"), u256!("0x128")),
+            true,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x5"), u256!("0x12d")),
+            true,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x6"), u256!("0x132")),
+            true,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x7"), u256!("0x137")),
+            true,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x8"), u256!("0x13c")),
+            true,
+        ),
+        (
+            ((10, 4, 10), u256!("0x4"), u256!("0x100")),
+            ((11, 4, 10), u256!("0x9"), u256!("0x141")),
+            false,
+        ),
+    ];
+    for (start_data, end_data, expected_result) in testcases {
+        let (start_epoch_data, start_block_difficulty, start_total_difficulty) = start_data;
+        let start_epoch = epoch!(start_epoch_data);
+        let start_compact_target = difficulty_to_compact(start_block_difficulty.clone());
+        let (end_epoch_data, end_block_difficulty, end_total_difficulty) = end_data;
+        let end_epoch = epoch!(end_epoch_data);
+        let end_compact_target = difficulty_to_compact(end_block_difficulty.clone());
+        let result = verify_total_difficulty(
+            start_epoch,
+            start_compact_target,
+            &start_total_difficulty,
+            end_epoch,
+            end_compact_target,
+            &end_total_difficulty,
+            tau,
+        );
+        if expected_result {
+            assert!(
+                result.is_ok(),
+                "should be passed but failed when verified total difficulty when \
+                epoch: {:#}->{:#}, block-diff: {:#x}->{:#x}, total-diff: {:#x}->{:#x} \
+                since {}",
+                start_epoch,
+                end_epoch,
+                start_block_difficulty,
+                end_block_difficulty,
+                start_total_difficulty,
+                end_total_difficulty,
+                result.unwrap_err(),
+            );
+        }
+        let end_total_difficulty_vec = if expected_result {
+            vec![
+                &end_total_difficulty - U256::from(1u32),
+                &end_total_difficulty + U256::from(1u32),
+            ]
+        } else {
+            vec![end_total_difficulty]
+        };
+        for end_total_difficulty in end_total_difficulty_vec {
+            let result = verify_total_difficulty(
+                start_epoch,
+                start_compact_target,
+                &start_total_difficulty,
+                end_epoch,
+                end_compact_target,
+                &end_total_difficulty,
+                tau,
+            );
+            assert!(
+                result.is_err(),
+                "should be failed but passed when verified total difficulty when \
+                epoch: {:#}->{:#}, block-diff: {:#x}->{:#x}, total-diff: {:#x}->{:#x}",
+                start_epoch,
+                end_epoch,
+                start_block_difficulty,
+                end_block_difficulty,
+                start_total_difficulty,
+                end_total_difficulty,
+            );
+        }
+    }
+}
+
+#[test]
+fn test_verify_total_difficulty_during_more_than_two_epochs() {
+    let tau = TAU;
+    let testcases = [
+        // Epoch Difficulty (40 -> 40):
+        // - min total difficulty: 40 -> 20 -> 10 -> 20 -> 40
+        // - max total difficulty: 40 -> 80 -> 160 -> 80 -> 40
+        (
+            ((11, 0, 10), u256!("0x4"), u256!("0x100")),
+            ((15, 0, 10), u256!("0x4"), u256!("0xff")),
+            false,
+        ),
+        (
+            ((11, 0, 10), u256!("0x4"), u256!("0x100")),
+            ((15, 0, 10), u256!("0x4"), u256!("0x150")),
+            false,
+        ),
+        (
+            ((11, 0, 10), u256!("0x4"), u256!("0x100")),
+            ((15, 0, 10), u256!("0x4"), u256!("0x15a")),
+            true,
+        ),
+        (
+            ((11, 0, 10), u256!("0x4"), u256!("0x100")),
+            ((15, 0, 10), u256!("0x4"), u256!("0x1a0")),
+            true,
+        ),
+        (
+            ((11, 0, 10), u256!("0x4"), u256!("0x100")),
+            ((15, 0, 10), u256!("0x4"), u256!("0x268")),
+            true,
+        ),
+        (
+            ((11, 0, 10), u256!("0x4"), u256!("0x100")),
+            ((15, 0, 10), u256!("0x4"), u256!("0x269")),
+            false,
+        ),
+    ];
+    for (start_data, end_data, expected_result) in testcases {
+        let (start_epoch_data, start_block_difficulty, start_total_difficulty) = start_data;
+        let start_epoch = epoch!(start_epoch_data);
+        let start_compact_target = difficulty_to_compact(start_block_difficulty.clone());
+        let (end_epoch_data, end_block_difficulty, end_total_difficulty) = end_data;
+        let end_epoch = epoch!(end_epoch_data);
+        let end_compact_target = difficulty_to_compact(end_block_difficulty.clone());
+        let result = verify_total_difficulty(
+            start_epoch,
+            start_compact_target,
+            &start_total_difficulty,
+            end_epoch,
+            end_compact_target,
+            &end_total_difficulty,
+            tau,
+        );
+        if expected_result {
+            assert!(
+                result.is_ok(),
+                "should be passed but failed when verified total difficulty when \
+                epoch: {:#}->{:#}, block-diff: {:#x}->{:#x}, total-diff: {:#x}->{:#x} \
+                since {}",
+                start_epoch,
+                end_epoch,
+                start_block_difficulty,
+                end_block_difficulty,
+                start_total_difficulty,
+                end_total_difficulty,
+                result.unwrap_err(),
+            );
+        } else {
+            assert!(
+                result.is_err(),
+                "should be failed but passed when verified total difficulty when \
+                epoch: {:#}->{:#}, block-diff: {:#x}->{:#x}, total-diff: {:#x}->{:#x}",
+                start_epoch,
+                end_epoch,
+                start_block_difficulty,
+                end_block_difficulty,
+                start_total_difficulty,
+                end_total_difficulty,
+            );
         }
     }
 }

@@ -1,3 +1,7 @@
+#[cfg(test)]
+#[macro_use]
+mod tests;
+
 mod config;
 mod error;
 mod protocols;
@@ -7,9 +11,6 @@ mod subcmds;
 mod types;
 mod utils;
 mod verify;
-
-#[cfg(test)]
-mod tests;
 
 use config::AppConfig;
 
