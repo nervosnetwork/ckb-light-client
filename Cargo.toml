@@ -24,6 +24,7 @@ ckb-resource      = { git="https://github.com/nervosnetwork/ckb", rev = "7751525
 ckb-merkle-mountain-range = "0.4.0"
 golomb-coded-set = "0.2.0"
 rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }
+numext-fixed-uint = { version = "0.1", features = ["support_rand", "support_heapsize", "support_serde"] }
 anyhow = "1.0.56"
 thiserror = "1.0.30"
 log = "0.4.14"

@@ -1,16 +1,15 @@
 use std::collections::HashSet;
 
-use ckb_types::{
-    core::{BlockNumber, RationalU256},
-    U256,
-};
+use ckb_types::{core::BlockNumber, U256};
 use log::trace;
+use numext_fixed_uint::{prelude::UintConvert as _, U512};
 use rand::{thread_rng, Rng as _};
 
 use crate::protocols::LAST_N_BLOCKS;
 
 const C_FRACTION: f64 = 0.5;
 
+// Since `log(2**32,10) = 9.63`.
 const RATIO_SCALE_FACTOR: u32 = 1_000_000_000;
 
 struct FlyClientPDF {
@@ -22,12 +21,15 @@ struct FlyClientPDF {
     difficulty_boundary: U256,
 }
 
-fn multiply(uint: &U256, ratio: f64) -> U256 {
+// ### Warnings
+//
+// `ratio` should be less than 1.0.
+pub(crate) fn multiply(uint: &U256, ratio: f64) -> U256 {
+    let (uint_512, _): (U512, bool) = uint.convert_into();
     let numerator = (ratio * f64::from(RATIO_SCALE_FACTOR)) as u32;
     let denominator = RATIO_SCALE_FACTOR;
-    let rational = RationalU256::new(U256::from(numerator), U256::from(denominator));
-
-    let num = (RationalU256::from_u256(uint.to_owned()) * rational).into_u256();
+    let num_512 = (uint_512 * U512::from(numerator)) / U512::from(denominator);
+    let (num, _): (U256, bool) = num_512.convert_into();
     if num.is_zero() {
         U256::one()
     } else {

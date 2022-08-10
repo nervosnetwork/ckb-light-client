@@ -459,6 +459,7 @@ dependencies = [
  "jsonrpc-http-server",
  "jsonrpc-server-utils",
  "log",
+ "numext-fixed-uint",
  "path-clean",
  "rand 0.6.5",
  "rand 0.8.5",
