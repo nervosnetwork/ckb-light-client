@@ -1,4 +1,5 @@
-use super::super::{LightClientProtocol, Status, StatusCode};
+use std::collections::HashSet;
+
 use ckb_merkle_mountain_range::{leaf_index_to_mmr_size, leaf_index_to_pos};
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::{
@@ -7,6 +8,8 @@ use ckb_types::{
     utilities::merkle_mountain_range::{MMRProof, VerifiableHeader},
 };
 use log::{error, trace};
+
+use super::super::{LightClientProtocol, Status, StatusCode};
 
 pub(crate) struct SendBlockProofProcess<'a> {
     message: packed::SendBlockProofReader<'a>,
@@ -31,51 +34,66 @@ impl<'a> SendBlockProofProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
-        if self.message.as_slice() == packed::SendBlockProof::default().as_slice() {
-            // The tip_hash is not on the chain, just ignore the message and wait for timeout retry.
-            return Status::ok();
-        }
+        let id = self.message.id().to_entity();
 
-        let root = self.message.root().to_entity();
-        let proof = {
-            let mmr_size = leaf_index_to_mmr_size(root.end_number().unpack());
-            let proof = self
-                .message
-                .proof()
-                .iter()
-                .map(|header_digest| header_digest.to_entity())
-                .collect();
-            MMRProof::new(mmr_size, proof)
-        };
-        let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
-        let headers: Vec<_> = self
-            .message
-            .headers()
-            .iter()
-            .map(|header| header.to_entity().into_view())
-            .collect();
-
-        // check request match the response
-        let response_hashes = headers
-            .iter()
-            .map(|header| header.hash())
-            .collect::<Vec<_>>();
-        let expected_request = packed::GetBlockProof::new_builder()
-            .block_hashes(response_hashes.pack())
-            .tip_hash(tip_header.header().hash())
-            .build();
-        if self
+        // Check if there is a request match this response, then extract the data.
+        let (root, tip_header, proof, headers) = if let Some((_, request)) = self
             .protocol
             .peers()
-            .remove_block_proof_request(self.peer, &expected_request)
-            .is_none()
+            .remove_block_proof_request(self.peer, &id)
         {
-            error!(
-                "peer {}: SendBlockProof response without a GetBlockProof request",
-                self.peer
-            );
-            return StatusCode::PeerIsNotOnProcess.into();
-        }
+            let data = if let Some(data) = self.message.data().to_opt() {
+                data
+            } else {
+                // The tip_hash is not on the chain, just ignore the message and wait for timeout retry.
+                return Status::ok();
+            };
+
+            let tip_header: VerifiableHeader = data.tip_header().to_entity().into();
+            let headers: Vec<_> = data
+                .headers()
+                .iter()
+                .map(|header| header.to_entity().into_view())
+                .collect();
+
+            if request.tip_hash() != tip_header.header().hash() {
+                let errmsg = format!(
+                    "the tip header in the response isn't the tip header which requested, \
+                    expect {:#x} but got {:#x}",
+                    request.tip_hash(),
+                    tip_header.header().hash(),
+                );
+                return StatusCode::InvalidSendBlockProof.with_context(errmsg);
+            }
+            #[allow(clippy::mutable_key_type)]
+            let request_block_hashes = request.block_hashes().into_iter().collect::<HashSet<_>>();
+            for header in &headers {
+                if !request_block_hashes.contains(&header.hash()) {
+                    let errmsg = format!(
+                        "a header in the response isn't in the headers which requested, \
+                        its hash is {:#x}",
+                        header.hash()
+                    );
+                    return StatusCode::InvalidSendBlockProof.with_context(errmsg);
+                }
+            }
+
+            let root = data.tip_root().to_entity();
+            let proof = {
+                let mmr_size = leaf_index_to_mmr_size(root.end_number().unpack());
+                let proof = data
+                    .proof()
+                    .iter()
+                    .map(|header_digest| header_digest.to_entity())
+                    .collect();
+                MMRProof::new(mmr_size, proof)
+            };
+
+            (root, tip_header, proof, headers)
+        } else {
+            let errmsg = format!("there is no request to match the response (id: {:#x})", id);
+            return StatusCode::InvalidSendBlockProof.with_context(errmsg);
+        };
 
         // Check PoW
         let pow_engine = self.protocol.pow_engine();

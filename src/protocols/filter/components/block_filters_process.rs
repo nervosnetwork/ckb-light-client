@@ -99,8 +99,9 @@ impl<'a> BlockFiltersProcess<'a> {
                         .block_hashes(possible_match_blocks.pack())
                         .tip_hash(prove_state_block_hash)
                         .build();
+                    let id = content.calc_hash_as_id();
 
-                    if peer_state.contains_block_proof_request(&content) {
+                    if peer_state.contains_block_proof_request(&id) {
                         trace!("already sent block proof request to peer: {}", self.peer,);
                     } else {
                         trace!("send block proof request to peer: {}", self.peer,);

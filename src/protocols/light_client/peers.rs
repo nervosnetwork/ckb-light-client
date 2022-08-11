@@ -1,8 +1,7 @@
 use crate::protocols::{GET_BLOCK_PROOF_TIMEOUT, MAX_BLOCK_RPOOF_REQUESTS};
 use ckb_network::PeerIndex;
 use ckb_types::{
-    bytes::Bytes, core::HeaderView, packed, prelude::*,
-    utilities::merkle_mountain_range::VerifiableHeader, U256,
+    core::HeaderView, packed, utilities::merkle_mountain_range::VerifiableHeader, U256,
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
@@ -32,8 +31,7 @@ pub(crate) struct PeerState {
     last_state: Option<LastState>,
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
-    // The data must be packed::GetBlockProof molecule format
-    block_proof_requests: HashMap<Bytes, u64>,
+    block_proof_requests: HashMap<packed::Byte32, (u64, packed::GetBlockProof)>,
 }
 
 #[derive(Clone)]
@@ -148,19 +146,26 @@ impl PeerState {
     pub(crate) fn get_prove_state(&self) -> Option<&ProveState> {
         self.prove_state.as_ref()
     }
-    pub(crate) fn contains_block_proof_request(&self, request: &packed::GetBlockProof) -> bool {
-        self.block_proof_requests.contains_key(&request.as_bytes())
+
+    pub(crate) fn contains_block_proof_request(&self, id: &packed::Byte32) -> bool {
+        self.block_proof_requests.contains_key(id)
     }
+
     pub(crate) fn can_insert_block_proof_request(&self) -> bool {
         self.block_proof_requests.len() < MAX_BLOCK_RPOOF_REQUESTS
     }
 
     fn insert_block_proof_request(&mut self, request: packed::GetBlockProof) {
+        let id = request.calc_hash_as_id();
         self.block_proof_requests
-            .insert(request.as_bytes(), unix_time_as_millis());
+            .insert(id, (unix_time_as_millis(), request));
     }
-    fn remove_block_proof_request(&mut self, request: &packed::GetBlockProof) -> Option<u64> {
-        self.block_proof_requests.remove(&request.as_bytes())
+
+    fn remove_block_proof_request(
+        &mut self,
+        id: &packed::Byte32,
+    ) -> Option<(u64, packed::GetBlockProof)> {
+        self.block_proof_requests.remove(id)
     }
 
     fn update_last_state(&mut self, last_state: LastState) {
@@ -227,11 +232,11 @@ impl Peers {
     pub(crate) fn remove_block_proof_request(
         &self,
         index: PeerIndex,
-        request: &packed::GetBlockProof,
-    ) -> Option<u64> {
+        id: &packed::Byte32,
+    ) -> Option<(u64, packed::GetBlockProof)> {
         self.inner
             .get_mut(&index)
-            .and_then(|mut peer| peer.state.remove_block_proof_request(request))
+            .and_then(|mut peer| peer.state.remove_block_proof_request(id))
     }
     // check all inflight requests, find peer with too many requests or have timeout request
     pub(crate) fn check_block_proof_requests(&self) -> Vec<PeerIndex> {
@@ -242,7 +247,7 @@ impl Peers {
                 if item.value().state.block_proof_requests.len() > MAX_BLOCK_RPOOF_REQUESTS {
                     return Some(*item.key());
                 }
-                for timestamp in item.value().state.block_proof_requests.values() {
+                for (timestamp, _) in item.value().state.block_proof_requests.values() {
                     if now - timestamp > GET_BLOCK_PROOF_TIMEOUT {
                         return Some(*item.key());
                     }
