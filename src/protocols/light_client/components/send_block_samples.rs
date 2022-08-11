@@ -697,8 +697,25 @@ pub fn verify_total_difficulty(
     let start_compact_target = start_header.compact_target();
     let end_compact_target = end_header.compact_target();
     let total_difficulty = end_total_difficulty - start_total_difficulty;
-    if start_epoch.number() != end_epoch.number() {
-        let start_block_difficulty = compact_to_difficulty(start_compact_target);
+    let start_block_difficulty = compact_to_difficulty(start_compact_target);
+    if start_epoch.number() == end_epoch.number() {
+        let total_blocks_count = end_epoch.index() - start_epoch.index();
+        let total_difficulty_calculated = start_block_difficulty.clone() * total_blocks_count;
+        if total_difficulty != total_difficulty_calculated {
+            let errmsg = format!(
+                "failed since total difficulty is {:#x} \
+                but the calculated is {:#x} (= {:#x} * {}) \
+                during epochs ([{:#},{:#}])",
+                total_difficulty,
+                total_difficulty_calculated,
+                start_block_difficulty,
+                total_blocks_count,
+                start_epoch,
+                end_epoch
+            );
+            return Err(errmsg);
+        }
+    } else {
         let end_block_difficulty = compact_to_difficulty(end_compact_target);
         let start_epoch_difficulty = start_block_difficulty.clone() * start_epoch.length();
         let end_epoch_difficulty = end_block_difficulty.clone() * end_epoch.length();
@@ -715,7 +732,7 @@ pub fn verify_total_difficulty(
             .ok_or_else(|| {
                 format!(
                     "failed since the epoch difficulty changed \
-                    too fast ({}->{}) during epochs ([{},{}])",
+                    too fast ({:#x}->{:#x}) during epochs ([{:#},{:#}])",
                     start_epoch_difficulty, end_epoch_difficulty, start_epoch, end_epoch
                 )
             })?;
@@ -728,8 +745,8 @@ pub fn verify_total_difficulty(
         if epochs_switch_count == 1 {
             if total_difficulty != unaligned_difficulty_calculated {
                 let errmsg = format!(
-                    "failed since total difficulty is {} \
-                    but the calculated is {} (= {} * {} + {} * {}) \
+                    "failed since total difficulty is {:#x} \
+                    but the calculated is {:#x} (= {:#x} * {} + {:#x} * {}) \
                     during epochs ([{:#},{:#}])",
                     total_difficulty,
                     unaligned_difficulty_calculated,
@@ -764,7 +781,7 @@ pub fn verify_total_difficulty(
             if total_difficulty < total_difficulity_min || total_difficulty > total_difficulity_max
             {
                 let errmsg = format!(
-                    "failed since total difficulty ({}) isn't in the range ({}+[{},{}]) \
+                    "failed since total difficulty ({:#x}) isn't in the range ({:#x}+[{:#x},{:#x}]) \
                     during epochs ([{:#},{:#}])",
                     total_difficulty,
                     unaligned_difficulty_calculated,
