@@ -2,6 +2,7 @@
 
 [![License]](#license)
 [![GitHub Actions]](https://github.com/nervosnetwork/ckb-light-client/actions)
+[![Codecov]](https://codecov.io/gh/nervosnetwork/ckb-light-client/branch/develop/graph/badge.svg)
 
 > :warning: **WARNING** This repository is unavailable, since it's still in
 > the proof-of-concept stage.
@@ -10,6 +11,7 @@ A CKB light client based on [FlyClient].
 
 [License]: https://img.shields.io/badge/License-MIT-blue.svg
 [GitHub Actions]: https://github.com/nervosnetwork/ckb-light-client/workflows/CI/badge.svg
+[Codecov]: https://img.shields.io/codecov/c/gh/nervosnetwork/ckb-light-client/develop
 
 ## References
 
