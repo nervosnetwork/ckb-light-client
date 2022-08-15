@@ -2,7 +2,6 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
 use std::time::Duration;
 
 use ckb_network::{
@@ -29,24 +28,6 @@ impl MockProtocolContext {
             banned_peers: Default::default(),
             connected_peers: Default::default(),
         }
-    }
-    pub(crate) fn new_arc(protocol: SupportProtocols) -> Arc<Self> {
-        Arc::new(MockProtocolContext::new(protocol))
-    }
-
-    pub(crate) fn connected(&self, peer_index: PeerIndex) {
-        self.connected_peers.borrow_mut().insert(peer_index);
-    }
-
-    pub(crate) fn has_sent(
-        &self,
-        protocol_id: ProtocolId,
-        peer_index: PeerIndex,
-        data: P2pBytes,
-    ) -> bool {
-        self.sent_messages
-            .borrow()
-            .contains(&(protocol_id, peer_index, data))
     }
 
     pub(crate) fn has_banned(&self, target: PeerIndex) -> Option<(Duration, String)> {

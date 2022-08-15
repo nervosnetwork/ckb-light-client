@@ -11,7 +11,7 @@ use super::mock_context::MockProtocolContext;
 
 #[tokio::test]
 async fn test_block_filter_malformed_message() {
-    let nc = MockProtocolContext::new_arc(SupportProtocols::Filter);
+    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
     let storage = new_storage("test-block-filter");
     let peers = Arc::new(Peers::default());
     let mut protocol = FilterProtocol::new(storage, peers);
