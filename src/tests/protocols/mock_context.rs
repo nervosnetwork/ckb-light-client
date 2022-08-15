@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ckb_network::{
@@ -29,6 +30,9 @@ impl MockProtocolContext {
             connected_peers: Default::default(),
         }
     }
+    pub(crate) fn new_arc(protocol: SupportProtocols) -> Arc<Self> {
+        Arc::new(MockProtocolContext::new(protocol))
+    }
 
     pub(crate) fn connected(&self, peer_index: PeerIndex) {
         self.connected_peers.borrow_mut().insert(peer_index);
@@ -44,11 +48,21 @@ impl MockProtocolContext {
             .borrow()
             .contains(&(protocol_id, peer_index, data))
     }
+
+    pub(crate) fn has_banned(&self, target: PeerIndex) -> Option<(Duration, String)> {
+        self.banned_peers
+            .borrow()
+            .iter()
+            .find(|(peer, _, _)| *peer == target)
+            .map(|(_, duration, reason)| (duration.clone(), reason.clone()))
+    }
 }
 
 #[async_trait]
 impl CKBProtocolContext for MockProtocolContext {
     async fn set_notify(&self, _interval: Duration, _token: u64) -> Result<(), Error> {
+        // NOTE: no need to mock this function, just call protocol.notity(token) in
+        // test code to test the functionality of the protocol.
         unimplemented!()
     }
     async fn remove_notify(&self, _token: u64) -> Result<(), Error> {
