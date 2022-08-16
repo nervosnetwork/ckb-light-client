@@ -7,7 +7,7 @@ use ckb_types::packed;
 
 use crate::{storage::Storage, verify::verify_tx};
 
-fn new_storage(prefix: &str) -> Storage {
+pub fn new_storage(prefix: &str) -> Storage {
     let tmp_dir = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
     let storage = Storage::new(tmp_dir.path().to_str().unwrap());
     let chain_spec = ChainSpec::load_from(&Resource::bundled("specs/testnet.toml".to_string()))
