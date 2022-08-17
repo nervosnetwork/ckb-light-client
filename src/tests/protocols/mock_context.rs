@@ -30,6 +30,17 @@ impl MockProtocolContext {
         }
     }
 
+    pub(crate) fn has_sent(
+        &self,
+        protocol_id: ProtocolId,
+        peer_index: PeerIndex,
+        data: P2pBytes,
+    ) -> bool {
+        self.sent_messages
+            .borrow()
+            .contains(&(protocol_id, peer_index, data))
+    }
+
     pub(crate) fn has_banned(&self, target: PeerIndex) -> Option<(Duration, String)> {
         self.banned_peers
             .borrow()

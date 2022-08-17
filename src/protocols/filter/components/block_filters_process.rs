@@ -73,7 +73,6 @@ impl<'a> BlockFiltersProcess<'a> {
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
             }
 
-            // send GetBlockProof message to peer
             if prove_state_block_number < start_number {
                 warn!(
                     "ignoring, peer {} prove_state_block_number {} is smaller than start_number {}",
@@ -88,6 +87,8 @@ impl<'a> BlockFiltersProcess<'a> {
                 self.peer,
                 possible_match_blocks.len()
             );
+
+            // send GetBlockProof message to peer
             if !possible_match_blocks.is_empty() {
                 if !peer_state.can_insert_block_proof_request() {
                     warn!(
