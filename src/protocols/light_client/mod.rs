@@ -7,9 +7,12 @@ use std::sync::Arc;
 
 use ckb_chain_spec::consensus::Consensus;
 use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
-use ckb_pow::PowEngine;
 use ckb_types::{
-    core::EpochNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256,
+    core::{EpochNumber, HeaderView},
+    packed,
+    prelude::*,
+    utilities::merkle_mountain_range::VerifiableHeader,
+    U256,
 };
 use faketime::unix_time_as_millis;
 use log::{debug, error, info, trace, warn};
@@ -239,8 +242,23 @@ impl LightClientProtocol {
             1
         }
     }
-    pub(crate) fn pow_engine(&self) -> Arc<dyn PowEngine> {
-        self.consensus.pow_engine()
+
+    pub(crate) fn check_pow_for_headers<'a, T: Iterator<Item = &'a HeaderView>>(
+        &self,
+        headers: T,
+    ) -> Result<(), Status> {
+        let pow_engine = self.consensus.pow_engine();
+        for header in headers {
+            if !pow_engine.verify(&header.data()) {
+                let errmsg = format!(
+                    "failed to verify nonce for block#{}, hash: {:#x}",
+                    header.number(),
+                    header.hash()
+                );
+                return Err(StatusCode::InvalidNonce.with_context(errmsg));
+            }
+        }
+        Ok(())
     }
 
     pub(crate) fn peers(&self) -> &Peers {

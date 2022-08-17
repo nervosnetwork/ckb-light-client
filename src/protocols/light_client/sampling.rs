@@ -12,7 +12,7 @@ const C_FRACTION: f64 = 0.5;
 // Since `log(2**32,10) = 9.63`.
 const RATIO_SCALE_FACTOR: u32 = 1_000_000_000;
 
-struct FlyClientPDF {
+pub(crate) struct FlyClientPDF {
     x_max: f64,
     delta: f64,
 
@@ -38,7 +38,7 @@ pub(crate) fn multiply(uint: &U256, ratio: f64) -> U256 {
 }
 
 impl FlyClientPDF {
-    fn new(
+    pub(crate) fn new(
         delta: f64,
         start_difficulty: U256,
         difficulty_range: U256,
@@ -75,7 +75,7 @@ impl FlyClientPDF {
         }
     }
 
-    fn sampling(&self, samples_count: BlockNumber) -> HashSet<U256> {
+    pub(crate) fn sampling(&self, samples_count: BlockNumber) -> HashSet<U256> {
         let mut difficulties = HashSet::default();
         for _ in 0..samples_count {
             let difficulty = self.random_sample();

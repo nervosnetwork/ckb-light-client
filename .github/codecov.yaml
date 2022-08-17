@@ -3,7 +3,7 @@ coverage:
     project:
       default:
         # This target could be increased, but don't decrease it.
-        target: 20%
+        target: 25%
         threshold: 0%
         paths:
         - "src"

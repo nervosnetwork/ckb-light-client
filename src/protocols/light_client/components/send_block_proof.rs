@@ -1,12 +1,11 @@
-use super::super::{LightClientProtocol, Status, StatusCode};
-use ckb_merkle_mountain_range::{leaf_index_to_mmr_size, leaf_index_to_pos};
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
-use ckb_types::{
-    packed,
-    prelude::*,
-    utilities::merkle_mountain_range::{MMRProof, VerifiableHeader},
+use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
+use log::error;
+
+use super::{
+    super::{LightClientProtocol, Status, StatusCode},
+    send_block_samples::verify_mmr_proof,
 };
-use log::{error, trace};
 
 pub(crate) struct SendBlockProofProcess<'a> {
     message: packed::SendBlockProofReader<'a>,
@@ -36,17 +35,6 @@ impl<'a> SendBlockProofProcess<'a> {
             return Status::ok();
         }
 
-        let root = self.message.root().to_entity();
-        let proof = {
-            let mmr_size = leaf_index_to_mmr_size(root.end_number().unpack());
-            let proof = self
-                .message
-                .proof()
-                .iter()
-                .map(|header_digest| header_digest.to_entity())
-                .collect();
-            MMRProof::new(mmr_size, proof)
-        };
         let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
         let headers: Vec<_> = self
             .message
@@ -78,78 +66,25 @@ impl<'a> SendBlockProofProcess<'a> {
         }
 
         // Check PoW
-        let pow_engine = self.protocol.pow_engine();
-        for header in headers.iter().chain(Some(tip_header.header())) {
-            if !pow_engine.verify(&header.data()) {
-                let errmsg = format!(
-                    "failed to verify nonce for block#{}, hash: {:#x}",
-                    header.number(),
-                    header.hash()
-                );
-                return StatusCode::InvalidNonce.with_context(errmsg);
-            }
+        if let Err(status) = self
+            .protocol
+            .check_pow_for_headers(headers.iter().chain(Some(tip_header.header())))
+        {
+            return status;
         }
 
         // Verify the proof
-        let digests_with_positions = {
-            let res = headers
+        if let Err(status) = verify_mmr_proof(
+            self.protocol.mmr_activated_epoch(),
+            &tip_header,
+            self.message.root().to_entity(),
+            self.message.proof(),
+            headers
                 .iter()
-                .filter(|header| header.number() != tip_header.header().number())
-                .map(|header| {
-                    let position = leaf_index_to_pos(header.number());
-                    let digest = header.digest();
-                    digest.verify()?;
-                    Ok((position, digest))
-                })
-                .collect::<Result<Vec<_>, String>>();
-            match res {
-                Ok(tmp) => tmp,
-                Err(err) => {
-                    let errmsg = format!("failed to verify all digest since {}", err);
-                    return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
-                }
-            }
-        };
-        let verify_result = match proof.verify(root.clone(), digests_with_positions) {
-            Ok(verify_result) => verify_result,
-            Err(err) => {
-                let errmsg = format!("failed to do verify the proof since {}", err);
-                return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
-            }
-        };
-        if verify_result {
-            trace!(
-                "peer {}: verify mmr proof passed, headers.length = {}",
-                self.peer,
-                headers.len()
-            );
-        } else {
-            error!(
-                "peer {}: verify mmr proof failed, headers.length = {}",
-                self.peer,
-                headers.len()
-            );
-            return StatusCode::FailedToVerifyTheProof.into();
+                .filter(|header| header.number() != tip_header.header().number()),
+        ) {
+            return status;
         }
-        let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
-        let expected_root_hash = root.calc_mmr_hash();
-        let check_extra_hash_result =
-            tip_header.is_valid(mmr_activated_epoch, Some(&expected_root_hash));
-        if check_extra_hash_result {
-            trace!(
-                "passed: verify extra hash for block-{} ({:#x})",
-                tip_header.header().number(),
-                tip_header.header().hash(),
-            );
-        } else {
-            error!(
-                "failed: verify extra hash for block-{} ({:#x})",
-                tip_header.header().number(),
-                tip_header.header().hash(),
-            );
-            let errmsg = "failed to do verify the extra hash";
-            return StatusCode::FailedToVerifyTheProof.with_context(errmsg);
-        };
 
         // Send get blocks
         let content = packed::GetBlocks::new_builder()
