@@ -11,7 +11,7 @@ use ckb_network::{
 
 pub(crate) struct MockProtocolContext {
     protocol: SupportProtocols,
-    sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
+    pub(crate) sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
     banned_peers: RefCell<Vec<(PeerIndex, Duration, String)>>,
     connected_peers: RefCell<HashSet<PeerIndex>>,
 }
@@ -28,17 +28,6 @@ impl MockProtocolContext {
             banned_peers: Default::default(),
             connected_peers: Default::default(),
         }
-    }
-
-    pub(crate) fn has_sent(
-        &self,
-        protocol_id: ProtocolId,
-        peer_index: PeerIndex,
-        data: P2pBytes,
-    ) -> bool {
-        self.sent_messages
-            .borrow()
-            .contains(&(protocol_id, peer_index, data))
     }
 
     pub(crate) fn has_banned(&self, target: PeerIndex) -> Option<(Duration, String)> {
