@@ -32,8 +32,9 @@ pub(crate) struct PeerState {
     last_state: Option<LastState>,
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
-    // The data must be packed::GetBlockProof molecule format
-    block_proof_requests: HashMap<Bytes, u64>,
+    // The key is the serialized packed::GetBlockProof message,
+    // the value is the timestamp and a flag indicates that corresponding tip block should be fetched or not.
+    block_proof_requests: HashMap<Bytes, (u64, bool)>,
 }
 
 #[derive(Clone)]
@@ -155,11 +156,14 @@ impl PeerState {
         self.block_proof_requests.len() < MAX_BLOCK_RPOOF_REQUESTS
     }
 
-    fn insert_block_proof_request(&mut self, request: packed::GetBlockProof) {
+    fn insert_block_proof_request(&mut self, request: packed::GetBlockProof, fetch_tip: bool) {
         self.block_proof_requests
-            .insert(request.as_bytes(), unix_time_as_millis());
+            .insert(request.as_bytes(), (unix_time_as_millis(), fetch_tip));
     }
-    fn remove_block_proof_request(&mut self, request: &packed::GetBlockProof) -> Option<u64> {
+    fn remove_block_proof_request(
+        &mut self,
+        request: &packed::GetBlockProof,
+    ) -> Option<(u64, bool)> {
         self.block_proof_requests.remove(&request.as_bytes())
     }
 
@@ -219,16 +223,17 @@ impl Peers {
         &self,
         index: PeerIndex,
         request: packed::GetBlockProof,
+        fetch_tip: bool,
     ) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.insert_block_proof_request(request);
+            peer.state.insert_block_proof_request(request, fetch_tip);
         }
     }
     pub(crate) fn remove_block_proof_request(
         &self,
         index: PeerIndex,
         request: &packed::GetBlockProof,
-    ) -> Option<u64> {
+    ) -> Option<(u64, bool)> {
         self.inner
             .get_mut(&index)
             .and_then(|mut peer| peer.state.remove_block_proof_request(request))
@@ -242,7 +247,7 @@ impl Peers {
                 if item.value().state.block_proof_requests.len() > MAX_BLOCK_RPOOF_REQUESTS {
                     return Some(*item.key());
                 }
-                for timestamp in item.value().state.block_proof_requests.values() {
+                for (timestamp, _) in item.value().state.block_proof_requests.values() {
                     if now - timestamp > GET_BLOCK_PROOF_TIMEOUT {
                         return Some(*item.key());
                     }
