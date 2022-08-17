@@ -12,7 +12,7 @@ use ckb_network::{
 pub(crate) struct MockProtocolContext {
     protocol: SupportProtocols,
     pub(crate) sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
-    banned_peers: RefCell<Vec<(PeerIndex, Duration, String)>>,
+    pub(crate) banned_peers: RefCell<Vec<(PeerIndex, Duration, String)>>,
     connected_peers: RefCell<HashSet<PeerIndex>>,
 }
 

@@ -59,18 +59,19 @@ impl<'a> BlockFiltersProcess<'a> {
             );
         } else {
             let filters_count = block_filters.filters().len();
-            if filters_count == 0 {
-                info!("no new filters, ignore peer: {}", self.peer);
-                return Status::ok();
-            }
-
             let blocks_count = block_filters.block_hashes().len();
+
             if filters_count != blocks_count {
                 let error_message = format!(
                     "filters length ({}) not equal to block_hashes length ({})",
                     filters_count, blocks_count
                 );
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
+            }
+
+            if filters_count == 0 {
+                info!("no new filters, ignore peer: {}", self.peer);
+                return Status::ok();
             }
 
             if prove_state_block_number < start_number {
