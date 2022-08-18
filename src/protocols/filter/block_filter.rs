@@ -10,7 +10,7 @@ use std::sync::RwLock;
 use std::time::Instant;
 use std::{sync::Arc, time::Duration};
 
-const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
+pub(crate) const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
 const GET_BLOCK_FILTERS_TIMEOUT: Duration = Duration::from_secs(15);
 
 pub struct PendingGetBlockFiltersPeer {

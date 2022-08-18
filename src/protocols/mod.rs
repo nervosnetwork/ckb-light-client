@@ -8,6 +8,11 @@ mod relayer;
 mod status;
 mod synchronizer;
 
+#[cfg(test)]
+pub(crate) use filter::GET_BLOCK_FILTERS_TOKEN;
+#[cfg(test)]
+pub(crate) use light_client::{LastState, ProveRequest, ProveState};
+
 pub(crate) use filter::FilterProtocol;
 pub(crate) use light_client::{LightClientProtocol, Peers};
 pub(crate) use relayer::{PendingTxs, RelayProtocol};

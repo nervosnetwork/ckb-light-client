@@ -59,12 +59,8 @@ impl<'a> BlockFiltersProcess<'a> {
             );
         } else {
             let filters_count = block_filters.filters().len();
-            if filters_count == 0 {
-                info!("no new filters, ignore peer: {}", self.peer);
-                return Status::ok();
-            }
-
             let blocks_count = block_filters.block_hashes().len();
+
             if filters_count != blocks_count {
                 let error_message = format!(
                     "filters length ({}) not equal to block_hashes length ({})",
@@ -73,7 +69,11 @@ impl<'a> BlockFiltersProcess<'a> {
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
             }
 
-            // send GetBlockProof message to peer
+            if filters_count == 0 {
+                info!("no new filters, ignore peer: {}", self.peer);
+                return Status::ok();
+            }
+
             if prove_state_block_number < start_number {
                 warn!(
                     "ignoring, peer {} prove_state_block_number {} is smaller than start_number {}",
@@ -88,6 +88,8 @@ impl<'a> BlockFiltersProcess<'a> {
                 self.peer,
                 possible_match_blocks.len()
             );
+
+            // send GetBlockProof message to peer
             if !possible_match_blocks.is_empty() {
                 if !peer_state.can_insert_block_proof_request() {
                     warn!(
