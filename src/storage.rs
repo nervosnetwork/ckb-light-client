@@ -95,8 +95,8 @@ impl Storage {
                 .put_kv(genesis_block_key, genesis_hash_and_txs_hash.as_slice())
                 .expect("batch put should be ok");
             batch.commit().expect("batch commit should be ok");
+            self.update_last_state(&U256::zero(), &block.header());
         }
-        self.update_last_state(&U256::zero(), &block.header());
     }
 
     fn get_genesis_block(&self) -> Block {
