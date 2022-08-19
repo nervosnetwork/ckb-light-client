@@ -1,13 +1,14 @@
 use std::collections::HashSet;
 
 use ckb_types::{core::BlockNumber, U256};
-use log::trace;
+use log::{trace, warn};
 use numext_fixed_uint::{prelude::UintConvert as _, U512};
 use rand::{thread_rng, Rng as _};
 
 use crate::protocols::LAST_N_BLOCKS;
 
 const C_FRACTION: f64 = 0.5;
+const LAMBDA: u32 = 50;
 
 // Since `log(2**32,10) = 9.63`.
 const RATIO_SCALE_FACTOR: u32 = 1_000_000_000;
@@ -94,7 +95,7 @@ pub(crate) fn sample_blocks(
 ) -> (U256, Vec<U256>) {
     let blocks_count = last_number - start_number;
     let k = estimate_k(LAST_N_BLOCKS, blocks_count, C_FRACTION);
-    let samples_count = estimate_samples_count(blocks_count, LAST_N_BLOCKS, k);
+    let samples_count = estimate_samples_count(blocks_count, LAST_N_BLOCKS, k, LAMBDA);
 
     let delta = C_FRACTION.powf(k);
     let difficulty_range = last_difficulty - start_difficulty;
@@ -142,13 +143,22 @@ pub(crate) fn estimate_k(l: BlockNumber, n: BlockNumber, c: f64) -> f64 {
     ((l as f64) / (n as f64)).log(c)
 }
 
-// Estimate the samples count (ref: lemma 2 in section 5.3 of [FlyClient: Super-Light Clients for Cryptocurrencies]).
+// Estimate the samples count (ref: section 5.4 in [FlyClient: Super-Light Clients for Cryptocurrencies]).
+//
+// - Let
+//   - $m$ denote the total number of blocks which used to prove the chain root is valid.
+//   - $p$ denote the probability of catching the adversary with a single sample.
+//   - $p_{m}$ denote the probability of failure, i.e., not catching the optimal adversary after $m$ independent queries.
+// - So $p_{m} = (1 - p)^{m}$.
+// - Since $p = \frac{1}{k}$ (ref: theorem 2 in section 5.4 of [FlyClient: Super-Light Clients for Cryptocurrencies]),
+//   if we want $p_{m} \le 2^{-\lambda}$, then $m \ge \frac{\lambda}{\log_{\frac{1}{2}} {(1 - \frac{1}{k})}}$.
 //
 // [FlyClient: Super-Light Clients for Cryptocurrencies]: https://eprint.iacr.org/2019/226.pdf
 pub(crate) fn estimate_samples_count(
     blocks_count: BlockNumber,
     last_n_blocks: BlockNumber,
     k: f64,
+    lambda: u32,
 ) -> BlockNumber {
     if blocks_count <= last_n_blocks {
         trace!(
@@ -158,6 +168,32 @@ pub(crate) fn estimate_samples_count(
         );
         0
     } else {
-        (k * (blocks_count as f64).log10()) as BlockNumber
+        let m = (f64::from(lambda) / ((1.0 - 1.0 / k).log(0.5))).ceil() as BlockNumber;
+        if m <= last_n_blocks {
+            trace!(
+                "sampling: the estimated samples count ({}<={}) is too small",
+                m,
+                last_n_blocks
+            );
+            0
+        } else {
+            debug_assert!(
+                m <= blocks_count,
+                "sampling: the estimated samples count ({}>{}) is too bigger",
+                m,
+                blocks_count
+            );
+            if m > blocks_count {
+                // This branch should be unreachable.
+                // For safety, we return an acceptable value.
+                warn!(
+                    "sampling: the estimated samples count ({}>{}) is too bigger",
+                    m, blocks_count
+                );
+                blocks_count - last_n_blocks
+            } else {
+                m - last_n_blocks
+            }
+        }
     }
 }

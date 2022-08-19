@@ -50,7 +50,7 @@ fn test_multiply() {
 fn test_estimate_samples_count_when_blocks_count_le_last_n_blocks() {
     for last_n_blocks in 1..100 {
         for blocks_count in 1..=last_n_blocks {
-            let samples_count = estimate_samples_count(blocks_count, last_n_blocks, 1.0);
+            let samples_count = estimate_samples_count(blocks_count, last_n_blocks, 1.0, 50);
             assert_eq!(
                 samples_count, 0,
                 "samples count should be zero when \
@@ -63,48 +63,49 @@ fn test_estimate_samples_count_when_blocks_count_le_last_n_blocks() {
 
 #[test]
 fn test_estimate_k_and_samples_count() {
+    let lambda = 50;
     let testcases = [
         // l = 100, c = 0.5
         (
             (100, 0.5),
             vec![
-                (1_000, (3.322, 9)),
-                (10_000, (6.644, 26)),
-                (100_000, (9.966, 49)),
-                (1_000_000, (13.288, 79)),
-                (2_000_000, (14.288, 90)),
-                (4_000_000, (15.288, 100)),
-                (6_000_000, (15.873, 107)),
-                (8_000_000, (16.288, 112)),
-                (10_000_000, (16.610, 116)),
-                (100_000_000, (19.932, 159)),
-                (1_000_000_000, (23.253, 209)),
+                (1_000, (3.322, 0)),
+                (10_000, (6.644, 113)),
+                (100_000, (9.966, 228)),
+                (1_000_000, (13.288, 343)),
+                (2_000_000, (14.288, 378)),
+                (4_000_000, (15.288, 413)),
+                (6_000_000, (15.873, 433)),
+                (8_000_000, (16.288, 447)),
+                (10_000_000, (16.610, 459)),
+                (100_000_000, (19.932, 574)),
+                (1_000_000_000, (23.253, 689)),
             ],
         ),
         // l = 500, c = 0.5
         (
             (500, 0.5),
             vec![
-                (1_000, (1.000, 3)),
-                (10_000, (4.322, 17)),
-                (100_000, (7.644, 38)),
-                (1_000_000, (10.966, 65)),
-                (10_000_000, (14.288, 100)),
-                (100_000_000, (17.610, 140)),
-                (1_000_000_000, (20.932, 188)),
+                (1_000, (1.000, 0)),
+                (10_000, (4.322, 0)),
+                (100_000, (7.644, 0)),
+                (1_000_000, (10.966, 0)),
+                (10_000_000, (14.288, 0)),
+                (100_000_000, (17.610, 93)),
+                (1_000_000_000, (20.932, 208)),
             ],
         ),
         // l = 100, c = 0.9
         (
             (100, 0.9),
             vec![
-                (1_000, (21.854, 65)),
-                (10_000, (43.709, 174)),
-                (100_000, (65.563, 327)),
-                (1_000_000, (87.417, 524)),
-                (10_000_000, (109.272, 764)),
-                (100_000_000, (131.126, 1049)),
-                (1_000_000_000, (152.980, 1376)),
+                (1_000, (21.854, 640)),
+                (10_000, (43.709, 1398)),
+                (100_000, (65.563, 2155)),
+                (1_000_000, (87.417, 2913)),
+                (10_000_000, (109.272, 3670)),
+                (100_000_000, (131.126, 4428)),
+                (1_000_000_000, (152.980, 5185)),
             ],
         ),
     ];
@@ -115,14 +116,14 @@ fn test_estimate_k_and_samples_count() {
             let k_is_same = k_difference.abs() < 0.001;
             assert!(
                 k_is_same,
-                "estimate k, expect {:.3} but got {:.3} (l: {}, n: {}, c:{})",
-                k_expected, k_actual, l, n, c,
+                "estimate k, expect {:.3} but got {:.3} (l: {}, n: {}, c:{}, lambda: {})",
+                k_expected, k_actual, l, n, c, lambda
             );
-            let sc_actual = estimate_samples_count(n, l, k_actual);
+            let sc_actual = estimate_samples_count(n, l, k_actual, lambda);
             assert_eq!(
                 sc_expected, sc_actual,
-                "estimate samples count, expect {} but got {} (l: {}, n: {}, c:{})",
-                sc_expected, sc_actual, l, n, c,
+                "estimate samples count, expect {} but got {} (l: {}, n: {}, c:{}, lambda: {})",
+                sc_expected, sc_actual, l, n, c, lambda
             );
         }
     }
@@ -159,11 +160,15 @@ fn test_sample_blocks() {
         ),
         (
             (1000, u256!("0x10000"), 2000, u256!("0x20000")),
-            (u256!("0x1e666"), 9),
+            (u256!("0x1e666"), 0),
+        ),
+        (
+            (1000, u256!("0x10000"), 5000, u256!("0x50000")),
+            (u256!("0x4e666"), 67),
         ),
         (
             (1000, u256!("0x10000"), 10000, u256!("0x100000")),
-            (u256!("0xfd555"), 25),
+            (u256!("0xfd555"), 108),
         ),
     ];
     for (inputs, expected) in testcases {
