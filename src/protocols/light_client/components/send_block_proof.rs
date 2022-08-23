@@ -52,12 +52,11 @@ impl<'a> SendBlockProofProcess<'a> {
             .block_hashes(response_hashes.pack())
             .tip_hash(tip_header.header().hash())
             .build();
-        if self
+        let request = self
             .protocol
             .peers()
-            .remove_block_proof_request(self.peer, &expected_request)
-            .is_none()
-        {
+            .remove_block_proof_request(self.peer, &expected_request);
+        if request.is_none() {
             error!(
                 "peer {}: SendBlockProof response without a GetBlockProof request",
                 self.peer
@@ -79,16 +78,24 @@ impl<'a> SendBlockProofProcess<'a> {
             &tip_header,
             self.message.root().to_entity(),
             self.message.proof(),
-            headers
-                .iter()
-                .filter(|header| header.number() != tip_header.header().number()),
+            headers.iter(),
         ) {
             return status;
         }
 
         // Send get blocks
         let content = packed::GetBlocks::new_builder()
-            .block_hashes(headers.iter().map(|header| header.hash()).pack())
+            .block_hashes(
+                headers
+                    .iter()
+                    .chain(if request.expect("checked Some").1 {
+                        Some(tip_header.header())
+                    } else {
+                        None
+                    })
+                    .map(|header| header.hash())
+                    .pack(),
+            )
             .build();
         let message = packed::SyncMessage::new_builder().set(content).build();
 
