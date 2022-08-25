@@ -27,8 +27,8 @@ pub struct Peer {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LastState {
-    pub tip_header: VerifiableHeader,
-    pub total_difficulty: U256,
+    pub(crate) tip_header: VerifiableHeader,
+    pub(crate) total_difficulty: U256,
 }
 
 #[derive(Clone, Default)]
@@ -117,6 +117,19 @@ impl ProveState {
         }
     }
 
+    pub(crate) fn new_child(&self, child_last_state: LastState) -> Self {
+        let parent_header = self.get_last_header().header();
+        let mut last_headers = self.last_headers.clone();
+        let reorg_last_headers = self.reorg_last_headers.clone();
+        last_headers.remove(0);
+        last_headers.push(parent_header.clone());
+        Self {
+            last_state: child_last_state,
+            reorg_last_headers,
+            last_headers,
+        }
+    }
+
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
         &self.last_state.tip_header
     }
@@ -176,13 +189,12 @@ impl PeerState {
         self.last_state = Some(last_state);
     }
 
-    fn submit_prove_request(&mut self, request: ProveRequest) {
-        self.prove_request = Some(request);
+    fn update_prove_request(&mut self, request: Option<ProveRequest>) {
+        self.prove_request = request;
     }
 
-    fn commit_prove_state(&mut self, state: ProveState) {
+    fn update_prove_state(&mut self, state: ProveState) {
         self.prove_state = Some(state);
-        self.prove_request = None;
     }
 }
 
@@ -276,17 +288,28 @@ impl Peers {
     pub(crate) fn submit_prove_request(&self, index: PeerIndex, request: ProveRequest) {
         let now = unix_time_as_millis();
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.submit_prove_request(request);
+            peer.state.update_prove_request(Some(request));
             peer.update_timestamp = now;
         }
     }
 
+    /// Update the prove state without any requests.
+    pub(crate) fn update_prove_state(&self, index: PeerIndex, state: ProveState) {
+        let now = unix_time_as_millis();
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state.update_prove_state(state);
+            peer.update_timestamp = now;
+        }
+    }
+
+    /// Commit the prove state from the previous request.
     pub(crate) fn commit_prove_state(&self, index: PeerIndex, state: ProveState) {
         *self.last_headers.write().expect("poisoned") = state.get_last_headers().to_vec();
 
         let now = unix_time_as_millis();
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.commit_prove_state(state);
+            peer.state.update_prove_state(state);
+            peer.state.update_prove_request(None);
             peer.update_timestamp = now;
         }
     }

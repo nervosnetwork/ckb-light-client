@@ -66,23 +66,18 @@ impl<'a> SendBlockProofProcess<'a> {
         }
 
         // Check PoW
-        if let Err(status) = self
+        return_if_failed!(self
             .protocol
-            .check_pow_for_headers(headers.iter().chain(Some(tip_header.header())))
-        {
-            return status;
-        }
+            .check_pow_for_headers(headers.iter().chain(Some(tip_header.header()))));
 
         // Verify the proof
-        if let Err(status) = verify_mmr_proof(
+        return_if_failed!(verify_mmr_proof(
             self.protocol.mmr_activated_epoch(),
             &tip_header,
             self.message.root().to_entity(),
             self.message.proof(),
             headers.iter(),
-        ) {
-            return status;
-        }
+        ));
 
         // Send get blocks
         let block_hashes: Vec<packed::Byte32> = headers

@@ -23,8 +23,10 @@ pub enum StatusCode {
     /// Unexpected light-client protocol message.
     UnexpectedProtocolMessage = 401,
 
+    /// The peer state is not found.
+    PeerStateIsNotFound = 411,
     /// The last state sent from server is invalid.
-    InvalidLastState = 411,
+    InvalidLastState = 412,
 
     /// Receives a proof but the peer isn't waiting for a proof.
     PeerIsNotOnProcess = 421,
@@ -58,6 +60,15 @@ pub enum StatusCode {
 pub struct Status {
     code: StatusCode,
     context: Option<String>,
+}
+
+macro_rules! return_if_failed {
+    ($result:expr) => {
+        match $result {
+            Ok(data) => data,
+            Err(status) => return status,
+        }
+    };
 }
 
 impl PartialEq for Status {

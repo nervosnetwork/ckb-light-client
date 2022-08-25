@@ -2,10 +2,12 @@ use std::time::Duration;
 
 use ckb_types::core::BlockNumber;
 
+#[macro_use]
+mod status;
+
 mod filter;
 mod light_client;
 mod relayer;
-mod status;
 mod synchronizer;
 
 #[cfg(test)]

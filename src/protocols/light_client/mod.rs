@@ -150,7 +150,9 @@ impl LightClientProtocol {
     }
 
     fn get_last_state(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
-        let content = packed::GetLastState::new_builder().build();
+        let content = packed::GetLastState::new_builder()
+            .subscribe(true.pack())
+            .build();
         let message = packed::LightClientMessage::new_builder()
             .set(content)
             .build();
@@ -212,6 +214,23 @@ impl LightClientProtocol {
         }
     }
 
+    /// Update the prove state to the child block.
+    /// - Update the peer's cache.
+    /// - Try to update the storage without caring about fork.
+    fn update_prove_state_to_child(&self, peer: PeerIndex, new_prove_state: ProveState) {
+        let (old_total_difficulty, _) = self.storage.get_last_state();
+        if new_prove_state.get_total_difficulty() > &old_total_difficulty {
+            self.storage.update_last_state(
+                new_prove_state.get_total_difficulty(),
+                &new_prove_state.get_last_header().header().data(),
+            );
+        }
+        self.peers().update_prove_state(peer, new_prove_state);
+    }
+
+    /// Update the prove state base on the previous request.
+    /// - Update the peer's cache.
+    /// - Try to update the storage and handle potential fork.
     fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) {
         let (old_total_difficulty, _) = self.storage.get_last_state();
         if new_prove_state.get_total_difficulty() > &old_total_difficulty {
@@ -250,8 +269,8 @@ impl LightClientProtocol {
                 new_prove_state.get_total_difficulty(),
                 &new_prove_state.get_last_header().header().data(),
             );
-            self.peers().commit_prove_state(peer, new_prove_state);
         }
+        self.peers().commit_prove_state(peer, new_prove_state);
     }
 }
 
@@ -271,6 +290,18 @@ impl LightClientProtocol {
         } else {
             1
         }
+    }
+
+    pub(crate) fn check_pow_for_header(&self, header: &HeaderView) -> Result<(), Status> {
+        if !self.consensus.pow_engine().verify(&header.data()) {
+            let errmsg = format!(
+                "failed to verify nonce for block#{}, hash: {:#x}",
+                header.number(),
+                header.hash()
+            );
+            return Err(StatusCode::InvalidNonce.with_context(errmsg));
+        }
+        Ok(())
     }
 
     pub(crate) fn check_pow_for_headers<'a, T: Iterator<Item = &'a HeaderView>>(
@@ -293,6 +324,14 @@ impl LightClientProtocol {
 
     pub(crate) fn peers(&self) -> &Peers {
         &self.peers
+    }
+
+    pub(crate) fn get_peer_state(&self, peer: &PeerIndex) -> Result<PeerState, Status> {
+        if let Some(state) = self.peers().get_state(peer) {
+            Ok(state)
+        } else {
+            Err(StatusCode::PeerStateIsNotFound.into())
+        }
     }
 
     fn check_get_block_proof_requests(&self, nc: &dyn CKBProtocolContext) {

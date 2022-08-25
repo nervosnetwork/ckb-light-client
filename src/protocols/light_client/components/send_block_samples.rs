@@ -43,11 +43,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
-        let peer_state = self
-            .protocol
-            .peers()
-            .get_state(&self.peer)
-            .expect("checked: should have state");
+        let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
         let prove_request = if let Some(prove_request) = peer_state.get_prove_request() {
             prove_request
@@ -61,14 +57,12 @@ impl<'a> SendBlockSamplesProcess<'a> {
         let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
 
         // Check if the response is match the request.
-        if let Err(status) = check_if_response_is_matched(
+        return_if_failed!(check_if_response_is_matched(
             mmr_activated_epoch,
             prove_request.get_request(),
             self.message.sampled_headers(),
             self.message.last_n_headers(),
-        ) {
-            return status;
-        }
+        ));
 
         let reorg_last_n_headers = convert_to_views(self.message.reorg_last_n_headers());
         let sampled_headers = convert_to_views(self.message.sampled_headers());
@@ -82,14 +76,12 @@ impl<'a> SendBlockSamplesProcess<'a> {
         );
 
         // Check POW.
-        if let Err(status) = self.protocol.check_pow_for_headers(
+        return_if_failed!(self.protocol.check_pow_for_headers(
             reorg_last_n_headers
                 .iter()
                 .chain(sampled_headers.iter())
                 .chain(last_n_headers.iter()),
-        ) {
-            return status;
-        }
+        ));
 
         // Check tau with epoch difficulties of samples.
         let failed_to_verify_tau = if prove_request.if_skip_check_tau() {
@@ -137,15 +129,11 @@ impl<'a> SendBlockSamplesProcess<'a> {
         }
 
         // Check parent hashes for the continuous headers.
-        if let Err(status) = check_continuous_headers(&reorg_last_n_headers) {
-            return status;
-        }
-        if let Err(status) = check_continuous_headers(&last_n_headers) {
-            return status;
-        }
+        return_if_failed!(check_continuous_headers(&reorg_last_n_headers));
+        return_if_failed!(check_continuous_headers(&last_n_headers));
 
         // Verify MMR proof
-        if let Err(status) = verify_mmr_proof(
+        return_if_failed!(verify_mmr_proof(
             mmr_activated_epoch,
             last_header,
             self.message.root().to_entity(),
@@ -154,9 +142,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
                 .iter()
                 .chain(sampled_headers.iter())
                 .chain(last_n_headers.iter()),
-        ) {
-            return status;
-        }
+        ));
 
         // Check total difficulty.
         //
