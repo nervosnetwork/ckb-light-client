@@ -11,7 +11,7 @@ use ckb_types::{
     core::{BlockNumber, EpochNumber, HeaderView},
     packed,
     prelude::*,
-    utilities::merkle_mountain_range::VerifiableHeader,
+    utilities::{compact_to_difficulty, merkle_mountain_range::VerifiableHeader},
     U256,
 };
 use faketime::unix_time_as_millis;
@@ -50,12 +50,6 @@ impl CKBProtocolHandler for LightClientProtocol {
         nc.set_notify(
             constant::REFRESH_PEERS_DURATION,
             constant::REFRESH_PEERS_TOKEN,
-        )
-        .await
-        .expect("set_notify should be ok");
-        nc.set_notify(
-            constant::CHECK_GET_BLOCK_PROOFS_DURATION,
-            constant::CHECK_GET_BLOCK_PROOFS_TOKEN,
         )
         .await
         .expect("set_notify should be ok");
@@ -120,9 +114,6 @@ impl CKBProtocolHandler for LightClientProtocol {
             constant::REFRESH_PEERS_TOKEN => {
                 self.refresh_all_peers(nc.as_ref());
             }
-            constant::CHECK_GET_BLOCK_PROOFS_TOKEN => {
-                self.check_get_block_proof_requests(nc.as_ref());
-            }
             _ => unreachable!(),
         }
     }
@@ -178,40 +169,55 @@ impl LightClientProtocol {
             if is_proved {
                 return;
             }
+
+            // Skipped is the request is sent.
             let is_requested = peer_state
                 .get_prove_request()
                 .map(|inner| inner.is_same_as(tip_header, tip_total_difficulty))
                 .unwrap_or(false);
-
-            // Send the old request again.
             if is_requested {
-                let now = unix_time_as_millis();
-                self.peers().update_timestamp(peer, now);
-            } else if let Some(content) =
+                return;
+            }
+
+            if let Some(content) =
                 self.build_prove_request_content(&peer_state, tip_header, tip_total_difficulty)
             {
+                trace!("peer {}: send get block samples", peer);
+                let message = packed::LightClientMessage::new_builder()
+                    .set(content.clone())
+                    .build();
+                nc.reply(peer, &message);
+                let now = unix_time_as_millis();
+                self.peers().update_timestamp(peer, now);
                 let prove_request = ProveRequest::new(last_state.clone(), content);
-                self.peers().submit_prove_request(peer, prove_request);
+                self.peers().update_prove_request(peer, Some(prove_request));
             } else {
                 warn!("peer {}: build prove request failed", peer);
             }
         }
+    }
 
-        // Copy the updated peer state again
-        let peer_state = self
-            .peers()
-            .get_state(&peer)
-            .expect("checked: should have state");
-        if let Some(content) = peer_state
-            .get_prove_request()
-            .map(|request| request.get_request().to_owned())
-        {
-            trace!("peer {}: send get block samples", peer);
-            let message = packed::LightClientMessage::new_builder()
-                .set(content)
-                .build();
-            nc.reply(peer, &message);
+    /// Processes a new last state that received from a peer which has a fork chain.
+    fn process_last_state(
+        &self,
+        peer: PeerIndex,
+        last_header: VerifiableHeader,
+        chain_root: packed::HeaderDigest,
+    ) -> Result<(), Status> {
+        let chain_root_hash = chain_root.calc_mmr_hash();
+        if !last_header.is_valid(self.mmr_activated_epoch(), Some(&chain_root_hash)) {
+            return Err(StatusCode::InvalidLastState.into());
         }
+        let total_difficulty = {
+            let compact_target = last_header.header().compact_target();
+            let block_difficulty = compact_to_difficulty(compact_target);
+            let total_difficulty_before: U256 = chain_root.total_difficulty().unpack();
+            total_difficulty_before.saturating_add(&block_difficulty)
+        };
+        let last_state = LastState::new(last_header, total_difficulty);
+        trace!("peer {}: update last state", peer);
+        self.peers().update_last_state(peer, last_state);
+        Ok(())
     }
 
     /// Update the prove state to the child block.
@@ -334,29 +340,19 @@ impl LightClientProtocol {
         }
     }
 
-    fn check_get_block_proof_requests(&self, nc: &dyn CKBProtocolContext) {
-        for peer in self.peers().check_block_proof_requests() {
-            warn!(
-                "peer {}: too many inflight GetBlockProof requests or respond timeout",
-                peer
-            );
-            if let Err(err) = nc.disconnect(
-                peer,
-                "too many inflight GetBlockProof requests or respond timeout",
-            ) {
+    fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
+        let now = faketime::unix_time_as_millis();
+        for peer in self.peers().get_peers_which_have_timeout(now) {
+            warn!("peer {}: reach timeout", peer);
+            if let Err(err) = nc.disconnect(peer, "reach timeout") {
                 error!("disconnect peer({}) error: {}", peer, err);
             };
         }
-    }
-
-    fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
-        let now = faketime::unix_time_as_millis();
         let before = now - constant::REFRESH_PEERS_DURATION.as_millis() as u64;
         for peer in self.peers().get_peers_which_require_updating(before) {
             // TODO Different messages should have different timeouts.
             self.get_last_state(nc, peer);
             self.get_block_samples(nc, peer);
-            self.peers().update_timestamp(peer, now);
         }
     }
 

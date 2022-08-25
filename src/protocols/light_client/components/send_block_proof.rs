@@ -31,49 +31,59 @@ impl<'a> SendBlockProofProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
-        if self.message.as_slice() == packed::SendBlockProof::default().as_slice() {
-            // The tip_hash is not on the chain, just ignore the message and wait for timeout retry.
+        let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
+
+        let original_request = if let Some(original_request) = peer_state.get_block_proof_request()
+        {
+            original_request
+        } else {
+            error!("peer {} isn't waiting for a proof", self.peer);
+            return StatusCode::PeerIsNotOnProcess.into();
+        };
+
+        let received_last_header: VerifiableHeader = self.message.tip_header().to_entity().into();
+        let received_chain_root = self.message.root().to_entity();
+
+        if self.message.proof().is_empty() {
+            return_if_failed!(self.protocol.process_last_state(
+                self.peer,
+                received_last_header,
+                received_chain_root,
+            ));
+            self.protocol
+                .peers()
+                .update_block_proof_request(self.peer, None);
             return Status::ok();
         }
 
-        let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
         let headers: Vec<_> = self
             .message
             .headers()
             .iter()
             .map(|header| header.to_entity().into_view())
             .collect();
-
-        // check request match the response
-        let response_hashes = headers
+        let received_block_hashes = headers
             .iter()
             .map(|header| header.hash())
             .collect::<Vec<_>>();
-        let expected_request = packed::GetBlockProof::new_builder()
-            .block_hashes(response_hashes.pack())
-            .tip_hash(tip_header.header().hash())
-            .build();
-        let request = self
-            .protocol
-            .peers()
-            .remove_block_proof_request(self.peer, &expected_request);
-        if request.is_none() {
-            error!(
-                "peer {}: SendBlockProof response without a GetBlockProof request",
-                self.peer
-            );
-            return StatusCode::PeerIsNotOnProcess.into();
+
+        if !original_request.is_same_as(
+            &received_last_header.header().hash(),
+            &received_block_hashes,
+        ) {
+            error!("peer {} send an unknown proof", self.peer);
+            return StatusCode::InvalidSendBlockProof.into();
         }
 
         // Check PoW
         return_if_failed!(self
             .protocol
-            .check_pow_for_headers(headers.iter().chain(Some(tip_header.header()))));
+            .check_pow_for_headers(headers.iter().chain(Some(received_last_header.header()))));
 
         // Verify the proof
         return_if_failed!(verify_mmr_proof(
             self.protocol.mmr_activated_epoch(),
-            &tip_header,
+            &received_last_header,
             self.message.root().to_entity(),
             self.message.proof(),
             headers.iter(),
@@ -82,8 +92,8 @@ impl<'a> SendBlockProofProcess<'a> {
         // Send get blocks
         let block_hashes: Vec<packed::Byte32> = headers
             .iter()
-            .chain(if request.expect("checked Some").1 {
-                Some(tip_header.header())
+            .chain(if original_request.if_fetch_tip() {
+                Some(received_last_header.header())
             } else {
                 None
             })
@@ -106,6 +116,10 @@ impl<'a> SendBlockProofProcess<'a> {
                 return StatusCode::Network.with_context(error_message);
             }
         }
+
+        self.protocol
+            .peers()
+            .update_block_proof_request(self.peer, None);
         Status::ok()
     }
 }

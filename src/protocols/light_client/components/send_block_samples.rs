@@ -13,7 +13,7 @@ use ckb_types::{
     },
     U256,
 };
-use log::{error, trace};
+use log::{error, trace, warn};
 
 use super::super::{
     peers::ProveRequest, prelude::*, LastState, LightClientProtocol, ProveState, Status, StatusCode,
@@ -45,21 +45,40 @@ impl<'a> SendBlockSamplesProcess<'a> {
     pub(crate) fn execute(self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
-        let prove_request = if let Some(prove_request) = peer_state.get_prove_request() {
-            prove_request
+        let original_request = if let Some(original_request) = peer_state.get_prove_request() {
+            original_request
         } else {
-            error!("peer {} isn't waiting for a proof", self.peer);
-            return StatusCode::PeerIsNotOnProcess.into();
+            warn!("peer {} isn't waiting for a proof", self.peer);
+            return Status::ok();
         };
-        let last_header = prove_request.get_last_header();
-        let last_total_difficulty = prove_request.get_total_difficulty();
+
+        let last_header = original_request.get_last_header();
+
+        let received_last_header: VerifiableHeader = self.message.last_header().to_entity().into();
+        let received_chain_root = self.message.root().to_entity();
+
+        // Update the last state if the response contains a new one.
+        if last_header.header().hash() != received_last_header.header().hash() {
+            if self.message.proof().is_empty() {
+                return_if_failed!(self.protocol.process_last_state(
+                    self.peer,
+                    received_last_header,
+                    received_chain_root,
+                ));
+                self.protocol.get_block_samples(self.nc, self.peer);
+            } else {
+                warn!("peer {} send an unknown proof", self.peer);
+            }
+            return Status::ok();
+        }
 
         let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
+        let last_total_difficulty = original_request.get_total_difficulty();
 
         // Check if the response is match the request.
         return_if_failed!(check_if_response_is_matched(
             mmr_activated_epoch,
-            prove_request.get_request(),
+            original_request.get_content(),
             self.message.sampled_headers(),
             self.message.last_n_headers(),
         ));
@@ -84,7 +103,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
         ));
 
         // Check tau with epoch difficulties of samples.
-        let failed_to_verify_tau = if prove_request.if_skip_check_tau() {
+        let failed_to_verify_tau = if original_request.if_skip_check_tau() {
             trace!("peer {} skip checking TAU since the flag is set", self.peer);
             false
         } else if !sampled_headers.is_empty() {
@@ -115,7 +134,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
 
         // The last header in `reorg_last_n_headers` should be continuous.
         if let Some(header) = reorg_last_n_headers.iter().last() {
-            let start_number: BlockNumber = prove_request.get_request().start_number().unpack();
+            let start_number: BlockNumber = original_request.get_content().start_number().unpack();
             if header.number() != start_number - 1 {
                 let errmsg = format!(
                     "failed to verify reorg last n headers \
@@ -136,7 +155,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
         return_if_failed!(verify_mmr_proof(
             mmr_activated_epoch,
             last_header,
-            self.message.root().to_entity(),
+            received_chain_root,
             self.message.proof(),
             reorg_last_n_headers
                 .iter()
@@ -182,7 +201,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
                 prove_request.skip_check_tau();
                 self.protocol
                     .peers()
-                    .submit_prove_request(self.peer, prove_request);
+                    .update_prove_request(self.peer, Some(prove_request));
 
                 let message = packed::LightClientMessage::new_builder()
                     .set(content)
@@ -194,7 +213,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
         } else {
             // Commit the status if all checks are passed.
             let prove_state = ProveState::new_from_request(
-                prove_request.to_owned(),
+                original_request.to_owned(),
                 reorg_last_n_headers,
                 last_n_headers,
             );

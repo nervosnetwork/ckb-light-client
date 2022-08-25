@@ -1,3 +1,5 @@
+#![allow(clippy::mutable_key_type)]
+
 #[cfg(test)]
 #[macro_use]
 mod tests;
