@@ -41,7 +41,6 @@ pub struct LightClientProtocol {
     storage: Storage,
     peers: Arc<Peers>,
     consensus: Consensus,
-    best: Option<(PeerIndex, ProveState)>,
 }
 
 #[async_trait]
@@ -84,8 +83,6 @@ impl CKBProtocolHandler for LightClientProtocol {
         peer: PeerIndex,
         data: Bytes,
     ) {
-        trace!("LightClient.received peer={}", peer);
-
         let msg = match packed::LightClientMessageReader::from_slice(&data) {
             Ok(msg) => msg.to_enum(),
             _ => {
@@ -104,15 +101,7 @@ impl CKBProtocolHandler for LightClientProtocol {
 
         let item_name = msg.item_name();
         let status = self.try_process(nc.as_ref(), peer, msg);
-        if status.is_ok()
-            && matches!(
-                msg,
-                packed::LightClientMessageUnionReader::SendBlockSamples(_)
-            )
-        {
-            self.update_best_state();
-        }
-
+        trace!("LightClient.received peer={}, message={}", peer, item_name);
         if let Some(ban_time) = status.should_ban() {
             error!(
                 "process {} from {}, ban {:?} since result is {}",
@@ -222,6 +211,48 @@ impl LightClientProtocol {
             nc.reply(peer, &message);
         }
     }
+
+    fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) {
+        let (old_total_difficulty, _) = self.storage.get_last_state();
+        if new_prove_state.get_total_difficulty() > &old_total_difficulty {
+            if let Some(state) = self.peers().get_state(&peer) {
+                if let Some(old_prove_state) = state.get_prove_state() {
+                    let reorg_last_headers = new_prove_state.get_reorg_last_headers();
+                    if !reorg_last_headers.is_empty() {
+                        let last_headers: HashMap<_, _> = old_prove_state
+                            .get_last_headers()
+                            .iter()
+                            .map(|header| (header.number(), header.hash()))
+                            .collect();
+                        let fork_number =
+                            reorg_last_headers.iter().rev().find_map(|reorg_header| {
+                                let number = reorg_header.number();
+                                last_headers
+                                    .get(&number)
+                                    .map(|hash| {
+                                        if reorg_header.hash().eq(hash) {
+                                            None
+                                        } else {
+                                            Some(number)
+                                        }
+                                    })
+                                    .unwrap_or(Some(number))
+                            });
+                        if let Some(to_number) = fork_number {
+                            trace!("rollback to block#{}", to_number);
+                            self.storage.rollback_to_block(to_number);
+                        }
+                    }
+                }
+            }
+
+            self.storage.update_last_state(
+                new_prove_state.get_total_difficulty(),
+                &new_prove_state.get_last_header().header().data(),
+            );
+            self.peers().commit_prove_state(peer, new_prove_state);
+        }
+    }
 }
 
 impl LightClientProtocol {
@@ -230,7 +261,6 @@ impl LightClientProtocol {
             storage,
             peers,
             consensus,
-            best: None,
         }
     }
 
@@ -287,65 +317,6 @@ impl LightClientProtocol {
             self.get_block_samples(nc, peer);
             self.peers().update_timestamp(peer, now);
         }
-        self.update_best_state();
-    }
-
-    fn update_best_state(&mut self) {
-        let last_best = self.best.take();
-        let mut best: Option<(PeerIndex, ProveState)> = None;
-        for (curr_peer, curr_state) in self.peers().get_peers_which_are_proved() {
-            if best.is_none() {
-                best = Some((curr_peer, curr_state));
-            } else {
-                let best_total_difficulty = best
-                    .as_ref()
-                    .map(|(_, state)| state.get_total_difficulty())
-                    .expect("checkd: best is not None");
-                let curr_total_difficulty = curr_state.get_total_difficulty();
-                if curr_total_difficulty > best_total_difficulty {
-                    best = Some((curr_peer, curr_state));
-                }
-            }
-        }
-        if let Some((_, prove_state)) = best.as_ref() {
-            let reorg_last_headers = prove_state.get_reorg_last_headers();
-            if !reorg_last_headers.is_empty() {
-                if let Some((_, last_prove_state)) = last_best.as_ref() {
-                    let last_headers: HashMap<_, _> = last_prove_state
-                        .get_last_headers()
-                        .iter()
-                        .map(|header| (header.number(), header))
-                        .collect();
-                    for reorg_header in reorg_last_headers.iter().rev() {
-                        if last_headers
-                            .get(&reorg_header.number())
-                            .map(|header| *header != reorg_header)
-                            .unwrap_or(true)
-                        {
-                            trace!("rollback block#{}", reorg_header.number());
-                            self.storage
-                                .rollback_filtered_transactions(reorg_header.number());
-                        } else {
-                            break;
-                        }
-                    }
-                } else {
-                    let tip_number: u64 = self.storage.get_tip_header().raw().number().unpack();
-                    for i in 0..LAST_N_BLOCKS {
-                        if tip_number < 1 + i {
-                            break;
-                        }
-                        trace!("rollback block#{}", tip_number - i);
-                        self.storage.rollback_filtered_transactions(tip_number - i);
-                    }
-                }
-            }
-            self.storage.update_last_state(
-                prove_state.get_total_difficulty(),
-                &prove_state.get_last_header().header().data(),
-            );
-        }
-        self.best = best;
     }
 
     fn build_prove_request_content(
@@ -391,6 +362,7 @@ impl LightClientProtocol {
                 .last_hash(last_header.header().hash())
                 .start_hash(start_hash)
                 .start_number(start_number.pack())
+                .last_n_blocks(LAST_N_BLOCKS.pack())
                 .difficulty_boundary(difficulty_boundary.pack())
                 .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
                 .build(),

@@ -212,9 +212,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
                 reorg_last_n_headers,
                 last_n_headers,
             );
-            self.protocol
-                .peers()
-                .commit_prove_state(self.peer, prove_state);
+            self.protocol.commit_prove_state(self.peer, prove_state);
         }
 
         trace!("block proof verify passed");
@@ -484,8 +482,8 @@ impl EpochDifficultyTrendDetails {
 pub(crate) fn check_if_response_is_matched(
     mmr_activated_epoch: EpochNumber,
     prev_request: &packed::GetBlockSamples,
-    sampled_headers: packed::HeaderWithChainRootVecReader,
-    last_n_headers: packed::HeaderWithChainRootVecReader,
+    sampled_headers: packed::VerifiableHeaderWithChainRootVecReader,
+    last_n_headers: packed::VerifiableHeaderWithChainRootVecReader,
 ) -> Result<(), Status> {
     let difficulty_boundary: U256 = prev_request.difficulty_boundary().unpack();
     let mut difficulties: Vec<U256> = prev_request
@@ -502,10 +500,8 @@ pub(crate) fn check_if_response_is_matched(
             .next()
             .map(|inner| inner.to_entity())
             .expect("checked: first last-N header should be existed");
-        let verifiable_header = VerifiableHeader::new_from_header_with_chain_root(
-            first_last_n_header.clone(),
-            mmr_activated_epoch,
-        );
+        let (verifiable_header, chain_root) =
+            packed::VerifiableHeaderWithChainRoot::split(first_last_n_header);
         if !verifiable_header.is_valid(mmr_activated_epoch, None) {
             let header = verifiable_header.header();
             error!(
@@ -518,10 +514,9 @@ pub(crate) fn check_if_response_is_matched(
 
         // Calculate the total difficulty.
         let total_difficulty = {
-            let compact_target = first_last_n_header.header().raw().compact_target();
-            let block_difficulty = compact_to_difficulty(compact_target.unpack());
-            let total_difficulty_before: U256 =
-                first_last_n_header.chain_root().total_difficulty().unpack();
+            let compact_target = verifiable_header.header().compact_target();
+            let block_difficulty = compact_to_difficulty(compact_target);
+            let total_difficulty_before: U256 = chain_root.total_difficulty().unpack();
             total_difficulty_before.saturating_add(&block_difficulty)
         };
 
@@ -550,11 +545,8 @@ pub(crate) fn check_if_response_is_matched(
 
     // Check if the sampled headers are subject to requested difficulties distribution.
     for item in sampled_headers.iter() {
-        let header_with_chain_root = item.to_entity();
-        let verifiable_header = VerifiableHeader::new_from_header_with_chain_root(
-            header_with_chain_root.clone(),
-            mmr_activated_epoch,
-        );
+        let (verifiable_header, chain_root) =
+            packed::VerifiableHeaderWithChainRoot::split(item.to_entity());
         let header = verifiable_header.header();
 
         // Chain root for any sampled blocks should be valid.
@@ -567,12 +559,9 @@ pub(crate) fn check_if_response_is_matched(
             return Err(StatusCode::InvalidChainRootForSamples.into());
         }
 
-        let compact_target = header_with_chain_root.header().raw().compact_target();
-        let block_difficulty = compact_to_difficulty(compact_target.unpack());
-        let total_difficulty_lhs: U256 = header_with_chain_root
-            .chain_root()
-            .total_difficulty()
-            .unpack();
+        let compact_target = verifiable_header.header().compact_target();
+        let block_difficulty = compact_to_difficulty(compact_target);
+        let total_difficulty_lhs: U256 = chain_root.total_difficulty().unpack();
         let total_difficulty_rhs = total_difficulty_lhs.saturating_add(&block_difficulty);
 
         let mut is_valid = false;
@@ -607,7 +596,7 @@ pub(crate) fn check_if_response_is_matched(
     Ok(())
 }
 
-fn convert_to_views(headers: packed::HeaderWithChainRootVecReader) -> Vec<HeaderView> {
+fn convert_to_views(headers: packed::VerifiableHeaderWithChainRootVecReader) -> Vec<HeaderView> {
     headers
         .iter()
         .map(|header| header.header().to_entity().into_view())
