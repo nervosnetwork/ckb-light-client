@@ -2,8 +2,9 @@ use std::sync::Arc;
 
 use ckb_types::{
     core::{BlockNumber, EpochNumberWithFraction, HeaderBuilder},
+    packed,
     prelude::*,
-    utilities::merkle_mountain_range::VerifiableHeader,
+    utilities::{merkle_mountain_range::VerifiableHeader, DIFF_TWO},
     U256,
 };
 
@@ -19,6 +20,8 @@ fn build_prove_request_content() {
     let protocol = LightClientProtocol::new(storage.clone(), peers, consensus);
 
     let peer_state = PeerState::default();
+    let default_compact_target = DIFF_TWO;
+    let default_block_difficulty = 2u64;
     let last_number = 50;
     let last_total_difficulty = 500u64;
     let epoch_length = LAST_N_BLOCKS + last_number + 100;
@@ -30,38 +33,43 @@ fn build_prove_request_content() {
             .number(last_number.pack())
             .epoch(epoch.pack())
             .build();
-        let last_total_difficulty = U256::from(500u64);
+        let last_total_difficulty = U256::from(last_total_difficulty);
         storage.update_last_state(&last_total_difficulty, &header.data());
     }
 
     // Test different total difficulties.
     {
-        let verifiable_header = {
+        let header = {
             let new_last_number = last_number + 1;
             let epoch = EpochNumberWithFraction::new(0, new_last_number, epoch_length);
-            let header = HeaderBuilder::default()
+            HeaderBuilder::default()
                 .number(new_last_number.pack())
                 .epoch(epoch.pack())
-                .build();
-            VerifiableHeader::new(header, Default::default(), None)
+                .compact_target(default_compact_target.pack())
+                .build()
         };
-
         for diff in 1u64..10 {
-            let new_last_total_difficulty = U256::from(last_total_difficulty - diff);
-            let prove_request = protocol.build_prove_request_content(
-                &peer_state,
-                &verifiable_header,
-                &new_last_total_difficulty,
-            );
+            let new_last_total_difficulty =
+                U256::from(last_total_difficulty - default_block_difficulty - diff);
+            let parent_chain_root = packed::HeaderDigest::new_builder()
+                .total_difficulty(new_last_total_difficulty.pack())
+                .build();
+            let verifiable_header =
+                VerifiableHeader::new(header.clone(), Default::default(), None, parent_chain_root);
+            let prove_request =
+                protocol.build_prove_request_content(&peer_state, &verifiable_header);
             assert!(prove_request.is_none());
         }
         for diff in 0u64..10 {
-            let new_last_total_difficulty = U256::from(last_total_difficulty + diff);
-            let prove_request = protocol.build_prove_request_content(
-                &peer_state,
-                &verifiable_header,
-                &new_last_total_difficulty,
-            );
+            let new_last_total_difficulty =
+                U256::from(last_total_difficulty - default_block_difficulty + diff);
+            let parent_chain_root = packed::HeaderDigest::new_builder()
+                .total_difficulty(new_last_total_difficulty.pack())
+                .build();
+            let verifiable_header =
+                VerifiableHeader::new(header.clone(), Default::default(), None, parent_chain_root);
+            let prove_request =
+                protocol.build_prove_request_content(&peer_state, &verifiable_header);
             assert!(prove_request.is_some());
             let start_number: BlockNumber = prove_request.expect("checked").start_number().unpack();
             assert_eq!(start_number, last_number);
@@ -70,7 +78,8 @@ fn build_prove_request_content() {
 
     // Test different block numbers.
     {
-        let new_last_total_difficulty = U256::from(last_total_difficulty * 2);
+        let new_last_total_difficulty =
+            U256::from(last_total_difficulty + default_block_difficulty);
 
         for new_last_number in 1..=last_number {
             let verifiable_header = {
@@ -79,13 +88,13 @@ fn build_prove_request_content() {
                     .number(new_last_number.pack())
                     .epoch(epoch.pack())
                     .build();
-                VerifiableHeader::new(header, Default::default(), None)
+                let parent_chain_root = packed::HeaderDigest::new_builder()
+                    .total_difficulty(new_last_total_difficulty.pack())
+                    .build();
+                VerifiableHeader::new(header, Default::default(), None, parent_chain_root)
             };
-            let prove_request = protocol.build_prove_request_content(
-                &peer_state,
-                &verifiable_header,
-                &new_last_total_difficulty,
-            );
+            let prove_request =
+                protocol.build_prove_request_content(&peer_state, &verifiable_header);
             assert!(prove_request.is_none());
         }
 
@@ -96,13 +105,13 @@ fn build_prove_request_content() {
                     .number(new_last_number.pack())
                     .epoch(epoch.pack())
                     .build();
-                VerifiableHeader::new(header, Default::default(), None)
+                let parent_chain_root = packed::HeaderDigest::new_builder()
+                    .total_difficulty(new_last_total_difficulty.pack())
+                    .build();
+                VerifiableHeader::new(header, Default::default(), None, parent_chain_root)
             };
-            let prove_request = protocol.build_prove_request_content(
-                &peer_state,
-                &verifiable_header,
-                &new_last_total_difficulty,
-            );
+            let prove_request =
+                protocol.build_prove_request_content(&peer_state, &verifiable_header);
             assert!(prove_request.is_some());
             let prove_request = prove_request.expect("checked");
             let start_number: BlockNumber = prove_request.start_number().unpack();

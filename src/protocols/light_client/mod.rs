@@ -11,8 +11,7 @@ use ckb_types::{
     core::{BlockNumber, EpochNumber, HeaderView},
     packed,
     prelude::*,
-    utilities::{compact_to_difficulty, merkle_mountain_range::VerifiableHeader},
-    U256,
+    utilities::merkle_mountain_range::VerifiableHeader,
 };
 use faketime::unix_time_as_millis;
 use log::{debug, error, info, trace, warn};
@@ -157,12 +156,11 @@ impl LightClientProtocol {
             .expect("checked: should have state");
 
         if let Some(last_state) = peer_state.get_last_state() {
-            let tip_header = &last_state.tip_header;
-            let tip_total_difficulty = &last_state.total_difficulty;
+            let last_header = last_state.verifiable_header();
 
             let is_proved = peer_state
                 .get_prove_state()
-                .map(|inner| inner.is_same_as(tip_header, tip_total_difficulty))
+                .map(|inner| inner.is_same_as(last_header))
                 .unwrap_or(false);
 
             // Skipped is the state is proved.
@@ -173,15 +171,13 @@ impl LightClientProtocol {
             // Skipped is the request is sent.
             let is_requested = peer_state
                 .get_prove_request()
-                .map(|inner| inner.is_same_as(tip_header, tip_total_difficulty))
+                .map(|inner| inner.is_same_as(last_header))
                 .unwrap_or(false);
             if is_requested {
                 return;
             }
 
-            if let Some(content) =
-                self.build_prove_request_content(&peer_state, tip_header, tip_total_difficulty)
-            {
+            if let Some(content) = self.build_prove_request_content(&peer_state, last_header) {
                 trace!("peer {}: send get block samples", peer);
                 let message = packed::LightClientMessage::new_builder()
                     .set(content.clone())
@@ -197,24 +193,37 @@ impl LightClientProtocol {
         }
     }
 
+    fn check_verifiable_header(&self, verifiable_header: &VerifiableHeader) -> Result<(), Status> {
+        let header = verifiable_header.header();
+        // Check PoW
+        if !self.consensus.pow_engine().verify(&header.data()) {
+            let errmsg = format!(
+                "failed to verify nonce for block#{}, hash: {:#x}",
+                header.number(),
+                header.hash()
+            );
+            return Err(StatusCode::InvalidNonce.with_context(errmsg));
+        }
+        // Check Chain Root
+        if !verifiable_header.is_valid(self.mmr_activated_epoch()) {
+            let errmsg = format!(
+                "failed to verify chain root for block#{}, hash: {:#x}",
+                header.number(),
+                header.hash()
+            );
+            return Err(StatusCode::InvalidLastState.with_context(errmsg));
+        }
+        Ok(())
+    }
+
     /// Processes a new last state that received from a peer which has a fork chain.
     fn process_last_state(
         &self,
         peer: PeerIndex,
         last_header: VerifiableHeader,
-        chain_root: packed::HeaderDigest,
     ) -> Result<(), Status> {
-        let chain_root_hash = chain_root.calc_mmr_hash();
-        if !last_header.is_valid(self.mmr_activated_epoch(), Some(&chain_root_hash)) {
-            return Err(StatusCode::InvalidLastState.into());
-        }
-        let total_difficulty = {
-            let compact_target = last_header.header().compact_target();
-            let block_difficulty = compact_to_difficulty(compact_target);
-            let total_difficulty_before: U256 = chain_root.total_difficulty().unpack();
-            total_difficulty_before.saturating_add(&block_difficulty)
-        };
-        let last_state = LastState::new(last_header, total_difficulty);
+        self.check_verifiable_header(&last_header)?;
+        let last_state = LastState::new(last_header);
         trace!("peer {}: update last state", peer);
         self.peers().update_last_state(peer, last_state);
         Ok(())
@@ -225,9 +234,10 @@ impl LightClientProtocol {
     /// - Try to update the storage without caring about fork.
     fn update_prove_state_to_child(&self, peer: PeerIndex, new_prove_state: ProveState) {
         let (old_total_difficulty, _) = self.storage.get_last_state();
-        if new_prove_state.get_total_difficulty() > &old_total_difficulty {
+        let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
+        if new_total_difficulty > old_total_difficulty {
             self.storage.update_last_state(
-                new_prove_state.get_total_difficulty(),
+                &new_total_difficulty,
                 &new_prove_state.get_last_header().header().data(),
             );
         }
@@ -239,7 +249,8 @@ impl LightClientProtocol {
     /// - Try to update the storage and handle potential fork.
     fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) {
         let (old_total_difficulty, _) = self.storage.get_last_state();
-        if new_prove_state.get_total_difficulty() > &old_total_difficulty {
+        let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
+        if new_total_difficulty > old_total_difficulty {
             if let Some(state) = self.peers().get_state(&peer) {
                 if let Some(old_prove_state) = state.get_prove_state() {
                     let reorg_last_headers = new_prove_state.get_reorg_last_headers();
@@ -272,7 +283,7 @@ impl LightClientProtocol {
             }
 
             self.storage.update_last_state(
-                new_prove_state.get_total_difficulty(),
+                &new_total_difficulty,
                 &new_prove_state.get_last_header().header().data(),
             );
         }
@@ -296,18 +307,6 @@ impl LightClientProtocol {
         } else {
             1
         }
-    }
-
-    pub(crate) fn check_pow_for_header(&self, header: &HeaderView) -> Result<(), Status> {
-        if !self.consensus.pow_engine().verify(&header.data()) {
-            let errmsg = format!(
-                "failed to verify nonce for block#{}, hash: {:#x}",
-                header.number(),
-                header.hash()
-            );
-            return Err(StatusCode::InvalidNonce.with_context(errmsg));
-        }
-        Ok(())
     }
 
     pub(crate) fn check_pow_for_headers<'a, T: Iterator<Item = &'a HeaderView>>(
@@ -360,22 +359,23 @@ impl LightClientProtocol {
         &self,
         peer_state: &PeerState,
         last_header: &VerifiableHeader,
-        last_total_difficulty: &U256,
     ) -> Option<packed::GetBlockSamples> {
         let last_n_blocks = LAST_N_BLOCKS;
         let last_number = last_header.header().number();
+        let last_total_difficulty = last_header.total_difficulty();
         let (start_hash, start_number, start_total_difficulty) = peer_state
             .get_prove_state()
             .map(|inner| {
+                let last_header = inner.get_last_header();
                 (
-                    inner.get_last_header().header().hash(),
-                    inner.get_last_header().header().number(),
-                    inner.get_total_difficulty().to_owned(),
+                    last_header.header().hash(),
+                    last_header.header().number(),
+                    last_header.total_difficulty(),
                 )
             })
             .unwrap_or_else(|| {
                 let (total_difficulty, last_tip) = self.storage.get_last_state();
-                if &total_difficulty > last_total_difficulty {
+                if total_difficulty > last_total_difficulty {
                     warn!(
                         "total difficulty ({:#x}) in storage is greater than \
                         the total difficulty ({:#x}) which requires proving",
@@ -385,14 +385,14 @@ impl LightClientProtocol {
                 let start_number: BlockNumber = last_tip.raw().number().unpack();
                 if start_number >= last_number {
                     warn!(
-                        "block number ({}) in storage is greater than \
+                        "block number ({}) in storage is not less than \
                         the block number ({}) which requires proving",
                         start_number, last_number
                     );
                 }
                 (last_tip.calc_header_hash(), start_number, total_difficulty)
             });
-        if &start_total_difficulty > last_total_difficulty || start_number >= last_number {
+        if start_total_difficulty > last_total_difficulty || start_number >= last_number {
             return None;
         }
         let builder = packed::GetBlockSamples::new_builder()
@@ -407,7 +407,7 @@ impl LightClientProtocol {
                 start_number,
                 &start_total_difficulty,
                 last_number,
-                last_total_difficulty,
+                &last_total_difficulty,
                 last_n_blocks,
             );
             builder

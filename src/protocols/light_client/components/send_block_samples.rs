@@ -52,19 +52,12 @@ impl<'a> SendBlockSamplesProcess<'a> {
             return Status::ok();
         };
 
-        let last_header = original_request.get_last_header();
-
-        let received_last_header: VerifiableHeader = self.message.last_header().to_entity().into();
-        let received_chain_root = self.message.root().to_entity();
+        let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
 
         // Update the last state if the response contains a new one.
-        if last_header.header().hash() != received_last_header.header().hash() {
+        if !original_request.is_same_as(&last_header) {
             if self.message.proof().is_empty() {
-                return_if_failed!(self.protocol.process_last_state(
-                    self.peer,
-                    received_last_header,
-                    received_chain_root,
-                ));
+                return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
                 self.protocol.get_block_samples(self.nc, self.peer);
             } else {
                 warn!("peer {} send an unknown proof", self.peer);
@@ -73,18 +66,18 @@ impl<'a> SendBlockSamplesProcess<'a> {
         }
 
         let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
-        let last_total_difficulty = original_request.get_total_difficulty();
+        let sampled_headers = convert_to_verifiable(self.message.sampled_headers());
 
         // Check if the response is match the request.
         return_if_failed!(check_if_response_is_matched(
             mmr_activated_epoch,
             original_request.get_content(),
-            self.message.sampled_headers(),
+            &sampled_headers,
             self.message.last_n_headers(),
         ));
 
         let reorg_last_n_headers = convert_to_views(self.message.reorg_last_n_headers());
-        let sampled_headers = convert_to_views(self.message.sampled_headers());
+        let sampled_headers = verifiable_to_views(sampled_headers);
         let last_n_headers = convert_to_views(self.message.last_n_headers());
         trace!(
             "peer {}: reorg_last_n_headers: {}, sampled_headers: {}, last_n_headers: {}",
@@ -94,7 +87,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
             last_n_headers.len()
         );
 
-        // Check POW.
+        // Check POW for all headers.
         return_if_failed!(self.protocol.check_pow_for_headers(
             reorg_last_n_headers
                 .iter()
@@ -154,8 +147,7 @@ impl<'a> SendBlockSamplesProcess<'a> {
         // Verify MMR proof
         return_if_failed!(verify_mmr_proof(
             mmr_activated_epoch,
-            last_header,
-            received_chain_root,
+            &last_header,
             self.message.proof(),
             reorg_last_n_headers
                 .iter()
@@ -170,16 +162,15 @@ impl<'a> SendBlockSamplesProcess<'a> {
         if !sampled_headers.is_empty() {
             if let Some(prove_state) = peer_state.get_prove_state() {
                 let prev_last_header = prove_state.get_last_header();
-                let prev_total_difficulty = prove_state.get_total_difficulty();
                 let start_header = prev_last_header.header();
                 let end_header = last_header.header();
                 if let Err(msg) = verify_total_difficulty(
                     start_header.epoch(),
                     start_header.compact_target(),
-                    prev_total_difficulty,
+                    &prev_last_header.total_difficulty(),
                     end_header.epoch(),
                     end_header.compact_target(),
-                    last_total_difficulty,
+                    &last_header.total_difficulty(),
                     TAU,
                 ) {
                     return StatusCode::InvalidTotalDifficulty.with_context(msg);
@@ -189,15 +180,12 @@ impl<'a> SendBlockSamplesProcess<'a> {
 
         if failed_to_verify_tau {
             // Ask for new sampled headers if all checks are passed, expect the TAU check.
-            if let Some(content) = self.protocol.build_prove_request_content(
-                &peer_state,
-                last_header,
-                last_total_difficulty,
-            ) {
-                let mut prove_request = ProveRequest::new(
-                    LastState::new(last_header.clone(), last_total_difficulty.clone()),
-                    content.clone(),
-                );
+            if let Some(content) = self
+                .protocol
+                .build_prove_request_content(&peer_state, &last_header)
+            {
+                let mut prove_request =
+                    ProveRequest::new(LastState::new(last_header), content.clone());
                 prove_request.skip_check_tau();
                 self.protocol
                     .peers()
@@ -487,8 +475,8 @@ impl EpochDifficultyTrendDetails {
 pub(crate) fn check_if_response_is_matched(
     mmr_activated_epoch: EpochNumber,
     prev_request: &packed::GetBlockSamples,
-    sampled_headers: packed::VerifiableHeaderWithChainRootVecReader,
-    last_n_headers: packed::VerifiableHeaderWithChainRootVecReader,
+    sampled_headers: &[VerifiableHeader],
+    last_n_headers: packed::VerifiableHeaderVecReader,
 ) -> Result<(), Status> {
     let difficulty_boundary: U256 = prev_request.difficulty_boundary().unpack();
     let mut difficulties: Vec<U256> = prev_request
@@ -500,15 +488,14 @@ pub(crate) fn check_if_response_is_matched(
     // Check the difficulty boundary.
     {
         // Check the first block in last-N blocks.
-        let first_last_n_header = last_n_headers
+        let first_last_n_header: VerifiableHeader = last_n_headers
             .iter()
             .next()
             .map(|inner| inner.to_entity())
-            .expect("checked: first last-N header should be existed");
-        let (verifiable_header, chain_root) =
-            packed::VerifiableHeaderWithChainRoot::split(first_last_n_header);
-        if !verifiable_header.is_valid(mmr_activated_epoch, None) {
-            let header = verifiable_header.header();
+            .expect("checked: first last-N header should be existed")
+            .into();
+        if !first_last_n_header.is_valid(mmr_activated_epoch) {
+            let header = first_last_n_header.header();
             error!(
                 "failed: chain root is not valid for first last-N block#{} (hash: {:#x})",
                 header.number(),
@@ -518,12 +505,7 @@ pub(crate) fn check_if_response_is_matched(
         }
 
         // Calculate the total difficulty.
-        let total_difficulty = {
-            let compact_target = verifiable_header.header().compact_target();
-            let block_difficulty = compact_to_difficulty(compact_target);
-            let total_difficulty_before: U256 = chain_root.total_difficulty().unpack();
-            total_difficulty_before.saturating_add(&block_difficulty)
-        };
+        let total_difficulty = first_last_n_header.total_difficulty();
 
         // All total difficulties for sampled blocks should be less
         // than the total difficulty of any last-N blocks.
@@ -550,12 +532,10 @@ pub(crate) fn check_if_response_is_matched(
 
     // Check if the sampled headers are subject to requested difficulties distribution.
     for item in sampled_headers.iter() {
-        let (verifiable_header, chain_root) =
-            packed::VerifiableHeaderWithChainRoot::split(item.to_entity());
-        let header = verifiable_header.header();
+        let header = item.header();
 
         // Chain root for any sampled blocks should be valid.
-        if !verifiable_header.is_valid(mmr_activated_epoch, None) {
+        if !item.is_valid(mmr_activated_epoch) {
             error!(
                 "failed: chain root is not valid for sampled block#{} (hash: {:#x})",
                 header.number(),
@@ -564,10 +544,8 @@ pub(crate) fn check_if_response_is_matched(
             return Err(StatusCode::InvalidChainRootForSamples.into());
         }
 
-        let compact_target = verifiable_header.header().compact_target();
-        let block_difficulty = compact_to_difficulty(compact_target);
-        let total_difficulty_lhs: U256 = chain_root.total_difficulty().unpack();
-        let total_difficulty_rhs = total_difficulty_lhs.saturating_add(&block_difficulty);
+        let total_difficulty_lhs: U256 = item.parent_chain_root().total_difficulty().unpack();
+        let total_difficulty_rhs = item.total_difficulty();
 
         let mut is_valid = false;
         // Total difficulty for any sampled blocks should be valid.
@@ -601,10 +579,24 @@ pub(crate) fn check_if_response_is_matched(
     Ok(())
 }
 
-fn convert_to_views(headers: packed::VerifiableHeaderWithChainRootVecReader) -> Vec<HeaderView> {
+fn convert_to_views(headers: packed::VerifiableHeaderVecReader) -> Vec<HeaderView> {
     headers
         .iter()
         .map(|header| header.header().to_entity().into_view())
+        .collect()
+}
+
+fn convert_to_verifiable(headers: packed::VerifiableHeaderVecReader) -> Vec<VerifiableHeader> {
+    headers
+        .iter()
+        .map(|header| header.to_entity().into())
+        .collect()
+}
+
+fn verifiable_to_views(headers: Vec<VerifiableHeader>) -> Vec<HeaderView> {
+    headers
+        .iter()
+        .map(|header| header.header().to_owned())
         .collect()
 }
 
@@ -774,12 +766,12 @@ pub(crate) fn check_continuous_headers(headers: &[HeaderView]) -> Result<(), Sta
 pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
     mmr_activated_epoch: EpochNumber,
     last_header: &VerifiableHeader,
-    chain_root: packed::HeaderDigest,
     raw_proof: packed::HeaderDigestVecReader,
     headers: T,
 ) -> Result<(), Status> {
+    let parent_chain_root = last_header.parent_chain_root();
     let proof: MMRProof = {
-        let mmr_size = leaf_index_to_mmr_size(chain_root.end_number().unpack());
+        let mmr_size = leaf_index_to_mmr_size(parent_chain_root.end_number().unpack());
         let proof = raw_proof
             .iter()
             .map(|header_digest| header_digest.to_entity())
@@ -805,7 +797,7 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
             }
         }
     };
-    let verify_result = match proof.verify(chain_root.clone(), digests_with_positions) {
+    let verify_result = match proof.verify(parent_chain_root, digests_with_positions) {
         Ok(verify_result) => verify_result,
         Err(err) => {
             let errmsg = format!("failed to verify the proof since {}", err);
@@ -818,9 +810,7 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
         let errmsg = "failed to verify the mmr proof since the result is false";
         return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
     }
-    let expected_root_hash = chain_root.calc_mmr_hash();
-    let check_extra_hash_result =
-        last_header.is_valid(mmr_activated_epoch, Some(&expected_root_hash));
+    let check_extra_hash_result = last_header.is_valid(mmr_activated_epoch);
     if check_extra_hash_result {
         trace!(
             "passed: verify extra hash for block-{} ({:#x})",

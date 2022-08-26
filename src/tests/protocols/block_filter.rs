@@ -12,7 +12,7 @@ use ckb_types::{
     packed::{self, Script},
     prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader,
-    H256, U256,
+    H256,
 };
 
 use crate::protocols::{
@@ -64,11 +64,9 @@ async fn test_block_filter_ignore_start_number() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -120,11 +118,9 @@ async fn test_block_filter_empty_filters() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -176,11 +172,9 @@ async fn test_block_filter_invalid_filters_count() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -237,11 +231,9 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -295,11 +287,9 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -372,11 +362,9 @@ async fn test_block_filter_ok_with_blocks_matched() {
             .number((proved_number).pack())
             .build();
         let prove_state_block_hash = header.hash();
-        let tip_header = VerifiableHeader::new(header, Default::default(), None);
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let tip_header =
+            VerifiableHeader::new(header, Default::default(), None, Default::default());
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -473,11 +461,9 @@ async fn test_block_filter_notify_ask_filters() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -552,11 +538,9 @@ async fn test_block_filter_notify_not_reach_ask() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());
@@ -597,11 +581,9 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
                 .build(),
             Default::default(),
             None,
+            Default::default(),
         );
-        let last_state = LastState {
-            tip_header,
-            total_difficulty: U256::one(),
-        };
+        let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
             ProveState::new_from_request(request, Default::default(), Default::default());

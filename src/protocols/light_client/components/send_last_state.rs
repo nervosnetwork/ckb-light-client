@@ -1,6 +1,6 @@
-use super::super::{LastState, LightClientProtocol, Status, StatusCode};
+use super::super::{LastState, LightClientProtocol, Status};
 use ckb_network::{CKBProtocolContext, PeerIndex};
-use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256};
+use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
 use log::trace;
 
 pub(crate) struct SendLastStateProcess<'a> {
@@ -28,18 +28,10 @@ impl<'a> SendLastStateProcess<'a> {
     pub(crate) fn execute(self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
-        let last_state = {
-            let tip_header: VerifiableHeader = self.message.tip_header().to_entity().into();
-            let tip_total_difficulty: U256 = self.message.total_difficulty().unpack();
-            LastState::new(tip_header, tip_total_difficulty)
-        };
+        let last_header: VerifiableHeader = self.message.tip_header().to_entity().into();
+        return_if_failed!(self.protocol.check_verifiable_header(&last_header));
 
-        if !last_state
-            .tip_header
-            .is_valid(self.protocol.mmr_activated_epoch(), None)
-        {
-            return StatusCode::InvalidLastState.into();
-        }
+        let last_state = LastState::new(last_header);
 
         self.protocol
             .peers()
@@ -47,16 +39,11 @@ impl<'a> SendLastStateProcess<'a> {
 
         if let Some(prev_last_state) = peer_state.get_last_state() {
             trace!("peer {}: update last state", self.peer);
-            if prev_last_state.total_difficulty < last_state.total_difficulty {
+            if prev_last_state.verifiable_header().total_difficulty()
+                < last_state.verifiable_header().total_difficulty()
+            {
                 if let Some(prove_state) = peer_state.get_prove_state() {
-                    let last_proved_header = prove_state.get_last_header();
-                    if last_state.tip_header.header().parent_hash()
-                        == last_proved_header.header().hash()
-                        && self
-                            .protocol
-                            .check_pow_for_header(last_state.tip_header.header())
-                            .is_ok()
-                    {
+                    if prove_state.is_parent_of(&last_state) {
                         trace!("peer {}: new last state could be trusted", self.peer);
                         let child_prove_state = prove_state.new_child(last_state);
                         self.protocol

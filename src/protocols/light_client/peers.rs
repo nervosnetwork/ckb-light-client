@@ -1,6 +1,6 @@
 use ckb_network::PeerIndex;
 use ckb_types::{
-    core::HeaderView, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, U256,
+    core::HeaderView, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
@@ -24,8 +24,7 @@ pub struct Peer {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LastState {
-    pub(crate) tip_header: VerifiableHeader,
-    pub(crate) total_difficulty: U256,
+    header: VerifiableHeader,
 }
 
 #[derive(Clone, Default)]
@@ -59,12 +58,19 @@ pub(crate) struct BlockProofRequest {
     when_sent: u64,
 }
 
+impl AsRef<VerifiableHeader> for LastState {
+    fn as_ref(&self) -> &VerifiableHeader {
+        &self.header
+    }
+}
+
 impl LastState {
-    pub(crate) fn new(tip_header: VerifiableHeader, total_difficulty: U256) -> LastState {
-        LastState {
-            tip_header,
-            total_difficulty,
-        }
+    pub(crate) fn new(header: VerifiableHeader) -> LastState {
+        LastState { header }
+    }
+
+    pub(crate) fn verifiable_header(&self) -> &VerifiableHeader {
+        self.as_ref()
     }
 }
 
@@ -78,19 +84,11 @@ impl ProveRequest {
     }
 
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
-        &self.last_state.tip_header
+        self.last_state.verifiable_header()
     }
 
-    pub(crate) fn get_total_difficulty(&self) -> &U256 {
-        &self.last_state.total_difficulty
-    }
-
-    pub(crate) fn is_same_as(
-        &self,
-        last_header: &VerifiableHeader,
-        total_difficulty: &U256,
-    ) -> bool {
-        self.get_last_header() == last_header && self.get_total_difficulty() == total_difficulty
+    pub(crate) fn is_same_as(&self, another: &VerifiableHeader) -> bool {
+        if_verifiable_headers_are_same(self.get_last_header(), another)
     }
 
     pub(crate) fn get_content(&self) -> &packed::GetBlockSamples {
@@ -133,20 +131,17 @@ impl ProveState {
         }
     }
 
+    pub(crate) fn is_parent_of(&self, child_last_state: &LastState) -> bool {
+        self.get_last_header().header().hash()
+            == child_last_state.verifiable_header().header().parent_hash()
+    }
+
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
-        &self.last_state.tip_header
+        self.last_state.verifiable_header()
     }
 
-    pub(crate) fn get_total_difficulty(&self) -> &U256 {
-        &self.last_state.total_difficulty
-    }
-
-    pub(crate) fn is_same_as(
-        &self,
-        last_header: &VerifiableHeader,
-        total_difficulty: &U256,
-    ) -> bool {
-        self.get_last_header() == last_header && self.get_total_difficulty() == total_difficulty
+    pub(crate) fn is_same_as(&self, another: &VerifiableHeader) -> bool {
+        if_verifiable_headers_are_same(self.get_last_header(), another)
     }
 
     pub(crate) fn get_reorg_last_headers(&self) -> &[HeaderView] {
@@ -351,4 +346,22 @@ impl Peers {
             })
             .collect()
     }
+}
+
+fn if_verifiable_headers_are_same(lhs: &VerifiableHeader, rhs: &VerifiableHeader) -> bool {
+    lhs.header() == rhs.header()
+        && lhs.uncles_hash() == rhs.uncles_hash()
+        && lhs.extension().is_none() == rhs.extension().is_none()
+        && (lhs.extension().is_none()
+            || (lhs
+                .extension()
+                .as_ref()
+                .expect("checked: is not none")
+                .as_slice()
+                == rhs
+                    .extension()
+                    .as_ref()
+                    .expect("checked: is not none")
+                    .as_slice()))
+        && lhs.total_difficulty() == rhs.total_difficulty()
 }
