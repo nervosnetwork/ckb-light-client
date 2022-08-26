@@ -193,6 +193,25 @@ impl LightClientProtocol {
         }
     }
 
+    pub(crate) fn check_chain_root_for_headers<'a, T: Iterator<Item = &'a VerifiableHeader>>(
+        &self,
+        headers: T,
+    ) -> Result<(), Status> {
+        let mmr_activated_epoch = self.mmr_activated_epoch();
+        for header in headers {
+            if !header.is_valid(mmr_activated_epoch) {
+                let header = header.header();
+                let errmsg = format!(
+                    "failed to verify chain root for block#{}, hash: {:#x}",
+                    header.number(),
+                    header.hash()
+                );
+                return Err(StatusCode::InvalidChainRootForSamples.with_context(errmsg));
+            }
+        }
+        Ok(())
+    }
+
     fn check_verifiable_header(&self, verifiable_header: &VerifiableHeader) -> Result<(), Status> {
         let header = verifiable_header.header();
         // Check PoW
