@@ -67,7 +67,7 @@ impl<'a> SendBlocksProofProcess<'a> {
                 .collect::<Vec<_>>();
             if !original_request.is_same_as(&last_header.header().hash(), &received_block_hashes) {
                 error!("peer {} send an unknown proof", self.peer);
-                return StatusCode::InvalidSendBlocksProof.into();
+                return StatusCode::UnexpectedRequest.into();
             }
         }
 

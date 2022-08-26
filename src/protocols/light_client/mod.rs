@@ -206,7 +206,7 @@ impl LightClientProtocol {
                     header.number(),
                     header.hash()
                 );
-                return Err(StatusCode::InvalidChainRootForSamples.with_context(errmsg));
+                return Err(StatusCode::InvalidChainRoot.with_context(errmsg));
             }
         }
         Ok(())
@@ -230,7 +230,7 @@ impl LightClientProtocol {
                 header.number(),
                 header.hash()
             );
-            return Err(StatusCode::InvalidLastState.with_context(errmsg));
+            return Err(StatusCode::InvalidChainRoot.with_context(errmsg));
         }
         Ok(())
     }

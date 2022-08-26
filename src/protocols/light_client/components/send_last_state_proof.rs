@@ -559,7 +559,7 @@ pub(crate) fn check_if_response_is_matched(
                     total_difficulty_lhs,
                     total_difficulty_rhs,
                 );
-                return Err(StatusCode::InvalidTotalDifficultyForSamples.into());
+                return Err(StatusCode::InvalidSamples.into());
             }
         }
 
@@ -579,7 +579,7 @@ pub(crate) fn check_if_response_is_matched(
                     next_difficulty,
                     first_last_n_total_difficulty
                 );
-                return Err(StatusCode::InvalidTotalDifficultyForSamples.into());
+                return Err(StatusCode::InvalidSamples.into());
             }
         }
     }
@@ -780,7 +780,7 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
             Ok(tmp) => tmp,
             Err(err) => {
                 let errmsg = format!("failed to verify all digest since {}", err);
-                return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+                return Err(StatusCode::InvalidProof.with_context(errmsg));
             }
         }
     };
@@ -788,14 +788,14 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
         Ok(verify_result) => verify_result,
         Err(err) => {
             let errmsg = format!("failed to verify the proof since {}", err);
-            return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+            return Err(StatusCode::InvalidProof.with_context(errmsg));
         }
     };
     if verify_result {
         trace!("passed: verify mmr proof");
     } else {
         let errmsg = "failed to verify the mmr proof since the result is false";
-        return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+        return Err(StatusCode::InvalidProof.with_context(errmsg));
     }
     let check_extra_hash_result = last_header.is_valid(mmr_activated_epoch);
     if check_extra_hash_result {
@@ -810,7 +810,7 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
             last_header.header().number(),
             last_header.header().hash(),
         );
-        return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+        return Err(StatusCode::InvalidProof.with_context(errmsg));
     };
 
     Ok(())
