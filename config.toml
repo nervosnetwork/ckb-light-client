@@ -9,7 +9,7 @@ path = "data/store"
 [network]
 path = "data/network"
 
-listen_addresses = ["/ip4/0.0.0.0/tcp/8116"]
+listen_addresses = ["/ip4/0.0.0.0/tcp/8118"]
 ### Specify the public and routable network addresses
 # public_addresses = []
 
