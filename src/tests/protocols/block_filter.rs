@@ -404,9 +404,9 @@ async fn test_block_filter_ok_with_blocks_matched() {
     assert!(nc.banned_peers.borrow().is_empty());
 
     let get_block_proof_message = {
-        let content = packed::GetBlockProof::new_builder()
+        let content = packed::GetBlocksProof::new_builder()
             .block_hashes(vec![block_hash.pack()].pack())
-            .tip_hash(prove_state_block_hash)
+            .last_hash(prove_state_block_hash)
             .build();
         packed::LightClientMessage::new_builder()
             .set(content.clone())

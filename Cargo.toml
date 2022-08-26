@@ -9,18 +9,18 @@ homepage = "https://github.com/nervosnetwork/ckb-light-client"
 repository = "https://github.com/nervosnetwork/ckb-light-client"
 
 [dependencies]
-ckb-app-config    = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-async-runtime = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-constant      = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-types         = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-network       = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-jsonrpc-types = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-error         = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-script        = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-chain-spec    = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-traits        = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-resource      = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
-ckb-verification  = { git="https://github.com/nervosnetwork/ckb", rev = "d7efaf9d5120edb1285d0904e63ec3d92f92c462" }
+ckb-app-config    = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-async-runtime = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-constant      = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-types         = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-network       = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-jsonrpc-types = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-error         = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-script        = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-chain-spec    = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-traits        = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-resource      = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
+ckb-verification  = { git="https://github.com/nervosnetwork/ckb", rev = "1ed5e24cc97b34a04540e2092b5884391eeeea8e" }
 ckb-merkle-mountain-range = "0.5.1"
 golomb-coded-set = "0.2.0"
 rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }

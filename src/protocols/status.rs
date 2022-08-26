@@ -46,8 +46,8 @@ pub enum StatusCode {
     InvalidParentHash = 428,
     /// Failed to verify the proof.
     FailedToVerifyTheProof = 429,
-    /// Invalid SendBlockProof response (not match the GetBlockProof request)
-    InvalidSendBlockProof = 430,
+    /// Invalid SendBlocksProof response (not match the GetBlocksProof request)
+    InvalidSendBlocksProof = 430,
 
     /// Throws an internal error.
     InternalError = 500,

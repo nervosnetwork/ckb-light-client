@@ -39,7 +39,7 @@ pub(crate) struct PeerState {
 #[derive(Clone)]
 pub(crate) struct ProveRequest {
     last_state: LastState,
-    content: packed::GetBlockSamples,
+    content: packed::GetLastStateProof,
     skip_check_tau: bool,
 }
 
@@ -52,7 +52,7 @@ pub(crate) struct ProveState {
 
 #[derive(Clone)]
 pub(crate) struct BlockProofRequest {
-    content: packed::GetBlockProof,
+    content: packed::GetBlocksProof,
     // A flag indicates that corresponding tip block should be fetched or not.
     fetch_tip: bool,
     when_sent: u64,
@@ -75,7 +75,7 @@ impl LastState {
 }
 
 impl ProveRequest {
-    pub(crate) fn new(last_state: LastState, content: packed::GetBlockSamples) -> Self {
+    pub(crate) fn new(last_state: LastState, content: packed::GetLastStateProof) -> Self {
         Self {
             last_state,
             content,
@@ -91,7 +91,7 @@ impl ProveRequest {
         if_verifiable_headers_are_same(self.get_last_header(), another)
     }
 
-    pub(crate) fn get_content(&self) -> &packed::GetBlockSamples {
+    pub(crate) fn get_content(&self) -> &packed::GetLastStateProof {
         &self.content
     }
 
@@ -154,7 +154,7 @@ impl ProveState {
 }
 
 impl BlockProofRequest {
-    fn new(content: packed::GetBlockProof, fetch_tip: bool, when_sent: u64) -> Self {
+    fn new(content: packed::GetBlocksProof, fetch_tip: bool, when_sent: u64) -> Self {
         Self {
             content,
             fetch_tip,
@@ -167,9 +167,9 @@ impl BlockProofRequest {
         last_hash: &packed::Byte32,
         block_hashes: &[packed::Byte32],
     ) -> bool {
-        let content = packed::GetBlockProof::new_builder()
+        let content = packed::GetBlocksProof::new_builder()
             .block_hashes(block_hashes.to_vec().pack())
-            .tip_hash(last_hash.to_owned())
+            .last_hash(last_hash.to_owned())
             .build();
         self.content.as_slice() == content.as_slice()
     }
@@ -294,7 +294,7 @@ impl Peers {
     pub(crate) fn update_block_proof_request(
         &self,
         index: PeerIndex,
-        request: Option<(packed::GetBlockProof, bool)>,
+        request: Option<(packed::GetBlocksProof, bool)>,
     ) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.state

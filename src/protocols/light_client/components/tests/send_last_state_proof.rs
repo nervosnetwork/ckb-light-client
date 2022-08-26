@@ -4,7 +4,7 @@ use ckb_types::{
     {u256, U256},
 };
 
-use super::super::send_block_samples::{
+use super::super::send_last_state_proof::{
     verify_tau, verify_total_difficulty, EpochDifficultyTrend, EstimatedLimit,
 };
 

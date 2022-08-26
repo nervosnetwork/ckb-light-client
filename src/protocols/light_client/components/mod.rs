@@ -1,10 +1,10 @@
-mod send_block_proof;
-mod send_block_samples;
+mod send_blocks_proof;
 mod send_last_state;
+mod send_last_state_proof;
 
 #[cfg(test)]
 mod tests;
 
-pub(crate) use send_block_proof::SendBlockProofProcess;
-pub(crate) use send_block_samples::SendBlockSamplesProcess;
+pub(crate) use send_blocks_proof::SendBlocksProofProcess;
 pub(crate) use send_last_state::SendLastStateProcess;
+pub(crate) use send_last_state_proof::{verify_mmr_proof, SendLastStateProofProcess};

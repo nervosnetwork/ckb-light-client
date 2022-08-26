@@ -5,19 +5,19 @@ use log::error;
 
 use super::{
     super::{LightClientProtocol, Status, StatusCode},
-    send_block_samples::verify_mmr_proof,
+    verify_mmr_proof,
 };
 
-pub(crate) struct SendBlockProofProcess<'a> {
-    message: packed::SendBlockProofReader<'a>,
+pub(crate) struct SendBlocksProofProcess<'a> {
+    message: packed::SendBlocksProofReader<'a>,
     protocol: &'a mut LightClientProtocol,
     peer: PeerIndex,
     nc: &'a dyn CKBProtocolContext,
 }
 
-impl<'a> SendBlockProofProcess<'a> {
+impl<'a> SendBlocksProofProcess<'a> {
     pub(crate) fn new(
-        message: packed::SendBlockProofReader<'a>,
+        message: packed::SendBlocksProofReader<'a>,
         protocol: &'a mut LightClientProtocol,
         peer: PeerIndex,
         nc: &'a dyn CKBProtocolContext,
@@ -41,7 +41,7 @@ impl<'a> SendBlockProofProcess<'a> {
             return StatusCode::PeerIsNotOnProcess.into();
         };
 
-        let last_header: VerifiableHeader = self.message.tip_header().to_entity().into();
+        let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
 
         // Update the last state if the response contains a new one.
         if self.message.proof().is_empty() {
@@ -67,7 +67,7 @@ impl<'a> SendBlockProofProcess<'a> {
                 .collect::<Vec<_>>();
             if !original_request.is_same_as(&last_header.header().hash(), &received_block_hashes) {
                 error!("peer {} send an unknown proof", self.peer);
-                return StatusCode::InvalidSendBlockProof.into();
+                return StatusCode::InvalidSendBlocksProof.into();
             }
         }
 

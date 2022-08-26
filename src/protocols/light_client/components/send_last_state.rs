@@ -28,7 +28,7 @@ impl<'a> SendLastStateProcess<'a> {
     pub(crate) fn execute(self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
-        let last_header: VerifiableHeader = self.message.tip_header().to_entity().into();
+        let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
         return_if_failed!(self.protocol.check_verifiable_header(&last_header));
 
         let last_state = LastState::new(last_header);

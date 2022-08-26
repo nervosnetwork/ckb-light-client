@@ -91,7 +91,7 @@ impl<'a> BlockFiltersProcess<'a> {
             );
             if possible_match_blocks_len != 0 {
                 if peer_state.get_block_proof_request().is_some() {
-                    warn!("peer {} has an inflight GetBlockProof request", self.peer);
+                    warn!("peer {} has an inflight GetBlocksProof request", self.peer);
                 } else {
                     // if the only matched block is the prove state block, then request block data directly
                     possible_match_blocks
@@ -125,9 +125,9 @@ impl<'a> BlockFiltersProcess<'a> {
                             trace!("already sent block proof request to peer: {}", self.peer);
                         } else {
                             trace!("send block proof request to peer: {}", self.peer);
-                            let content = packed::GetBlockProof::new_builder()
+                            let content = packed::GetBlocksProof::new_builder()
                                 .block_hashes(possible_match_blocks.pack())
-                                .tip_hash(prove_state_block_hash)
+                                .last_hash(prove_state_block_hash)
                                 .build();
                             let message = packed::LightClientMessage::new_builder()
                                 .set(content.clone())

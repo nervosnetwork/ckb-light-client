@@ -129,11 +129,11 @@ impl LightClientProtocol {
             packed::LightClientMessageUnionReader::SendLastState(reader) => {
                 components::SendLastStateProcess::new(reader, self, peer, nc).execute()
             }
-            packed::LightClientMessageUnionReader::SendBlockSamples(reader) => {
-                components::SendBlockSamplesProcess::new(reader, self, peer, nc).execute()
+            packed::LightClientMessageUnionReader::SendLastStateProof(reader) => {
+                components::SendLastStateProofProcess::new(reader, self, peer, nc).execute()
             }
-            packed::LightClientMessageUnionReader::SendBlockProof(reader) => {
-                components::SendBlockProofProcess::new(reader, self, peer, nc).execute()
+            packed::LightClientMessageUnionReader::SendBlocksProof(reader) => {
+                components::SendBlocksProofProcess::new(reader, self, peer, nc).execute()
             }
             _ => StatusCode::UnexpectedProtocolMessage.into(),
         }
@@ -359,7 +359,7 @@ impl LightClientProtocol {
         &self,
         peer_state: &PeerState,
         last_header: &VerifiableHeader,
-    ) -> Option<packed::GetBlockSamples> {
+    ) -> Option<packed::GetLastStateProof> {
         let last_n_blocks = LAST_N_BLOCKS;
         let last_number = last_header.header().number();
         let last_total_difficulty = last_header.total_difficulty();
@@ -395,7 +395,7 @@ impl LightClientProtocol {
         if start_total_difficulty > last_total_difficulty || start_number >= last_number {
             return None;
         }
-        let builder = packed::GetBlockSamples::new_builder()
+        let builder = packed::GetLastStateProof::new_builder()
             .last_hash(last_header.header().hash())
             .start_hash(start_hash)
             .start_number(start_number.pack())

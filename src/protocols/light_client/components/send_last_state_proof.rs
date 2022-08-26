@@ -20,16 +20,16 @@ use super::super::{
 };
 use crate::protocols::LAST_N_BLOCKS;
 
-pub(crate) struct SendBlockSamplesProcess<'a> {
-    message: packed::SendBlockSamplesReader<'a>,
+pub(crate) struct SendLastStateProofProcess<'a> {
+    message: packed::SendLastStateProofReader<'a>,
     protocol: &'a mut LightClientProtocol,
     peer: PeerIndex,
     nc: &'a dyn CKBProtocolContext,
 }
 
-impl<'a> SendBlockSamplesProcess<'a> {
+impl<'a> SendLastStateProofProcess<'a> {
     pub(crate) fn new(
-        message: packed::SendBlockSamplesReader<'a>,
+        message: packed::SendLastStateProofReader<'a>,
         protocol: &'a mut LightClientProtocol,
         peer: PeerIndex,
         nc: &'a dyn CKBProtocolContext,
@@ -474,7 +474,7 @@ impl EpochDifficultyTrendDetails {
 // - Check the difficulties.
 pub(crate) fn check_if_response_is_matched(
     mmr_activated_epoch: EpochNumber,
-    prev_request: &packed::GetBlockSamples,
+    prev_request: &packed::GetLastStateProof,
     sampled_headers: &[VerifiableHeader],
     last_n_headers: packed::VerifiableHeaderVecReader,
 ) -> Result<(), Status> {
