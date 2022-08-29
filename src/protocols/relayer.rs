@@ -72,8 +72,6 @@ impl CKBProtocolHandler for RelayProtocol {
         peer: PeerIndex,
         data: Bytes,
     ) {
-        trace!("RelayProtocol.received peer={}", peer);
-
         let message = match packed::RelayMessageReader::from_compatible_slice(&data) {
             Ok(msg) => msg.to_enum(),
             _ => {
@@ -90,6 +88,11 @@ impl CKBProtocolHandler for RelayProtocol {
             }
         };
 
+        trace!(
+            "RelayProtocol.received peer={}, message={}",
+            peer,
+            message.item_name()
+        );
         if let packed::RelayMessageUnionReader::GetRelayTransactions(reader) = message {
             let pending_txs = self.pending_txs.read().expect("read access should be OK");
             let relay_txs: Vec<_> = reader

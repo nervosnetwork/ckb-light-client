@@ -363,35 +363,49 @@ impl Storage {
         batch.commit().expect("batch commit should be ok");
     }
 
-    pub fn rollback_filtered_transactions(&self, block_number: BlockNumber) {
+    /// Rollback filtered block data to specified block number
+    pub fn rollback_to_block(&self, to_number: BlockNumber) {
         let scripts = self.get_filter_scripts();
         let mut batch = self.batch();
 
         for (script, filtered_block_number) in scripts {
-            if filtered_block_number >= block_number {
+            if filtered_block_number >= to_number {
                 let mut key_prefix = vec![KeyPrefix::TxLockScript as u8];
                 key_prefix.extend_from_slice(&extract_raw_data(&script));
-                key_prefix.extend_from_slice(&block_number.to_be_bytes());
-                let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+                let mut start_key = key_prefix.clone();
+                start_key.extend_from_slice(BlockNumber::MAX.to_be_bytes().as_ref());
+                let mode = IteratorMode::From(start_key.as_ref(), Direction::Reverse);
+                let key_prefix_len = key_prefix.len();
 
                 self.db
                     .iterator(mode)
-                    .take_while(|(key, _value)| key.starts_with(&key_prefix))
+                    .take_while(|(key, _value)| {
+                        key.starts_with(&key_prefix)
+                            && BlockNumber::from_be_bytes(
+                                key[key_prefix_len..key_prefix_len + 8]
+                                    .try_into()
+                                    .expect("stored BlockNumber"),
+                            ) >= to_number
+                    })
                     .for_each(|(key, value)| {
-                        let key_len = key.len();
+                        let block_number = BlockNumber::from_be_bytes(
+                            key[key_prefix_len..key_prefix_len + 8]
+                                .try_into()
+                                .expect("stored BlockNumber"),
+                        );
                         let tx_index = TxIndex::from_be_bytes(
-                            key[key_len - 9..key_len - 5]
+                            key[key_prefix_len + 8..key_prefix_len + 12]
                                 .try_into()
                                 .expect("stored TxIndex"),
                         );
                         let cell_index = CellIndex::from_be_bytes(
-                            key[key_len - 5..key_len - 1]
+                            key[key_prefix_len + 12..key_prefix_len + 16]
                                 .try_into()
                                 .expect("stored CellIndex"),
                         );
                         let tx_hash =
                             packed::Byte32Reader::from_slice_should_be_ok(&value).to_entity();
-                        if key[key_len - 1] == 0 {
+                        if key[key_prefix_len + 16] == 0 {
                             let (_, _, tx) = self
                                 .get_transaction(&tx_hash)
                                 .expect("stored transaction history");
@@ -446,7 +460,7 @@ impl Storage {
                 {
                     let mut key = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
                     key.extend_from_slice(script.as_slice());
-                    let value = block_number.to_be_bytes().to_vec();
+                    let value = to_number.to_be_bytes().to_vec();
                     batch.put(key, value).expect("batch put should be ok");
                 }
             }

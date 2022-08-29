@@ -140,8 +140,6 @@ impl CKBProtocolHandler for FilterProtocol {
         peer: PeerIndex,
         data: Bytes,
     ) {
-        trace!("FilterProtocol.received peer={}", peer);
-
         let msg = match packed::BlockFilterMessageReader::from_slice(&data) {
             Ok(msg) => msg.to_enum(),
             _ => {
@@ -160,6 +158,11 @@ impl CKBProtocolHandler for FilterProtocol {
 
         let item_name = msg.item_name();
         let status = self.try_process(Arc::clone(&nc), peer, msg);
+        trace!(
+            "FilterProtocol.received peer={}, message={}",
+            peer,
+            item_name
+        );
         if let Some(ban_time) = status.should_ban() {
             error!(
                 "process {} from {}, ban {:?} since result is {}",

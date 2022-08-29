@@ -528,8 +528,7 @@ fn rpc() {
     // test rollback_filtered_transactions
     // rollback 2 blocks
     storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), total_blocks)]));
-    storage.rollback_filtered_transactions((total_blocks - 1).into());
-    storage.rollback_filtered_transactions((total_blocks - 2).into());
+    storage.rollback_to_block((total_blocks - 2).into());
 
     let scripts = storage.get_filter_scripts();
     assert_eq!(
@@ -842,7 +841,7 @@ fn get_cells_after_rollback_bug() {
     storage.filter_block(block2.data());
     storage.update_block_number(2);
 
-    storage.rollback_filtered_transactions(2);
+    storage.rollback_to_block(2);
 
     let capacity = rpc
         .get_cells_capacity(SearchKey {

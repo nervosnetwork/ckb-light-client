@@ -39,8 +39,6 @@ impl CKBProtocolHandler for SyncProtocol {
         peer: PeerIndex,
         data: Bytes,
     ) {
-        trace!("SyncProtocol.received peer={}", peer);
-
         let message = match packed::SyncMessageReader::from_compatible_slice(&data) {
             Ok(msg) => msg.to_enum(),
             _ => {
@@ -57,6 +55,11 @@ impl CKBProtocolHandler for SyncProtocol {
             }
         };
 
+        trace!(
+            "SyncProtocol.received peer={}, message={}",
+            peer,
+            message.item_name()
+        );
         match message {
             packed::SyncMessageUnionReader::SendBlock(reader) => {
                 self.storage.filter_block(reader.to_entity().block());
