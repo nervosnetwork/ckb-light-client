@@ -1,15 +1,11 @@
+use ckb_chain_spec::consensus::Consensus;
 use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
     RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
 };
 use ckb_network::{extract_peer_id, NetworkController, SupportProtocols};
 use ckb_traits::HeaderProvider;
-use ckb_types::{
-    core::{self, Cycle},
-    packed,
-    prelude::*,
-    H256,
-};
+use ckb_types::{core, packed, prelude::*, H256};
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
@@ -236,6 +232,7 @@ pub struct TransactionRpcImpl {
     network_controller: NetworkController,
     pending_txs: Arc<RwLock<PendingTxs>>,
     storage: Storage,
+    consensus: Consensus,
 }
 
 pub struct ChainRpcImpl {
@@ -929,14 +926,11 @@ fn build_filter_options(
     ))
 }
 
-// TODO get from consensus
-const MAX_CYCLES: Cycle = 3_500_000 * 597;
-
 impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let cycles = verify_tx(&self.storage, tx.clone(), MAX_CYCLES)
+        let cycles = verify_tx(tx.clone(), &self.storage, &self.consensus)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
             .write()
@@ -994,6 +988,7 @@ impl Service {
         storage: Storage,
         peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
+        consensus: Consensus,
     ) -> Server {
         let mut io_handler = IoHandler::new();
         let block_filter_rpc_impl = BlockFilterRpcImpl {
@@ -1006,6 +1001,7 @@ impl Service {
             network_controller: network_controller.clone(),
             pending_txs,
             storage,
+            consensus,
         };
         let net_rpc_impl = NetRpcImpl {
             network_controller,

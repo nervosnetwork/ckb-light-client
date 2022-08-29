@@ -20,13 +20,13 @@ use crate::protocols::{
     GET_BLOCK_FILTERS_TOKEN,
 };
 
-use super::super::verify::new_storage;
+use super::super::verify::setup;
 use super::mock_context::MockProtocolContext;
 
 #[tokio::test]
 async fn test_block_filter_malformed_message() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
-    let storage = new_storage("test-block-filter");
+    let (storage, _) = setup("test-block-filter");
     let peers = Arc::new(Peers::default());
     let mut protocol = FilterProtocol::new(storage, peers);
 
@@ -46,7 +46,7 @@ async fn test_block_filter_ignore_start_number() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
     let min_filtered_block_number = 3;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
@@ -102,7 +102,7 @@ async fn test_block_filter_empty_filters() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
     let min_filtered_block_number = 3;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
@@ -158,7 +158,7 @@ async fn test_block_filter_invalid_filters_count() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
     let min_filtered_block_number = 3;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
@@ -219,7 +219,7 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
     let proved_number = min_filtered_block_number;
     let start_number = min_filtered_block_number + 1;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
@@ -277,7 +277,7 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
     let proved_number = min_filtered_block_number + 1;
     let start_number = min_filtered_block_number + 1;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
@@ -356,7 +356,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
         .args(Bytes::from(vec![1, 2, 3]).pack())
         .build();
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(script.clone(), min_filtered_block_number)]
                 .into_iter()
@@ -455,7 +455,7 @@ async fn test_block_filter_notify_ask_filters() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
     let min_filtered_block_number = 3;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
@@ -513,7 +513,7 @@ async fn test_block_filter_notify_ask_filters() {
 #[tokio::test]
 async fn test_block_filter_notify_no_proved_peers() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
-    let storage = new_storage("test-block-filter");
+    let (storage, _) = setup("test-block-filter");
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -534,7 +534,7 @@ async fn test_block_filter_notify_not_reach_ask() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
     let min_filtered_block_number = 3;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
@@ -579,7 +579,7 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
     let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
     let min_filtered_block_number = 3;
     let storage = {
-        let storage = new_storage("test-block-filter");
+        let (storage, _) = setup("test-block-filter");
         storage.update_filter_scripts(
             vec![(Script::default(), min_filtered_block_number)]
                 .into_iter()
