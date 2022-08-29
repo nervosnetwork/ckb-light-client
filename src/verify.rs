@@ -1,5 +1,6 @@
 use std::collections::{hash_map::Entry, HashMap, HashSet};
 
+use ckb_chain_spec::consensus::Consensus;
 use ckb_error::Error;
 use ckb_script::TransactionScriptsVerifier;
 use ckb_types::{
@@ -11,17 +12,20 @@ use ckb_types::{
     packed::{OutPoint, OutPointVec},
     prelude::Entity,
 };
+use ckb_verification::NonContextualTransactionVerifier;
 
 use crate::storage::Storage;
 
 pub fn verify_tx(
-    storage: &Storage,
     transaction: TransactionView,
-    max_cycles: Cycle,
+    storage: &Storage,
+    consensus: &Consensus,
 ) -> Result<Cycle, Error> {
+    NonContextualTransactionVerifier::new(&transaction, consensus).verify()?;
+
     let rtx = resolve_tx(storage, transaction)?;
     let verifier = TransactionScriptsVerifier::new(&rtx, storage);
-    verifier.verify(max_cycles)
+    verifier.verify(consensus.max_block_cycles())
 }
 
 #[allow(clippy::mutable_key_type)]

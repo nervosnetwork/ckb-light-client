@@ -18,6 +18,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.7.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fcb51a0695d8f838b1ee009b3fbf66bda078cd64590202a864a8f3e8c4315c47"
+dependencies = [
+ "getrandom 0.2.6",
+ "once_cell",
+ "version_check",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -347,6 +358,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ckb-dao"
+version = "0.105.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5#c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5"
+dependencies = [
+ "byteorder",
+ "ckb-chain-spec",
+ "ckb-dao-utils",
+ "ckb-traits",
+ "ckb-types",
+]
+
+[[package]]
 name = "ckb-dao-utils"
 version = "0.105.0-pre"
 source = "git+https://github.com/nervosnetwork/ckb?rev=c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5#c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5"
@@ -447,6 +470,7 @@ dependencies = [
  "ckb-script",
  "ckb-traits",
  "ckb-types",
+ "ckb-verification",
  "clap 2.34.0",
  "ctrlc",
  "dashmap 5.3.4",
@@ -705,6 +729,34 @@ dependencies = [
  "once_cell",
  "parking_lot 0.12.1",
  "regex",
+]
+
+[[package]]
+name = "ckb-verification"
+version = "0.105.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5#c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5"
+dependencies = [
+ "ckb-chain-spec",
+ "ckb-dao",
+ "ckb-dao-utils",
+ "ckb-error",
+ "ckb-pow",
+ "ckb-script",
+ "ckb-traits",
+ "ckb-types",
+ "ckb-verification-traits",
+ "derive_more",
+ "faketime",
+ "lru",
+]
+
+[[package]]
+name = "ckb-verification-traits"
+version = "0.105.0-pre"
+source = "git+https://github.com/nervosnetwork/ckb?rev=c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5#c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5"
+dependencies = [
+ "bitflags",
+ "ckb-error",
 ]
 
 [[package]]
@@ -1212,6 +1264,9 @@ name = "hashbrown"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "db0d4cf898abf0081f964436dc980e96670a0f36863e4b83aaacdb65c9d7ccc3"
+dependencies = [
+ "ahash",
+]
 
 [[package]]
 name = "heapsize"
@@ -1512,6 +1567,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "abb12e687cfb44aa40f41fc3978ef76448f9b6038cad6aef4259d3c095a2382e"
 dependencies = [
  "cfg-if 1.0.0",
+]
+
+[[package]]
+name = "lru"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e999beba7b6e8345721bd280141ed958096a2e4abdf74f67ff4ce49b4b54e47a"
+dependencies = [
+ "hashbrown 0.12.1",
 ]
 
 [[package]]

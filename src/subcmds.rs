@@ -102,7 +102,7 @@ impl RunConfig {
         })?;
 
         let service = Service::new("127.0.0.1:9000");
-        let rpc_server = service.start(network_controller, storage, peers, pending_txs);
+        let rpc_server = service.start(network_controller, storage, peers, pending_txs, consensus);
 
         let exit_handler_clone = exit_handler.clone();
         ctrlc::set_handler(move || {
