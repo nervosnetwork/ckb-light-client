@@ -84,8 +84,8 @@ pub trait NetRpc {
 
 #[derive(Deserialize, Serialize)]
 pub struct ScriptStatus {
-    script: Script,
-    block_number: BlockNumber,
+    pub script: Script,
+    pub block_number: BlockNumber,
 }
 
 #[derive(Deserialize, Serialize)]
