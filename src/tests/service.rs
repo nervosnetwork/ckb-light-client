@@ -14,7 +14,7 @@ use tempfile;
 
 use crate::{
     service::{
-        BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, Order, SearchKey,
+        BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, Order, ScriptStatus, SearchKey,
         SearchKeyFilter, TransactionWithHeader,
     },
     storage::Storage,
@@ -43,6 +43,12 @@ fn rpc() {
         .code_hash(H256(rand::random()).pack())
         .hash_type(ScriptHashType::Type.into())
         .args(Bytes::from(b"lock_script2".to_vec()).pack())
+        .build();
+
+    let lock_script3 = ScriptBuilder::default()
+        .code_hash(H256(rand::random()).pack())
+        .hash_type(ScriptHashType::Type.into())
+        .args(Bytes::from(b"lock_script3".to_vec()).pack())
         .build();
 
     let type_script1 = ScriptBuilder::default()
@@ -104,7 +110,27 @@ fn rpc() {
         .build();
 
     storage.init_genesis_block(block0.data());
-    storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), 0)]));
+    storage.update_filter_scripts(HashMap::from([
+        (lock_script1.clone(), 0),
+        (lock_script3, 0),
+    ]));
+
+    // test get_scripts rpc
+    let scripts = rpc.get_scripts().unwrap();
+    assert_eq!(scripts.len(), 2);
+
+    // test set_scripts rpc
+    rpc.set_scripts(vec![ScriptStatus {
+        script: lock_script1.clone().into(),
+        block_number: 0.into(),
+    }])
+    .unwrap();
+    let scripts = rpc.get_scripts().unwrap();
+    assert_eq!(
+        scripts.len(),
+        1,
+        "set_scripts should override the old scripts and delete the lock_script3"
+    );
 
     let (mut pre_tx0, mut pre_tx1, mut pre_block) = (tx00, tx01, block0);
     let total_blocks = 255;

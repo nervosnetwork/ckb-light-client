@@ -155,13 +155,24 @@ impl Storage {
             .collect()
     }
 
+    /// Update all filter scripts' status to the specified block number and delete the outdated ones.
     pub fn update_filter_scripts(&self, scripts: HashMap<Script, BlockNumber>) {
         let should_filter_genesis_block =
             scripts.iter().any(|(_, block_number)| *block_number == 0);
         let mut batch = self.batch();
+
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+
+        self.db
+            .iterator(mode)
+            .take_while(|(key, _value)| key.starts_with(&key_prefix))
+            .for_each(|(key, _value)| {
+                batch.delete(key).expect("batch delete should be ok");
+            });
+
         for (script, block_number) in scripts {
-            let mut key = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
-            key.extend_from_slice(script.as_slice());
+            let key = [key_prefix.as_ref(), script.as_slice()].concat();
             batch
                 .put(key, block_number.to_be_bytes())
                 .expect("batch put should be ok");
