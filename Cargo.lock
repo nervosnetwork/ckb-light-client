@@ -463,7 +463,7 @@ dependencies = [
  "ckb-constant",
  "ckb-error",
  "ckb-jsonrpc-types",
- "ckb-merkle-mountain-range 0.4.0",
+ "ckb-merkle-mountain-range",
  "ckb-network",
  "ckb-resource",
  "ckb-rocksdb",
@@ -512,18 +512,9 @@ dependencies = [
 
 [[package]]
 name = "ckb-merkle-mountain-range"
-version = "0.4.0"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "530710c310c455ced794feaa13f284c4c5d40ae5d82875392a83da7c5f84a8db"
-dependencies = [
- "cfg-if 0.1.10",
-]
-
-[[package]]
-name = "ckb-merkle-mountain-range"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bd027ff961bcf4b4c567333316906fbffdd4c2b8ac5ee664c412a21e6cd37666"
+checksum = "d659aac26a152a9d384bb759eaf56c028d58416f98bd4cbb089ef56424a1b0a4"
 dependencies = [
  "cfg-if 1.0.0",
 ]
@@ -710,7 +701,7 @@ dependencies = [
  "ckb-error",
  "ckb-fixed-hash",
  "ckb-hash",
- "ckb-merkle-mountain-range 0.5.0",
+ "ckb-merkle-mountain-range",
  "ckb-occupied-capacity",
  "ckb-rational",
  "derive_more",

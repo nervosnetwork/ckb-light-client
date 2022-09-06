@@ -21,7 +21,7 @@ ckb-chain-spec    = { git="https://github.com/nervosnetwork/ckb", rev = "c76930f
 ckb-traits        = { git="https://github.com/nervosnetwork/ckb", rev = "c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5" }
 ckb-resource      = { git="https://github.com/nervosnetwork/ckb", rev = "c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5" }
 ckb-verification  = { git="https://github.com/nervosnetwork/ckb", rev = "c76930f1b479ea0a8a1b7e1ae06f7615c6b43ce5" }
-ckb-merkle-mountain-range = "0.4.0"
+ckb-merkle-mountain-range = "0.5.1"
 golomb-coded-set = "0.2.0"
 rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }
 numext-fixed-uint = { version = "0.1", features = ["support_rand", "support_heapsize", "support_serde"] }
