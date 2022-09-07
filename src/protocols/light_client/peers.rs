@@ -6,11 +6,16 @@ use ckb_types::{
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 #[derive(Default, Clone)]
 pub struct Peers {
     inner: DashMap<PeerIndex, Peer>,
+    // verified last N block headers
+    last_headers: Arc<RwLock<Vec<HeaderView>>>,
 }
 
 #[derive(Default, Clone)]
@@ -191,6 +196,13 @@ impl Peer {
 }
 
 impl Peers {
+    pub fn new(last_headers: Arc<RwLock<Vec<HeaderView>>>) -> Self {
+        Self {
+            inner: Default::default(),
+            last_headers,
+        }
+    }
+
     pub(crate) fn add_peer(&self, index: PeerIndex) {
         let now = unix_time_as_millis();
         let peer = Peer::new(now);
@@ -266,6 +278,8 @@ impl Peers {
     }
 
     pub(crate) fn commit_prove_state(&self, index: PeerIndex, state: ProveState) {
+        *self.last_headers.write().expect("poisoned") = state.get_last_headers().to_vec();
+
         let now = unix_time_as_millis();
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.state.commit_prove_state(state);

@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::HashMap,
+    path::Path,
+    sync::{Arc, RwLock},
+};
 
 use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
@@ -583,6 +587,54 @@ impl HeaderProvider for Storage {
         self.get(Key::BlockHash(hash).into_vec())
             .map(|v| v.map(|v| Header::from_slice(&v).expect("stored Header").into_view()))
             .expect("db get should be ok")
+    }
+}
+
+#[derive(Clone)]
+pub struct StorageWithLastHeaders {
+    storage: Storage,
+    last_headers: Arc<RwLock<Vec<HeaderView>>>,
+}
+
+impl StorageWithLastHeaders {
+    pub fn new(storage: Storage, last_headers: Arc<RwLock<Vec<HeaderView>>>) -> Self {
+        Self {
+            storage,
+            last_headers,
+        }
+    }
+
+    pub fn storage(&self) -> &Storage {
+        &self.storage
+    }
+}
+
+impl HeaderProvider for StorageWithLastHeaders {
+    fn get_header(&self, hash: &packed::Byte32) -> Option<HeaderView> {
+        self.storage.get_header(hash).or_else(|| {
+            self.last_headers
+                .read()
+                .expect("poisoned")
+                .iter()
+                .find(|header| header.hash().eq(hash))
+                .cloned()
+        })
+    }
+}
+
+impl CellDataProvider for StorageWithLastHeaders {
+    fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
+        self.storage.get_cell_data(out_point)
+    }
+
+    fn get_cell_data_hash(&self, out_point: &OutPoint) -> Option<Byte32> {
+        self.storage.get_cell_data_hash(out_point)
+    }
+}
+
+impl CellProvider for StorageWithLastHeaders {
+    fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
+        self.storage.cell(out_point, eager_load)
     }
 }
 

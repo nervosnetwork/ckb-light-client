@@ -23,7 +23,7 @@ use std::{
 
 use crate::{
     protocols::{Peers, PendingTxs},
-    storage::{self, extract_raw_data, Key, KeyPrefix, Storage},
+    storage::{self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithLastHeaders},
     verify::verify_tx,
 };
 
@@ -231,12 +231,12 @@ pub struct BlockFilterRpcImpl {
 pub struct TransactionRpcImpl {
     network_controller: NetworkController,
     pending_txs: Arc<RwLock<PendingTxs>>,
-    storage: Storage,
+    swl: StorageWithLastHeaders,
     consensus: Consensus,
 }
 
 pub struct ChainRpcImpl {
-    pub(crate) storage: Storage,
+    pub(crate) swl: StorageWithLastHeaders,
 }
 
 pub struct NetRpcImpl {
@@ -930,7 +930,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let cycles = verify_tx(tx.clone(), &self.storage, &self.consensus)
+        let cycles = verify_tx(tx.clone(), &self.swl, &self.consensus)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
             .write()
@@ -951,16 +951,17 @@ impl TransactionRpc for TransactionRpcImpl {
 
 impl ChainRpc for ChainRpcImpl {
     fn get_tip_header(&self) -> Result<HeaderView> {
-        Ok(self.storage.get_tip_header().into_view().into())
+        Ok(self.swl.storage().get_tip_header().into_view().into())
     }
 
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
-        Ok(self.storage.get_header(&block_hash.pack()).map(Into::into))
+        Ok(self.swl.get_header(&block_hash.pack()).map(Into::into))
     }
 
     fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>> {
         let transaction_with_header = self
-            .storage
+            .swl
+            .storage()
             .get_transaction_with_header(&tx_hash.pack())
             .map(|(tx, header)| TransactionWithHeader {
                 transaction: tx.into_view().into(),
@@ -986,6 +987,7 @@ impl Service {
         &self,
         network_controller: NetworkController,
         storage: Storage,
+        last_headers: Arc<RwLock<Vec<core::HeaderView>>>,
         peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
         consensus: Consensus,
@@ -994,13 +996,12 @@ impl Service {
         let block_filter_rpc_impl = BlockFilterRpcImpl {
             storage: storage.clone(),
         };
-        let chain_rpc_impl = ChainRpcImpl {
-            storage: storage.clone(),
-        };
+        let swl = StorageWithLastHeaders::new(storage, last_headers);
+        let chain_rpc_impl = ChainRpcImpl { swl: swl.clone() };
         let transaction_rpc_impl = TransactionRpcImpl {
             network_controller: network_controller.clone(),
             pending_txs,
-            storage,
+            swl,
             consensus,
         };
         let net_rpc_impl = NetRpcImpl {
