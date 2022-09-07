@@ -1,4 +1,7 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{Arc, RwLock},
+};
 
 use ckb_types::{
     bytes::Bytes,
@@ -17,7 +20,7 @@ use crate::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, Order, ScriptStatus, SearchKey,
         SearchKeyFilter, TransactionWithHeader,
     },
-    storage::Storage,
+    storage::{Storage, StorageWithLastHeaders},
 };
 
 fn new_storage(prefix: &str) -> Storage {
@@ -531,14 +534,26 @@ fn rpc() {
     assert_eq!(0, capacity.value(), "lock_script2 is not filtered");
 
     // test get_header rpc
-    let rpc = ChainRpcImpl {
-        storage: storage.clone(),
-    };
+    let extra_header = HeaderBuilder::default()
+        .epoch(EpochNumberWithFraction::new(0, 500, 1000).pack())
+        .number(500.pack())
+        .build();
+    let swl = StorageWithLastHeaders::new(
+        storage.clone(),
+        Arc::new(RwLock::new(vec![extra_header.clone()])),
+    );
+
+    let rpc = ChainRpcImpl { swl };
     let header = rpc
         .get_header(pre_block.header().hash().unpack())
         .unwrap()
         .unwrap();
     assert_eq!(pre_block.header().number(), header.inner.number.value(),);
+    let header = rpc
+        .get_header(extra_header.hash().unpack())
+        .unwrap()
+        .unwrap();
+    assert_eq!(extra_header.number(), header.inner.number.value(),);
 
     // test get_transaction rpc
     let TransactionWithHeader {
