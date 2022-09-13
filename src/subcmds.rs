@@ -46,7 +46,6 @@ impl RunConfig {
             })?;
         let required_protocol_ids = vec![
             SupportProtocols::Sync.protocol_id(),
-            SupportProtocols::RelayV2.protocol_id(),
             SupportProtocols::LightClient.protocol_id(),
             SupportProtocols::Filter.protocol_id(),
         ];
@@ -54,7 +53,7 @@ impl RunConfig {
         let last_headers = Arc::new(RwLock::new(Vec::new()));
         let peers = Arc::new(Peers::new(Arc::clone(&last_headers)));
         let sync_protocol = SyncProtocol::new(storage.clone());
-        let relay_protocol = RelayProtocol::new(pending_txs.clone());
+        let relay_protocol = RelayProtocol::new(pending_txs.clone(), Arc::clone(&peers));
         let light_client: Box<dyn CKBProtocolHandler> = Box::new(LightClientProtocol::new(
             storage.clone(),
             Arc::clone(&peers),
