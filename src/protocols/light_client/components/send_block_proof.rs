@@ -1,3 +1,4 @@
+use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
 use log::error;
@@ -84,29 +85,31 @@ impl<'a> SendBlockProofProcess<'a> {
         }
 
         // Send get blocks
-        let content = packed::GetBlocks::new_builder()
-            .block_hashes(
-                headers
-                    .iter()
-                    .chain(if request.expect("checked Some").1 {
-                        Some(tip_header.header())
-                    } else {
-                        None
-                    })
-                    .map(|header| header.hash())
-                    .pack(),
-            )
-            .build();
-        let message = packed::SyncMessage::new_builder().set(content).build();
+        let block_hashes: Vec<packed::Byte32> = headers
+            .iter()
+            .chain(if request.expect("checked Some").1 {
+                Some(tip_header.header())
+            } else {
+                None
+            })
+            .map(|header| header.hash())
+            .collect();
 
-        if let Err(err) = self.nc.send_message(
-            SupportProtocols::Sync.protocol_id(),
-            self.peer,
-            message.as_bytes(),
-        ) {
-            let error_message = format!("nc.send_message SyncMessage, error: {:?}", err);
-            error!("{}", error_message);
-            return StatusCode::Network.with_context(error_message);
+        for hashes in block_hashes.chunks(INIT_BLOCKS_IN_TRANSIT_PER_PEER) {
+            let content = packed::GetBlocks::new_builder()
+                .block_hashes(hashes.to_vec().pack())
+                .build();
+            let message = packed::SyncMessage::new_builder().set(content).build();
+
+            if let Err(err) = self.nc.send_message(
+                SupportProtocols::Sync.protocol_id(),
+                self.peer,
+                message.as_bytes(),
+            ) {
+                let error_message = format!("nc.send_message SyncMessage, error: {:?}", err);
+                error!("{}", error_message);
+                return StatusCode::Network.with_context(error_message);
+            }
         }
         Status::ok()
     }
