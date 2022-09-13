@@ -213,6 +213,10 @@ impl Peers {
         self.inner.remove(&index);
     }
 
+    pub(crate) fn get_peers_index(&self) -> Vec<PeerIndex> {
+        self.inner.iter().map(|kv| *kv.key()).collect()
+    }
+
     // Peers is a DashMap, return an owned PeerState to avoid the dead lock when
     // also need to update Peers later.
     pub(crate) fn get_state(&self, index: &PeerIndex) -> Option<PeerState> {

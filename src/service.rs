@@ -3,7 +3,7 @@ use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
     RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
 };
-use ckb_network::{extract_peer_id, NetworkController, SupportProtocols};
+use ckb_network::{extract_peer_id, NetworkController};
 use ckb_traits::HeaderProvider;
 use ckb_types::{core, packed, prelude::*, H256};
 use jsonrpc_core::{Error, IoHandler, Result};
@@ -229,7 +229,6 @@ pub struct BlockFilterRpcImpl {
 }
 
 pub struct TransactionRpcImpl {
-    network_controller: NetworkController,
     pending_txs: Arc<RwLock<PendingTxs>>,
     swl: StorageWithLastHeaders,
     consensus: Consensus,
@@ -937,14 +936,6 @@ impl TransactionRpc for TransactionRpcImpl {
             .expect("pending_txs lock is poisoned")
             .push(tx.clone(), cycles);
 
-        let content = packed::RelayTransactionHashes::new_builder()
-            .tx_hashes(vec![tx.hash()].pack())
-            .build();
-        let message = packed::RelayMessage::new_builder().set(content).build();
-        self.network_controller
-            .broadcast(SupportProtocols::RelayV2.protocol_id(), message.as_bytes())
-            .map_err(|_err| Error::internal_error())?;
-
         Ok(tx.hash().unpack())
     }
 }
@@ -999,7 +990,6 @@ impl Service {
         let swl = StorageWithLastHeaders::new(storage, last_headers);
         let chain_rpc_impl = ChainRpcImpl { swl: swl.clone() };
         let transaction_rpc_impl = TransactionRpcImpl {
-            network_controller: network_controller.clone(),
             pending_txs,
             swl,
             consensus,

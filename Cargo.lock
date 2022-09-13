@@ -481,6 +481,7 @@ dependencies = [
  "jsonrpc-derive",
  "jsonrpc-http-server",
  "jsonrpc-server-utils",
+ "linked-hash-map",
  "log",
  "numext-fixed-uint",
  "path-clean",
