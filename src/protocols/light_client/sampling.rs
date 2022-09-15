@@ -5,8 +5,6 @@ use log::{trace, warn};
 use numext_fixed_uint::{prelude::UintConvert as _, U512};
 use rand::{thread_rng, Rng as _};
 
-use crate::protocols::LAST_N_BLOCKS;
-
 const C_FRACTION: f64 = 0.5;
 const LAMBDA: u32 = 50;
 
@@ -92,10 +90,11 @@ pub(crate) fn sample_blocks(
     start_difficulty: &U256,
     last_number: BlockNumber,
     last_difficulty: &U256,
+    last_n_blocks: BlockNumber,
 ) -> (U256, Vec<U256>) {
     let blocks_count = last_number - start_number;
-    let k = estimate_k(LAST_N_BLOCKS, blocks_count, C_FRACTION);
-    let samples_count = estimate_samples_count(blocks_count, LAST_N_BLOCKS, k, LAMBDA);
+    let k = estimate_k(last_n_blocks, blocks_count, C_FRACTION);
+    let samples_count = estimate_samples_count(blocks_count, last_n_blocks, k, LAMBDA);
 
     let delta = C_FRACTION.powf(k);
     let difficulty_range = last_difficulty - start_difficulty;
@@ -103,8 +102,9 @@ pub(crate) fn sample_blocks(
     let difficulty_boundary = start_difficulty + &difficulty_boundary_added;
 
     trace!(
-        "sampling: samples={}, delta={}, k={} in [{},{}), [{}, {}, {})",
+        "sampling: samples={}, n={}, delta={}, k={} in [{},{}), [{}, {}, {})",
         samples_count,
+        last_n_blocks,
         delta,
         k,
         start_number,

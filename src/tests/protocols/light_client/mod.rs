@@ -89,7 +89,7 @@ fn build_prove_request_content() {
             assert!(prove_request.is_none());
         }
 
-        for new_last_number in (last_number + 1)..=(last_number + 10) {
+        for new_last_number in (last_number + 1)..=(last_number + LAST_N_BLOCKS + 10) {
             let verifiable_header = {
                 let epoch = EpochNumberWithFraction::new(0, new_last_number, epoch_length);
                 let header = HeaderBuilder::default()
@@ -104,8 +104,16 @@ fn build_prove_request_content() {
                 &new_last_total_difficulty,
             );
             assert!(prove_request.is_some());
-            let start_number: BlockNumber = prove_request.expect("checked").start_number().unpack();
+            let prove_request = prove_request.expect("checked");
+            let start_number: BlockNumber = prove_request.start_number().unpack();
             assert_eq!(start_number, last_number);
+            let difficulty_boundary: U256 = prove_request.difficulty_boundary().unpack();
+            let difficulties = prove_request.difficulties();
+            let expected_difficulty_boundary = U256::from(last_total_difficulty);
+            if new_last_number - last_number <= LAST_N_BLOCKS {
+                assert!(difficulties.is_empty());
+                assert_eq!(difficulty_boundary, expected_difficulty_boundary);
+            }
         }
     }
 }

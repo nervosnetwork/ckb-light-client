@@ -325,6 +325,7 @@ impl LightClientProtocol {
         last_header: &VerifiableHeader,
         last_total_difficulty: &U256,
     ) -> Option<packed::GetBlockSamples> {
+        let last_n_blocks = LAST_N_BLOCKS;
         let last_number = last_header.header().number();
         let (start_hash, start_number, start_total_difficulty) = peer_state
             .get_prove_state()
@@ -357,21 +358,26 @@ impl LightClientProtocol {
         if &start_total_difficulty > last_total_difficulty || start_number >= last_number {
             return None;
         }
-        let (difficulty_boundary, difficulties) = sampling::sample_blocks(
-            start_number,
-            &start_total_difficulty,
-            last_number,
-            last_total_difficulty,
-        );
-        Some(
-            packed::GetBlockSamples::new_builder()
-                .last_hash(last_header.header().hash())
-                .start_hash(start_hash)
-                .start_number(start_number.pack())
-                .last_n_blocks(LAST_N_BLOCKS.pack())
+        let builder = packed::GetBlockSamples::new_builder()
+            .last_hash(last_header.header().hash())
+            .start_hash(start_hash)
+            .start_number(start_number.pack())
+            .last_n_blocks(last_n_blocks.pack());
+        let content = if last_number - start_number <= last_n_blocks {
+            builder.difficulty_boundary(start_total_difficulty.pack())
+        } else {
+            let (difficulty_boundary, difficulties) = sampling::sample_blocks(
+                start_number,
+                &start_total_difficulty,
+                last_number,
+                last_total_difficulty,
+                last_n_blocks,
+            );
+            builder
                 .difficulty_boundary(difficulty_boundary.pack())
                 .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
-                .build(),
-        )
+        }
+        .build();
+        Some(content)
     }
 }
