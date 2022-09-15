@@ -18,7 +18,6 @@ use log::{error, trace, warn};
 use super::super::{
     peers::ProveRequest, prelude::*, LastState, LightClientProtocol, ProveState, Status, StatusCode,
 };
-use crate::protocols::LAST_N_BLOCKS;
 
 pub(crate) struct SendLastStateProofProcess<'a> {
     message: packed::SendLastStateProofReader<'a>,
@@ -75,7 +74,7 @@ impl<'a> SendLastStateProofProcess<'a> {
         // Check if the response is match the request.
         let (reorg_count, sampled_count, last_n_count) =
             return_if_failed!(check_if_response_is_matched(
-                LAST_N_BLOCKS as usize,
+                self.protocol.last_n_blocks() as usize,
                 original_request.get_content(),
                 &headers,
             ));
@@ -483,12 +482,12 @@ pub(crate) fn check_if_response_is_matched(
     prev_request: &packed::GetLastStateProof,
     headers: &[VerifiableHeader],
 ) -> Result<(usize, usize, usize), Status> {
-    // Headers should be ordered.
+    // Headers should be sorted.
     if headers
         .windows(2)
         .any(|hs| hs[0].header().number() >= hs[1].header().number())
     {
-        let errmsg = "headers should be ordered (monotonic increasing)";
+        let errmsg = "headers should be sorted (monotonic increasing)";
         return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
     }
 

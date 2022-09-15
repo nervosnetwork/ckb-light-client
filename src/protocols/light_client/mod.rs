@@ -40,6 +40,7 @@ pub struct LightClientProtocol {
     storage: Storage,
     peers: Arc<Peers>,
     consensus: Consensus,
+    last_n_blocks: BlockNumber,
 }
 
 #[async_trait]
@@ -266,7 +267,7 @@ impl LightClientProtocol {
     /// Update the prove state base on the previous request.
     /// - Update the peer's cache.
     /// - Try to update the storage and handle potential fork.
-    fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) {
+    pub(crate) fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) {
         let (old_total_difficulty, _) = self.storage.get_last_state();
         let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
         if new_total_difficulty > old_total_difficulty {
@@ -316,7 +317,17 @@ impl LightClientProtocol {
             storage,
             peers,
             consensus,
+            last_n_blocks: LAST_N_BLOCKS,
         }
+    }
+
+    pub(crate) fn last_n_blocks(&self) -> BlockNumber {
+        self.last_n_blocks
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_last_n_blocks(&mut self, last_n_blocks: BlockNumber) {
+        self.last_n_blocks = last_n_blocks;
     }
 
     pub(crate) fn mmr_activated_epoch(&self) -> EpochNumber {
@@ -379,7 +390,7 @@ impl LightClientProtocol {
         peer_state: &PeerState,
         last_header: &VerifiableHeader,
     ) -> Option<packed::GetLastStateProof> {
-        let last_n_blocks = LAST_N_BLOCKS;
+        let last_n_blocks = self.last_n_blocks();
         let last_number = last_header.header().number();
         let last_total_difficulty = last_header.total_difficulty();
         let (start_hash, start_number, start_total_difficulty) = peer_state

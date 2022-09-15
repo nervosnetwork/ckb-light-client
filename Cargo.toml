@@ -44,6 +44,11 @@ jsonrpc-http-server = "18.0"
 jsonrpc-server-utils = "18.0"
 
 [dev-dependencies]
+ckb-launcher    = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-shared      = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-chain       = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-tx-pool     = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-store       = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
 tempfile = "3.0"
 rand = "0.6"
 serde_json = "1.0"

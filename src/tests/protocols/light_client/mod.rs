@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
     core::{BlockNumber, EpochNumberWithFraction, HeaderBuilder},
     packed,
@@ -8,23 +9,50 @@ use ckb_types::{
     U256,
 };
 
-use crate::protocols::{LightClientProtocol, PeerState, Peers, LAST_N_BLOCKS};
+use crate::{
+    protocols::{PeerState, Peers, BAD_MESSAGE_BAN_TIME},
+    tests::{
+        prelude::*,
+        utils::{MockChain, MockNetworkContext},
+    },
+};
 
-use super::super::verify::setup;
+mod send_last_state;
+mod send_last_state_proof;
+
+#[tokio::test]
+async fn malformed_message() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client");
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peers = Arc::new(Peers::default());
+    let mut protocol = chain.create_light_client_protocol(peers);
+
+    let peer_index = PeerIndex::new(3);
+    let data = Bytes::from(vec![2, 3, 4, 5]);
+    protocol.received(nc.context(), peer_index, data).await;
+
+    assert_eq!(
+        nc.has_banned(peer_index).map(|(duration, _)| duration),
+        Some(BAD_MESSAGE_BAN_TIME)
+    );
+}
 
 #[test]
 fn build_prove_request_content() {
-    let (storage, consensus) = setup("test-light-client");
+    let chain = MockChain::new_with_dummy_pow("test-light-client");
 
     let peers = Arc::new(Peers::default());
-    let protocol = LightClientProtocol::new(storage.clone(), peers, consensus);
+    let protocol = chain.create_light_client_protocol(peers);
+    let storage = chain.client_storage();
 
     let peer_state = PeerState::default();
     let default_compact_target = DIFF_TWO;
     let default_block_difficulty = 2u64;
     let last_number = 50;
     let last_total_difficulty = 500u64;
-    let epoch_length = LAST_N_BLOCKS + last_number + 100;
+    let last_n_blocks = protocol.last_n_blocks();
+    let epoch_length = last_n_blocks + last_number + 100;
 
     // Setup the storage.
     {
@@ -98,7 +126,7 @@ fn build_prove_request_content() {
             assert!(prove_request.is_none());
         }
 
-        for new_last_number in (last_number + 1)..=(last_number + LAST_N_BLOCKS + 10) {
+        for new_last_number in (last_number + 1)..=(last_number + last_n_blocks + 10) {
             let verifiable_header = {
                 let epoch = EpochNumberWithFraction::new(0, new_last_number, epoch_length);
                 let header = HeaderBuilder::default()
@@ -119,7 +147,7 @@ fn build_prove_request_content() {
             let difficulty_boundary: U256 = prove_request.difficulty_boundary().unpack();
             let difficulties = prove_request.difficulties();
             let expected_difficulty_boundary = U256::from(last_total_difficulty);
-            if new_last_number - last_number <= LAST_N_BLOCKS {
+            if new_last_number - last_number <= last_n_blocks {
                 assert!(difficulties.is_empty());
                 assert_eq!(difficulty_boundary, expected_difficulty_boundary);
             }

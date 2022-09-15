@@ -4,9 +4,7 @@ use std::time::Instant;
 
 use golomb_coded_set::{GCSFilterWriter, SipHasher24Builder, M, P};
 
-use ckb_network::{
-    bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
-};
+use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
     core::{EpochNumberWithFraction, HeaderBuilder},
     packed::{self, Script},
@@ -15,25 +13,27 @@ use ckb_types::{
     H256,
 };
 
-use crate::protocols::{
-    FilterProtocol, LastState, Peers, ProveRequest, ProveState, BAD_MESSAGE_BAN_TIME,
-    GET_BLOCK_FILTERS_TOKEN,
+use crate::{
+    protocols::{
+        LastState, Peers, ProveRequest, ProveState, BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN,
+    },
+    tests::{
+        prelude::*,
+        utils::{MockChain, MockNetworkContext},
+    },
 };
-
-use super::super::verify::setup;
-use super::mock_context::MockProtocolContext;
 
 #[tokio::test]
 async fn test_block_filter_malformed_message() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
-    let (storage, _) = setup("test-block-filter");
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let peers = Arc::new(Peers::default());
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
 
     let peer_index = PeerIndex::new(3);
     let data = Bytes::from(vec![2, 3, 4, 5]);
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
-    protocol.received(nc_clone, peer_index, data).await;
+    protocol.received(nc.context(), peer_index, data).await;
 
     assert_eq!(
         nc.has_banned(peer_index).map(|(duration, _)| duration),
@@ -43,17 +43,15 @@ async fn test_block_filter_malformed_message() {
 
 #[tokio::test]
 async fn test_block_filter_ignore_start_number() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -75,7 +73,7 @@ async fn test_block_filter_ignore_start_number() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
         .start_number((min_filtered_block_number - 1).pack())
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
@@ -86,28 +84,25 @@ async fn test_block_filter_ignore_start_number() {
         .build();
 
     let peer_index = PeerIndex::new(3);
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
     protocol
-        .received(nc_clone, peer_index, message.as_bytes())
+        .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers.borrow().is_empty());
-    assert!(nc.sent_messages.borrow().is_empty());
+    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test]
 async fn test_block_filter_empty_filters() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -129,7 +124,7 @@ async fn test_block_filter_empty_filters() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
         .start_number((min_filtered_block_number + 1).pack())
         .block_hashes(vec![].pack())
@@ -140,28 +135,25 @@ async fn test_block_filter_empty_filters() {
         .build();
 
     let peer_index = PeerIndex::new(3);
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
     protocol
-        .received(nc_clone, peer_index, message.as_bytes())
+        .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers.borrow().is_empty());
-    assert!(nc.sent_messages.borrow().is_empty());
+    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test]
 async fn test_block_filter_invalid_filters_count() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -183,7 +175,7 @@ async fn test_block_filter_invalid_filters_count() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
         .start_number((min_filtered_block_number + 1).pack())
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
@@ -194,33 +186,30 @@ async fn test_block_filter_invalid_filters_count() {
         .build();
 
     let peer_index = PeerIndex::new(3);
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
     protocol
-        .received(nc_clone, peer_index, message.as_bytes())
+        .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
     assert_eq!(
         nc.has_banned(peer_index).map(|(duration, _)| duration),
         Some(BAD_MESSAGE_BAN_TIME)
     );
-    assert!(nc.sent_messages.borrow().is_empty());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test]
 async fn test_block_filter_start_number_greater_then_proved_number() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
     let proved_number = min_filtered_block_number;
     let start_number = min_filtered_block_number + 1;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -242,7 +231,7 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
         .start_number(start_number.pack())
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
@@ -253,30 +242,27 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
         .build();
 
     let peer_index = PeerIndex::new(3);
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
     protocol
-        .received(nc_clone, peer_index, message.as_bytes())
+        .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers.borrow().is_empty());
-    assert!(nc.sent_messages.borrow().is_empty());
+    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test]
 async fn test_block_filter_ok_with_blocks_not_matched() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
     let proved_number = min_filtered_block_number + 1;
     let start_number = min_filtered_block_number + 1;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -298,7 +284,7 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
         .start_number(start_number.pack())
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
@@ -309,12 +295,11 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
         .build();
 
     let peer_index = PeerIndex::new(3);
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
     protocol
-        .received(nc_clone, peer_index, message.as_bytes())
+        .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers.borrow().is_empty());
+    assert!(nc.banned_peers().borrow().is_empty());
 
     let message = {
         let start_number: u64 = min_filtered_block_number + 1;
@@ -326,7 +311,7 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
             .build()
     };
     assert_eq!(
-        nc.sent_messages.borrow().clone(),
+        nc.sent_messages().borrow().clone(),
         vec![(
             SupportProtocols::Filter.protocol_id(),
             peer_index,
@@ -337,7 +322,9 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
 
 #[tokio::test]
 async fn test_block_filter_ok_with_blocks_matched() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
     let proved_number = min_filtered_block_number + 1;
     let start_number = min_filtered_block_number + 1;
@@ -345,15 +332,11 @@ async fn test_block_filter_ok_with_blocks_matched() {
         .code_hash(H256(rand::random()).pack())
         .args(Bytes::from(vec![1, 2, 3]).pack())
         .build();
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(script.clone(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(script.clone(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let (peers, prove_state_block_hash) = {
@@ -373,7 +356,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
         peers.commit_prove_state(peer_index, prove_state);
         (peers, prove_state_block_hash)
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
 
     let filter_data = {
         let mut writer = std::io::Cursor::new(Vec::new());
@@ -396,12 +379,11 @@ async fn test_block_filter_ok_with_blocks_matched() {
         .build();
 
     let peer_index = PeerIndex::new(3);
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
     protocol
-        .received(nc_clone, peer_index, message.as_bytes())
+        .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers.borrow().is_empty());
+    assert!(nc.banned_peers().borrow().is_empty());
 
     let get_block_proof_message = {
         let content = packed::GetBlocksProof::new_builder()
@@ -422,7 +404,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
             .build()
     };
     assert_eq!(
-        nc.sent_messages.borrow().clone(),
+        nc.sent_messages().borrow().clone(),
         vec![
             (
                 SupportProtocols::LightClient.protocol_id(),
@@ -440,17 +422,15 @@ async fn test_block_filter_ok_with_blocks_matched() {
 
 #[tokio::test]
 async fn test_block_filter_notify_ask_filters() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -472,10 +452,9 @@ async fn test_block_filter_notify_ask_filters() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
 
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
-    protocol.notify(nc_clone, GET_BLOCK_FILTERS_TOKEN).await;
+    protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
     let message = {
         let start_number: u64 = min_filtered_block_number + 1;
         let content = packed::GetBlockFilters::new_builder()
@@ -487,7 +466,7 @@ async fn test_block_filter_notify_ask_filters() {
     };
 
     assert_eq!(
-        nc.sent_messages.borrow().clone(),
+        nc.sent_messages().borrow().clone(),
         vec![(
             SupportProtocols::Filter.protocol_id(),
             peer_index,
@@ -498,8 +477,8 @@ async fn test_block_filter_notify_ask_filters() {
 
 #[tokio::test]
 async fn test_block_filter_notify_no_proved_peers() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
-    let (storage, _) = setup("test-block-filter");
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -507,27 +486,24 @@ async fn test_block_filter_notify_no_proved_peers() {
         peers.add_peer(peer_index);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
 
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
-    protocol.notify(nc_clone, GET_BLOCK_FILTERS_TOKEN).await;
+    protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
 
-    assert!(nc.sent_messages.borrow().is_empty());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test]
 async fn test_block_filter_notify_not_reach_ask() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -549,28 +525,25 @@ async fn test_block_filter_notify_not_reach_ask() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
     protocol.pending_peer.last_ask_time = Arc::new(RwLock::new(Some(Instant::now())));
 
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
-    protocol.notify(nc_clone, GET_BLOCK_FILTERS_TOKEN).await;
+    protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
 
-    assert!(nc.sent_messages.borrow().is_empty());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test]
 async fn test_block_filter_notify_proved_number_not_big_enough() {
-    let nc = Arc::new(MockProtocolContext::new(SupportProtocols::Filter));
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
     let min_filtered_block_number = 3;
-    let storage = {
-        let (storage, _) = setup("test-block-filter");
-        storage.update_filter_scripts(
-            vec![(Script::default(), min_filtered_block_number)]
-                .into_iter()
-                .collect(),
-        );
-        storage
-    };
+    chain.client_storage().update_filter_scripts(
+        vec![(Script::default(), min_filtered_block_number)]
+            .into_iter()
+            .collect(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -592,10 +565,9 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
         peers.commit_prove_state(peer_index, prove_state);
         peers
     };
-    let mut protocol = FilterProtocol::new(storage, peers);
+    let mut protocol = chain.create_filter_protocol(peers);
 
-    let nc_clone = Arc::clone(&nc) as Arc<dyn CKBProtocolContext + Sync>;
-    protocol.notify(nc_clone, GET_BLOCK_FILTERS_TOKEN).await;
+    protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
 
-    assert!(nc.sent_messages.borrow().is_empty());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
