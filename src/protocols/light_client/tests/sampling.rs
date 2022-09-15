@@ -153,6 +153,7 @@ fn test_fly_client_pdf_samples_should_be_smaller_than_the_boundary() {
 
 #[test]
 fn test_sample_blocks() {
+    let last_n_blocks = 100;
     let testcases = [
         (
             (1000, u256!("0x10000"), 1010, u256!("0x10100")),
@@ -182,6 +183,7 @@ fn test_sample_blocks() {
                 &start_difficulty,
                 last_number,
                 &last_difficulty,
+                last_n_blocks,
             );
             assert_eq!(
                 difficulty_boundary,
