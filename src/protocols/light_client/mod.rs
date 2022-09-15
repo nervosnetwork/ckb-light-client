@@ -8,7 +8,7 @@ use std::sync::Arc;
 use ckb_chain_spec::consensus::Consensus;
 use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{
-    core::{EpochNumber, HeaderView},
+    core::{BlockNumber, EpochNumber, HeaderView},
     packed,
     prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader,
@@ -319,12 +319,13 @@ impl LightClientProtocol {
         }
     }
 
-    fn build_prove_request_content(
+    pub(crate) fn build_prove_request_content(
         &self,
         peer_state: &PeerState,
         last_header: &VerifiableHeader,
         last_total_difficulty: &U256,
     ) -> Option<packed::GetBlockSamples> {
+        let last_number = last_header.header().number();
         let (start_hash, start_number, start_total_difficulty) = peer_state
             .get_prove_state()
             .map(|inner| {
@@ -337,20 +338,25 @@ impl LightClientProtocol {
             .unwrap_or_else(|| {
                 let (total_difficulty, last_tip) = self.storage.get_last_state();
                 if &total_difficulty > last_total_difficulty {
-                    warn!("the last state total_difficulty in storage greater than the data in memory");
-                    warn!("storage.total_difficulty: {}, storage.last_tip: {:?}", total_difficulty, last_tip);
-                    warn!("memory.total_difficulty: {}, memory.last_tip: {:?}", last_total_difficulty, last_header.header().data());
+                    warn!(
+                        "total difficulty ({:#x}) in storage is greater than \
+                        the total difficulty ({:#x}) which requires proving",
+                        total_difficulty, last_total_difficulty
+                    );
                 }
-                (
-                    last_tip.calc_header_hash(),
-                    last_tip.raw().number().unpack(),
-                    total_difficulty,
-                )
+                let start_number: BlockNumber = last_tip.raw().number().unpack();
+                if start_number >= last_number {
+                    warn!(
+                        "block number ({}) in storage is greater than \
+                        the block number ({}) which requires proving",
+                        start_number, last_number
+                    );
+                }
+                (last_tip.calc_header_hash(), start_number, total_difficulty)
             });
-        if &start_total_difficulty > last_total_difficulty {
+        if &start_total_difficulty > last_total_difficulty || start_number >= last_number {
             return None;
         }
-        let last_number = last_header.header().number();
         let (difficulty_boundary, difficulties) = sampling::sample_blocks(
             start_number,
             &start_total_difficulty,
