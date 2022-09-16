@@ -20,7 +20,7 @@ A CKB light client based on [FlyClient].
 
 ## How to connect testnet
 
-1. Build a full node with [this branch](https://github.com/nervosnetwork/ckb/tree/light-client)
+1. Build a full node with [this branch](https://github.com/nervosnetwork/ckb/tree/light-client-rebase)
 
 ```
 git clone https://github.com/nervosnetwork/ckb.git
