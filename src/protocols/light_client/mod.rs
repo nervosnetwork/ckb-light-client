@@ -314,6 +314,8 @@ impl LightClientProtocol {
         let now = faketime::unix_time_as_millis();
         let before = now - constant::REFRESH_PEERS_DURATION.as_millis() as u64;
         for peer in self.peers().get_peers_which_require_updating(before) {
+            // TODO Different messages should have different timeouts.
+            self.get_last_state(nc, peer);
             self.get_block_samples(nc, peer);
             self.peers().update_timestamp(peer, now);
         }
