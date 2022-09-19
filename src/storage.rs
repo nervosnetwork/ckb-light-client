@@ -29,7 +29,6 @@ pub struct Storage {
     pub(crate) db: Arc<DB>,
 }
 
-#[allow(clippy::mutable_key_type)]
 impl Storage {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
         let db = Arc::new(DB::open_default(path).expect("Failed to open rocksdb"));

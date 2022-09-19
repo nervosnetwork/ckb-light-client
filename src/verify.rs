@@ -63,7 +63,6 @@ pub fn verify_tx(
         .verify(consensus.max_block_cycles())
 }
 
-#[allow(clippy::mutable_key_type)]
 fn resolve_tx(
     swl: &StorageWithLastHeaders,
     transaction: TransactionView,

@@ -23,29 +23,35 @@ pub enum StatusCode {
     /// Unexpected light-client protocol message.
     UnexpectedProtocolMessage = 401,
 
+    /// The peer state is not found.
+    PeerStateIsNotFound = 411,
     /// The last state sent from server is invalid.
-    InvalidLastState = 411,
+    InvalidLastState = 412,
 
-    /// Receives a proof but the peer isn't waiting for a proof.
+    /// Receives a response but the peer isn't waiting for a response.
     PeerIsNotOnProcess = 421,
-    /// Failed to verify chain roots for samples.
-    InvalidChainRootForSamples = 422,
-    /// Failed to verify total difficulty for samples.
-    InvalidTotalDifficultyForSamples = 423,
-    /// Failed to verify the compact target.
-    InvalidCompactTarget = 424,
-    /// Failed to verify the total difficulty.
-    InvalidTotalDifficulty = 425,
+    /// The response is not match our request.
+    UnexpectedRequest = 422,
+
+    // Common errors for all verifications.
+    /// Failed to verify chain root.
+    InvalidChainRoot = 431,
     /// Failed to verify the pow.
-    InvalidNonce = 426,
-    /// The last header number in reorg_last_n_headers is wrong
-    InvalidReorgHeaders = 427,
+    InvalidNonce = 432,
+    /// Failed to verify the compact target.
+    InvalidCompactTarget = 433,
+    /// Failed to verify the total difficulty.
+    InvalidTotalDifficulty = 434,
     /// Failed to verify the parent hash.
-    InvalidParentHash = 428,
+    InvalidParentHash = 435,
     /// Failed to verify the proof.
-    FailedToVerifyTheProof = 429,
-    /// Invalid SendBlockProof response (not match the GetBlockProof request)
-    InvalidSendBlockProof = 430,
+    InvalidProof = 439,
+
+    // Specific errors for specific messages.
+    /// Samples for a last state proof is invalid.
+    InvalidSamples = 451,
+    /// Reorg headers for a last state proof is invalid.
+    InvalidReorgHeaders = 452,
 
     /// Throws an internal error.
     InternalError = 500,
@@ -58,6 +64,15 @@ pub enum StatusCode {
 pub struct Status {
     code: StatusCode,
     context: Option<String>,
+}
+
+macro_rules! return_if_failed {
+    ($result:expr) => {
+        match $result {
+            Ok(data) => data,
+            Err(status) => return status,
+        }
+    };
 }
 
 impl PartialEq for Status {

@@ -1,15 +1,12 @@
-use crate::protocols::{GET_BLOCK_PROOF_TIMEOUT, MAX_BLOCK_RPOOF_REQUESTS};
 use ckb_network::PeerIndex;
 use ckb_types::{
-    bytes::Bytes, core::HeaderView, packed, prelude::*,
-    utilities::merkle_mountain_range::VerifiableHeader, U256,
+    core::HeaderView, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
+
+use crate::protocols::MESSAGE_TIMEOUT;
 
 #[derive(Default, Clone)]
 pub struct Peers {
@@ -27,8 +24,7 @@ pub struct Peer {
 
 #[derive(Clone, Debug)]
 pub(crate) struct LastState {
-    pub tip_header: VerifiableHeader,
-    pub total_difficulty: U256,
+    header: VerifiableHeader,
 }
 
 #[derive(Clone, Default)]
@@ -37,15 +33,13 @@ pub(crate) struct PeerState {
     last_state: Option<LastState>,
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
-    // The key is the serialized packed::GetBlockProof message,
-    // the value is the timestamp and a flag indicates that corresponding tip block should be fetched or not.
-    block_proof_requests: HashMap<Bytes, (u64, bool)>,
+    block_proof_request: Option<BlockProofRequest>,
 }
 
 #[derive(Clone)]
 pub(crate) struct ProveRequest {
     last_state: LastState,
-    request: packed::GetBlockSamples,
+    content: packed::GetLastStateProof,
     skip_check_tau: bool,
 }
 
@@ -56,42 +50,49 @@ pub(crate) struct ProveState {
     last_headers: Vec<HeaderView>,
 }
 
+#[derive(Clone)]
+pub(crate) struct BlockProofRequest {
+    content: packed::GetBlocksProof,
+    // A flag indicates that corresponding tip block should be fetched or not.
+    fetch_tip: bool,
+    when_sent: u64,
+}
+
+impl AsRef<VerifiableHeader> for LastState {
+    fn as_ref(&self) -> &VerifiableHeader {
+        &self.header
+    }
+}
+
 impl LastState {
-    pub(crate) fn new(tip_header: VerifiableHeader, total_difficulty: U256) -> LastState {
-        LastState {
-            tip_header,
-            total_difficulty,
-        }
+    pub(crate) fn new(header: VerifiableHeader) -> LastState {
+        LastState { header }
+    }
+
+    pub(crate) fn verifiable_header(&self) -> &VerifiableHeader {
+        self.as_ref()
     }
 }
 
 impl ProveRequest {
-    pub(crate) fn new(last_state: LastState, request: packed::GetBlockSamples) -> Self {
+    pub(crate) fn new(last_state: LastState, content: packed::GetLastStateProof) -> Self {
         Self {
             last_state,
-            request,
+            content,
             skip_check_tau: false,
         }
     }
 
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
-        &self.last_state.tip_header
+        self.last_state.verifiable_header()
     }
 
-    pub(crate) fn get_total_difficulty(&self) -> &U256 {
-        &self.last_state.total_difficulty
+    pub(crate) fn is_same_as(&self, another: &VerifiableHeader) -> bool {
+        if_verifiable_headers_are_same(self.get_last_header(), another)
     }
 
-    pub(crate) fn is_same_as(
-        &self,
-        last_header: &VerifiableHeader,
-        total_difficulty: &U256,
-    ) -> bool {
-        self.get_last_header() == last_header && self.get_total_difficulty() == total_difficulty
-    }
-
-    pub(crate) fn get_request(&self) -> &packed::GetBlockSamples {
-        &self.request
+    pub(crate) fn get_content(&self) -> &packed::GetLastStateProof {
+        &self.content
     }
 
     pub(crate) fn if_skip_check_tau(&self) -> bool {
@@ -117,20 +118,30 @@ impl ProveState {
         }
     }
 
+    pub(crate) fn new_child(&self, child_last_state: LastState) -> Self {
+        let parent_header = self.get_last_header().header();
+        let mut last_headers = self.last_headers.clone();
+        let reorg_last_headers = self.reorg_last_headers.clone();
+        last_headers.remove(0);
+        last_headers.push(parent_header.clone());
+        Self {
+            last_state: child_last_state,
+            reorg_last_headers,
+            last_headers,
+        }
+    }
+
+    pub(crate) fn is_parent_of(&self, child_last_state: &LastState) -> bool {
+        self.get_last_header().header().hash()
+            == child_last_state.verifiable_header().header().parent_hash()
+    }
+
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
-        &self.last_state.tip_header
+        self.last_state.verifiable_header()
     }
 
-    pub(crate) fn get_total_difficulty(&self) -> &U256 {
-        &self.last_state.total_difficulty
-    }
-
-    pub(crate) fn is_same_as(
-        &self,
-        last_header: &VerifiableHeader,
-        total_difficulty: &U256,
-    ) -> bool {
-        self.get_last_header() == last_header && self.get_total_difficulty() == total_difficulty
+    pub(crate) fn is_same_as(&self, another: &VerifiableHeader) -> bool {
+        if_verifiable_headers_are_same(self.get_last_header(), another)
     }
 
     pub(crate) fn get_reorg_last_headers(&self) -> &[HeaderView] {
@@ -139,6 +150,32 @@ impl ProveState {
 
     pub(crate) fn get_last_headers(&self) -> &[HeaderView] {
         &self.last_headers[..]
+    }
+}
+
+impl BlockProofRequest {
+    fn new(content: packed::GetBlocksProof, fetch_tip: bool, when_sent: u64) -> Self {
+        Self {
+            content,
+            fetch_tip,
+            when_sent,
+        }
+    }
+
+    pub(crate) fn is_same_as(
+        &self,
+        last_hash: &packed::Byte32,
+        block_hashes: &[packed::Byte32],
+    ) -> bool {
+        let content = packed::GetBlocksProof::new_builder()
+            .block_hashes(block_hashes.to_vec().pack())
+            .last_hash(last_hash.to_owned())
+            .build();
+        self.content.as_slice() == content.as_slice()
+    }
+
+    pub(crate) fn if_fetch_tip(&self) -> bool {
+        self.fetch_tip
     }
 }
 
@@ -154,35 +191,25 @@ impl PeerState {
     pub(crate) fn get_prove_state(&self) -> Option<&ProveState> {
         self.prove_state.as_ref()
     }
-    pub(crate) fn contains_block_proof_request(&self, request: &packed::GetBlockProof) -> bool {
-        self.block_proof_requests.contains_key(&request.as_bytes())
-    }
-    pub(crate) fn can_insert_block_proof_request(&self) -> bool {
-        self.block_proof_requests.len() < MAX_BLOCK_RPOOF_REQUESTS
-    }
 
-    fn insert_block_proof_request(&mut self, request: packed::GetBlockProof, fetch_tip: bool) {
-        self.block_proof_requests
-            .insert(request.as_bytes(), (unix_time_as_millis(), fetch_tip));
-    }
-    fn remove_block_proof_request(
-        &mut self,
-        request: &packed::GetBlockProof,
-    ) -> Option<(u64, bool)> {
-        self.block_proof_requests.remove(&request.as_bytes())
+    pub(crate) fn get_block_proof_request(&self) -> Option<&BlockProofRequest> {
+        self.block_proof_request.as_ref()
     }
 
     fn update_last_state(&mut self, last_state: LastState) {
         self.last_state = Some(last_state);
     }
 
-    fn submit_prove_request(&mut self, request: ProveRequest) {
-        self.prove_request = Some(request);
+    fn update_prove_request(&mut self, request: Option<ProveRequest>) {
+        self.prove_request = request;
     }
 
-    fn commit_prove_state(&mut self, state: ProveState) {
+    fn update_prove_state(&mut self, state: ProveState) {
         self.prove_state = Some(state);
-        self.prove_request = None;
+    }
+
+    fn update_block_proof_request(&mut self, request: Option<BlockProofRequest>) {
+        self.block_proof_request = request;
     }
 }
 
@@ -235,59 +262,45 @@ impl Peers {
         }
     }
 
-    pub(crate) fn insert_block_proof_request(
-        &self,
-        index: PeerIndex,
-        request: packed::GetBlockProof,
-        fetch_tip: bool,
-    ) {
-        if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.insert_block_proof_request(request, fetch_tip);
-        }
-    }
-    pub(crate) fn remove_block_proof_request(
-        &self,
-        index: PeerIndex,
-        request: &packed::GetBlockProof,
-    ) -> Option<(u64, bool)> {
-        self.inner
-            .get_mut(&index)
-            .and_then(|mut peer| peer.state.remove_block_proof_request(request))
-    }
-    // check all inflight requests, find peer with too many requests or have timeout request
-    pub(crate) fn check_block_proof_requests(&self) -> Vec<PeerIndex> {
-        let now = unix_time_as_millis();
-        self.inner
-            .iter()
-            .filter_map(|item| {
-                if item.value().state.block_proof_requests.len() > MAX_BLOCK_RPOOF_REQUESTS {
-                    return Some(*item.key());
-                }
-                for (timestamp, _) in item.value().state.block_proof_requests.values() {
-                    if now - timestamp > GET_BLOCK_PROOF_TIMEOUT {
-                        return Some(*item.key());
-                    }
-                }
-                None
-            })
-            .collect()
-    }
-
-    pub(crate) fn submit_prove_request(&self, index: PeerIndex, request: ProveRequest) {
+    pub(crate) fn update_prove_request(&self, index: PeerIndex, request: Option<ProveRequest>) {
         let now = unix_time_as_millis();
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.submit_prove_request(request);
+            peer.state.update_prove_request(request);
             peer.update_timestamp = now;
         }
     }
 
+    /// Update the prove state without any requests.
+    pub(crate) fn update_prove_state(&self, index: PeerIndex, state: ProveState) {
+        let now = unix_time_as_millis();
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state.update_prove_state(state);
+            peer.update_timestamp = now;
+        }
+    }
+
+    /// Commit the prove state from the previous request.
     pub(crate) fn commit_prove_state(&self, index: PeerIndex, state: ProveState) {
         *self.last_headers.write().expect("poisoned") = state.get_last_headers().to_vec();
 
         let now = unix_time_as_millis();
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.commit_prove_state(state);
+            peer.state.update_prove_state(state);
+            peer.state.update_prove_request(None);
             peer.update_timestamp = now;
+        }
+    }
+
+    pub(crate) fn update_block_proof_request(
+        &self,
+        index: PeerIndex,
+        request: Option<(packed::GetBlocksProof, bool)>,
+    ) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state
+                .update_block_proof_request(request.map(|(content, fetch_tip)| {
+                    BlockProofRequest::new(content, fetch_tip, unix_time_as_millis())
+                }));
         }
     }
 
@@ -304,6 +317,24 @@ impl Peers {
             .collect()
     }
 
+    pub(crate) fn get_peers_which_have_timeout(&self, now: u64) -> Vec<PeerIndex> {
+        self.inner
+            .iter()
+            .filter_map(|item| {
+                item.value()
+                    .state
+                    .get_block_proof_request()
+                    .and_then(|req| {
+                        if now > req.when_sent + MESSAGE_TIMEOUT {
+                            Some(*item.key())
+                        } else {
+                            None
+                        }
+                    })
+            })
+            .collect()
+    }
+
     pub(crate) fn get_peers_which_are_proved(&self) -> Vec<(PeerIndex, ProveState)> {
         self.inner
             .iter()
@@ -315,4 +346,22 @@ impl Peers {
             })
             .collect()
     }
+}
+
+fn if_verifiable_headers_are_same(lhs: &VerifiableHeader, rhs: &VerifiableHeader) -> bool {
+    lhs.header() == rhs.header()
+        && lhs.uncles_hash() == rhs.uncles_hash()
+        && lhs.extension().is_none() == rhs.extension().is_none()
+        && (lhs.extension().is_none()
+            || (lhs
+                .extension()
+                .as_ref()
+                .expect("checked: is not none")
+                .as_slice()
+                == rhs
+                    .extension()
+                    .as_ref()
+                    .expect("checked: is not none")
+                    .as_slice()))
+        && lhs.total_difficulty() == rhs.total_difficulty()
 }

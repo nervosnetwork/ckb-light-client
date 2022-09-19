@@ -183,7 +183,7 @@ impl CKBProtocolHandler for FilterProtocol {
                     .peers
                     .get_peers_which_are_proved()
                     .iter()
-                    .max_by_key(|(_, prove_state)| prove_state.get_total_difficulty())
+                    .max_by_key(|(_, prove_state)| prove_state.get_last_header().total_difficulty())
                 {
                     let start_number = self.pending_peer.min_filtered_block_number() + 1;
                     let prove_state_number = prove_state.get_last_header().header().number();

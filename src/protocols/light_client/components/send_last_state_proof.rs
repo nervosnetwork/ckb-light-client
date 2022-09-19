@@ -13,23 +13,23 @@ use ckb_types::{
     },
     U256,
 };
-use log::{error, trace};
+use log::{error, trace, warn};
 
 use super::super::{
     peers::ProveRequest, prelude::*, LastState, LightClientProtocol, ProveState, Status, StatusCode,
 };
 use crate::protocols::LAST_N_BLOCKS;
 
-pub(crate) struct SendBlockSamplesProcess<'a> {
-    message: packed::SendBlockSamplesReader<'a>,
+pub(crate) struct SendLastStateProofProcess<'a> {
+    message: packed::SendLastStateProofReader<'a>,
     protocol: &'a mut LightClientProtocol,
     peer: PeerIndex,
     nc: &'a dyn CKBProtocolContext,
 }
 
-impl<'a> SendBlockSamplesProcess<'a> {
+impl<'a> SendLastStateProofProcess<'a> {
     pub(crate) fn new(
-        message: packed::SendBlockSamplesReader<'a>,
+        message: packed::SendLastStateProofReader<'a>,
         protocol: &'a mut LightClientProtocol,
         peer: PeerIndex,
         nc: &'a dyn CKBProtocolContext,
@@ -43,66 +43,68 @@ impl<'a> SendBlockSamplesProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
-        let peer_state = self
-            .protocol
-            .peers()
-            .get_state(&self.peer)
-            .expect("checked: should have state");
+        let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
-        let prove_request = if let Some(prove_request) = peer_state.get_prove_request() {
-            prove_request
+        let original_request = if let Some(original_request) = peer_state.get_prove_request() {
+            original_request
         } else {
-            error!("peer {} isn't waiting for a proof", self.peer);
-            return StatusCode::PeerIsNotOnProcess.into();
+            warn!("peer {} isn't waiting for a proof", self.peer);
+            return Status::ok();
         };
-        let last_header = prove_request.get_last_header();
-        let last_total_difficulty = prove_request.get_total_difficulty();
 
-        let mmr_activated_epoch = self.protocol.mmr_activated_epoch();
+        let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
+
+        // Update the last state if the response contains a new one.
+        if !original_request.is_same_as(&last_header) {
+            if self.message.proof().is_empty() {
+                return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
+                self.protocol.get_block_samples(self.nc, self.peer);
+            } else {
+                warn!("peer {} send an unknown proof", self.peer);
+            }
+            return Status::ok();
+        }
+
+        let headers = self
+            .message
+            .headers()
+            .iter()
+            .map(|header| header.to_entity().into())
+            .collect::<Vec<VerifiableHeader>>();
 
         // Check if the response is match the request.
-        if let Err(status) = check_if_response_is_matched(
-            mmr_activated_epoch,
-            prove_request.get_request(),
-            self.message.sampled_headers(),
-            self.message.last_n_headers(),
-        ) {
-            return status;
-        }
-
-        let reorg_last_n_headers = convert_to_views(self.message.reorg_last_n_headers());
-        let sampled_headers = convert_to_views(self.message.sampled_headers());
-        let last_n_headers = convert_to_views(self.message.last_n_headers());
+        let (reorg_count, sampled_count, last_n_count) =
+            return_if_failed!(check_if_response_is_matched(
+                LAST_N_BLOCKS as usize,
+                original_request.get_content(),
+                &headers,
+            ));
         trace!(
-            "peer {}: reorg_last_n_headers: {}, sampled_headers: {}, last_n_headers: {}",
+            "peer {}: headers count: reorg: {}, sampled: {}, last_n: {}",
             self.peer,
-            reorg_last_n_headers.len(),
-            sampled_headers.len(),
-            last_n_headers.len()
+            reorg_count,
+            sampled_count,
+            last_n_count
         );
 
-        // Check POW.
-        if let Err(status) = self.protocol.check_pow_for_headers(
-            reorg_last_n_headers
-                .iter()
-                .chain(sampled_headers.iter())
-                .chain(last_n_headers.iter()),
-        ) {
-            return status;
-        }
+        // Check chain root for all headers.
+        return_if_failed!(self.protocol.check_chain_root_for_headers(headers.iter()));
+
+        let headers = headers
+            .iter()
+            .map(|item| item.header().to_owned())
+            .collect::<Vec<_>>();
+
+        // Check POW for all headers.
+        return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
         // Check tau with epoch difficulties of samples.
-        let failed_to_verify_tau = if prove_request.if_skip_check_tau() {
+        let failed_to_verify_tau = if original_request.if_skip_check_tau() {
             trace!("peer {} skip checking TAU since the flag is set", self.peer);
             false
-        } else if !sampled_headers.is_empty() {
-            let start_header = sampled_headers
-                .first()
-                .expect("checked: start header should be existed");
-            let end_header = last_n_headers
-                .last()
-                .expect("checked: end header should be existed");
-
+        } else if sampled_count != 0 {
+            let start_header = &headers[reorg_count];
+            let end_header = &headers[reorg_count + sampled_count + last_n_count - 1];
             match verify_tau(
                 start_header.epoch(),
                 start_header.compact_target(),
@@ -122,14 +124,15 @@ impl<'a> SendBlockSamplesProcess<'a> {
         };
 
         // The last header in `reorg_last_n_headers` should be continuous.
-        if let Some(header) = reorg_last_n_headers.iter().last() {
-            let start_number: BlockNumber = prove_request.get_request().start_number().unpack();
-            if header.number() != start_number - 1 {
+        if reorg_count != 0 {
+            let last_reorg_header = &headers[reorg_count - 1];
+            let start_number: BlockNumber = original_request.get_content().start_number().unpack();
+            if last_reorg_header.number() != start_number - 1 {
                 let errmsg = format!(
                     "failed to verify reorg last n headers \
                     since they end at block#{} (hash: {:#x}) but we expect block#{}",
-                    header.number(),
-                    header.hash(),
+                    last_reorg_header.number(),
+                    last_reorg_header.hash(),
                     start_number - 1,
                 );
                 return StatusCode::InvalidReorgHeaders.with_context(errmsg);
@@ -137,44 +140,37 @@ impl<'a> SendBlockSamplesProcess<'a> {
         }
 
         // Check parent hashes for the continuous headers.
-        if let Err(status) = check_continuous_headers(&reorg_last_n_headers) {
-            return status;
+        if reorg_count != 0 {
+            return_if_failed!(check_continuous_headers(&headers[..reorg_count - 1]));
         }
-        if let Err(status) = check_continuous_headers(&last_n_headers) {
-            return status;
-        }
+        return_if_failed!(check_continuous_headers(
+            &headers[reorg_count + sampled_count..]
+        ));
 
         // Verify MMR proof
-        if let Err(status) = verify_mmr_proof(
-            mmr_activated_epoch,
-            last_header,
-            self.message.root().to_entity(),
+        return_if_failed!(verify_mmr_proof(
+            self.protocol.mmr_activated_epoch(),
+            &last_header,
             self.message.proof(),
-            reorg_last_n_headers
-                .iter()
-                .chain(sampled_headers.iter())
-                .chain(last_n_headers.iter()),
-        ) {
-            return status;
-        }
+            headers.iter()
+        ));
 
         // Check total difficulty.
         //
         // If no sampled headers, we can skip the check for total difficulty
         // since POW checks with continuous checks is enough.
-        if !sampled_headers.is_empty() {
+        if sampled_count != 0 {
             if let Some(prove_state) = peer_state.get_prove_state() {
                 let prev_last_header = prove_state.get_last_header();
-                let prev_total_difficulty = prove_state.get_total_difficulty();
                 let start_header = prev_last_header.header();
                 let end_header = last_header.header();
                 if let Err(msg) = verify_total_difficulty(
                     start_header.epoch(),
                     start_header.compact_target(),
-                    prev_total_difficulty,
+                    &prev_last_header.total_difficulty(),
                     end_header.epoch(),
                     end_header.compact_target(),
-                    last_total_difficulty,
+                    &last_header.total_difficulty(),
                     TAU,
                 ) {
                     return StatusCode::InvalidTotalDifficulty.with_context(msg);
@@ -184,19 +180,16 @@ impl<'a> SendBlockSamplesProcess<'a> {
 
         if failed_to_verify_tau {
             // Ask for new sampled headers if all checks are passed, expect the TAU check.
-            if let Some(content) = self.protocol.build_prove_request_content(
-                &peer_state,
-                last_header,
-                last_total_difficulty,
-            ) {
-                let mut prove_request = ProveRequest::new(
-                    LastState::new(last_header.clone(), last_total_difficulty.clone()),
-                    content.clone(),
-                );
+            if let Some(content) = self
+                .protocol
+                .build_prove_request_content(&peer_state, &last_header)
+            {
+                let mut prove_request =
+                    ProveRequest::new(LastState::new(last_header), content.clone());
                 prove_request.skip_check_tau();
                 self.protocol
                     .peers()
-                    .submit_prove_request(self.peer, prove_request);
+                    .update_prove_request(self.peer, Some(prove_request));
 
                 let message = packed::LightClientMessage::new_builder()
                     .set(content)
@@ -208,9 +201,15 @@ impl<'a> SendBlockSamplesProcess<'a> {
         } else {
             // Commit the status if all checks are passed.
             let prove_state = ProveState::new_from_request(
-                prove_request.to_owned(),
-                reorg_last_n_headers,
-                last_n_headers,
+                original_request.to_owned(),
+                headers[..reorg_count]
+                    .iter()
+                    .map(ToOwned::to_owned)
+                    .collect(),
+                headers[reorg_count + sampled_count..]
+                    .iter()
+                    .map(ToOwned::to_owned)
+                    .collect(),
             );
             self.protocol.commit_prove_state(self.peer, prove_state);
         }
@@ -477,130 +476,115 @@ impl EpochDifficultyTrendDetails {
 }
 
 // Check if the response is matched the last request.
-// - Check the difficulty boundary.
 // - Check the difficulties.
+// - Check the difficulty boundary.
 pub(crate) fn check_if_response_is_matched(
-    mmr_activated_epoch: EpochNumber,
-    prev_request: &packed::GetBlockSamples,
-    sampled_headers: packed::VerifiableHeaderWithChainRootVecReader,
-    last_n_headers: packed::VerifiableHeaderWithChainRootVecReader,
-) -> Result<(), Status> {
-    let difficulty_boundary: U256 = prev_request.difficulty_boundary().unpack();
-    let mut difficulties: Vec<U256> = prev_request
-        .difficulties()
-        .into_iter()
-        .map(|item| item.unpack())
-        .collect();
-
-    // Check the difficulty boundary.
+    last_n_blocks: usize,
+    prev_request: &packed::GetLastStateProof,
+    headers: &[VerifiableHeader],
+) -> Result<(usize, usize, usize), Status> {
+    // Headers should be ordered.
+    if headers
+        .windows(2)
+        .any(|hs| hs[0].header().number() >= hs[1].header().number())
     {
-        // Check the first block in last-N blocks.
-        let first_last_n_header = last_n_headers
-            .iter()
-            .next()
-            .map(|inner| inner.to_entity())
-            .expect("checked: first last-N header should be existed");
-        let (verifiable_header, chain_root) =
-            packed::VerifiableHeaderWithChainRoot::split(first_last_n_header);
-        if !verifiable_header.is_valid(mmr_activated_epoch, None) {
-            let header = verifiable_header.header();
-            error!(
-                "failed: chain root is not valid for first last-N block#{} (hash: {:#x})",
-                header.number(),
-                header.hash()
-            );
-            return Err(StatusCode::InvalidChainRootForSamples.into());
-        }
-
-        // Calculate the total difficulty.
-        let total_difficulty = {
-            let compact_target = verifiable_header.header().compact_target();
-            let block_difficulty = compact_to_difficulty(compact_target);
-            let total_difficulty_before: U256 = chain_root.total_difficulty().unpack();
-            total_difficulty_before.saturating_add(&block_difficulty)
-        };
-
-        // All total difficulties for sampled blocks should be less
-        // than the total difficulty of any last-N blocks.
-        if total_difficulty < difficulty_boundary {
-            difficulties = difficulties
-                .into_iter()
-                .take_while(|d| d < &total_difficulty)
-                .collect();
-        }
-
-        // Last-N blocks should be satisfied the follow condition.
-        if last_n_headers.len() as u64 > LAST_N_BLOCKS && total_difficulty < difficulty_boundary {
-            error!(
-                "failed: total difficulty (>={:#x}) of any last-N blocks ({}) \
-                should be greater than the difficulty boundary ({:#x}) \
-                if there are enough blocks",
-                total_difficulty,
-                last_n_headers.len(),
-                difficulty_boundary,
-            );
-            return Err(StatusCode::InvalidChainRootForSamples.into());
-        }
+        let errmsg = "headers should be ordered (monotonic increasing)";
+        return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
     }
 
-    // Check if the sampled headers are subject to requested difficulties distribution.
-    for item in sampled_headers.iter() {
-        let (verifiable_header, chain_root) =
-            packed::VerifiableHeaderWithChainRoot::split(item.to_entity());
-        let header = verifiable_header.header();
+    let total_count = headers.len();
 
-        // Chain root for any sampled blocks should be valid.
-        if !verifiable_header.is_valid(mmr_activated_epoch, None) {
-            error!(
-                "failed: chain root is not valid for sampled block#{} (hash: {:#x})",
-                header.number(),
-                header.hash()
-            );
-            return Err(StatusCode::InvalidChainRootForSamples.into());
+    let start_number: BlockNumber = prev_request.start_number().unpack();
+    let reorg_count = headers
+        .iter()
+        .take_while(|h| h.header().number() < start_number)
+        .count();
+
+    let (sampled_count, last_n_count) = if total_count - reorg_count > last_n_blocks {
+        let difficulty_boundary: U256 = prev_request.difficulty_boundary().unpack();
+        let sampled_count = headers
+            .iter()
+            .take_while(|h| h.total_difficulty() < difficulty_boundary)
+            .count();
+        let last_n_count = total_count - reorg_count - sampled_count;
+        if last_n_count > last_n_blocks {
+            (sampled_count, last_n_count)
+        } else {
+            (total_count - reorg_count - last_n_blocks, last_n_blocks)
         }
+    } else {
+        (0, total_count - reorg_count)
+    };
 
-        let compact_target = verifiable_header.header().compact_target();
-        let block_difficulty = compact_to_difficulty(compact_target);
-        let total_difficulty_lhs: U256 = chain_root.total_difficulty().unpack();
-        let total_difficulty_rhs = total_difficulty_lhs.saturating_add(&block_difficulty);
+    // Check if the sampled headers are subject to requested difficulties distribution.
+    if sampled_count != 0 {
+        let first_last_n_total_difficulty: U256 =
+            headers[reorg_count + sampled_count].total_difficulty();
 
-        let mut is_valid = false;
-        // Total difficulty for any sampled blocks should be valid.
-        while let Some(curr_difficulty) = difficulties.first().cloned() {
-            if curr_difficulty < total_difficulty_lhs {
-                // Current difficulty has no sample.
-                difficulties.remove(0);
-                continue;
-            } else if curr_difficulty > total_difficulty_rhs {
-                break;
-            } else {
-                // Current difficulty has one sample, and the sample is current block.
-                difficulties.remove(0);
-                is_valid = true;
+        let mut difficulties: Vec<U256> = prev_request
+            .difficulties()
+            .into_iter()
+            .map(|item| item.unpack())
+            .take_while(|d| d < &first_last_n_total_difficulty)
+            .collect();
+
+        for item in &headers[reorg_count..reorg_count + sampled_count] {
+            let header = item.header();
+
+            let total_difficulty_lhs: U256 = item.parent_chain_root().total_difficulty().unpack();
+            let total_difficulty_rhs = item.total_difficulty();
+
+            let mut is_valid = false;
+            // Total difficulty for any sampled blocks should be valid.
+            while let Some(curr_difficulty) = difficulties.first().cloned() {
+                if curr_difficulty < total_difficulty_lhs {
+                    // Current difficulty has no sample.
+                    difficulties.remove(0);
+                    continue;
+                } else if curr_difficulty > total_difficulty_rhs {
+                    break;
+                } else {
+                    // Current difficulty has one sample, and the sample is current block.
+                    difficulties.remove(0);
+                    is_valid = true;
+                }
+            }
+
+            if !is_valid {
+                error!(
+                    "failed: total difficulty is not valid for sampled block#{}, \
+                    hash is {:#x}, difficulty range is [{:#x},{:#x}].",
+                    header.number(),
+                    header.hash(),
+                    total_difficulty_lhs,
+                    total_difficulty_rhs,
+                );
+                return Err(StatusCode::InvalidSamples.into());
             }
         }
 
-        if !is_valid {
-            error!(
-                "failed: total difficulty is not valid for sampled block#{}, \
-                hash is {:#x}, difficulty range is [{:#x},{:#x}].",
-                header.number(),
-                header.hash(),
-                total_difficulty_lhs,
-                total_difficulty_rhs,
-            );
-            return Err(StatusCode::InvalidTotalDifficultyForSamples.into());
+        if !difficulties.is_empty() {
+            let next_difficulty = difficulties
+                .first()
+                .cloned()
+                .expect("checked: difficulties is not empty");
+            let last_sampled_number = headers[reorg_count + sampled_count - 1].header().number();
+            let first_last_n_number = headers[reorg_count + sampled_count].header().number();
+            if last_sampled_number + 1 != first_last_n_number {
+                error!(
+                    "failed: there should at least exist a block between \
+                    numbers ({},{}) whose total difficulty in [{:#x},{:#x}).",
+                    last_sampled_number,
+                    first_last_n_number,
+                    next_difficulty,
+                    first_last_n_total_difficulty
+                );
+                return Err(StatusCode::InvalidSamples.into());
+            }
         }
     }
 
-    Ok(())
-}
-
-fn convert_to_views(headers: packed::VerifiableHeaderWithChainRootVecReader) -> Vec<HeaderView> {
-    headers
-        .iter()
-        .map(|header| header.header().to_entity().into_view())
-        .collect()
+    Ok((reorg_count, sampled_count, last_n_count))
 }
 
 pub(crate) fn verify_tau(
@@ -769,12 +753,12 @@ pub(crate) fn check_continuous_headers(headers: &[HeaderView]) -> Result<(), Sta
 pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
     mmr_activated_epoch: EpochNumber,
     last_header: &VerifiableHeader,
-    chain_root: packed::HeaderDigest,
     raw_proof: packed::HeaderDigestVecReader,
     headers: T,
 ) -> Result<(), Status> {
+    let parent_chain_root = last_header.parent_chain_root();
     let proof: MMRProof = {
-        let mmr_size = leaf_index_to_mmr_size(chain_root.end_number().unpack());
+        let mmr_size = leaf_index_to_mmr_size(parent_chain_root.end_number().unpack());
         let proof = raw_proof
             .iter()
             .map(|header_digest| header_digest.to_entity())
@@ -796,26 +780,24 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
             Ok(tmp) => tmp,
             Err(err) => {
                 let errmsg = format!("failed to verify all digest since {}", err);
-                return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+                return Err(StatusCode::InvalidProof.with_context(errmsg));
             }
         }
     };
-    let verify_result = match proof.verify(chain_root.clone(), digests_with_positions) {
+    let verify_result = match proof.verify(parent_chain_root, digests_with_positions) {
         Ok(verify_result) => verify_result,
         Err(err) => {
             let errmsg = format!("failed to verify the proof since {}", err);
-            return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+            return Err(StatusCode::InvalidProof.with_context(errmsg));
         }
     };
     if verify_result {
         trace!("passed: verify mmr proof");
     } else {
         let errmsg = "failed to verify the mmr proof since the result is false";
-        return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+        return Err(StatusCode::InvalidProof.with_context(errmsg));
     }
-    let expected_root_hash = chain_root.calc_mmr_hash();
-    let check_extra_hash_result =
-        last_header.is_valid(mmr_activated_epoch, Some(&expected_root_hash));
+    let check_extra_hash_result = last_header.is_valid(mmr_activated_epoch);
     if check_extra_hash_result {
         trace!(
             "passed: verify extra hash for block-{} ({:#x})",
@@ -828,7 +810,7 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
             last_header.header().number(),
             last_header.header().hash(),
         );
-        return Err(StatusCode::FailedToVerifyTheProof.with_context(errmsg));
+        return Err(StatusCode::InvalidProof.with_context(errmsg));
     };
 
     Ok(())

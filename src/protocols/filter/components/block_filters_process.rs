@@ -90,11 +90,8 @@ impl<'a> BlockFiltersProcess<'a> {
                 possible_match_blocks_len
             );
             if possible_match_blocks_len != 0 {
-                if !peer_state.can_insert_block_proof_request() {
-                    warn!(
-                        "peer {} has too many inflight GetBlockProof requests",
-                        self.peer
-                    );
+                if peer_state.get_block_proof_request().is_some() {
+                    warn!("peer {} has an inflight GetBlocksProof request", self.peer);
                 } else {
                     // if the only matched block is the prove state block, then request block data directly
                     possible_match_blocks
@@ -117,15 +114,21 @@ impl<'a> BlockFiltersProcess<'a> {
                         }
                     } else {
                         let fetch_tip = possible_match_blocks_len != possible_match_blocks.len();
-                        let content = packed::GetBlockProof::new_builder()
-                            .block_hashes(possible_match_blocks.pack())
-                            .tip_hash(prove_state_block_hash)
-                            .build();
 
-                        if peer_state.contains_block_proof_request(&content) {
-                            trace!("already sent block proof request to peer: {}", self.peer,);
+                        if peer_state
+                            .get_block_proof_request()
+                            .map(|req| {
+                                req.is_same_as(&prove_state_block_hash, &possible_match_blocks)
+                            })
+                            .unwrap_or(false)
+                        {
+                            trace!("already sent block proof request to peer: {}", self.peer);
                         } else {
-                            trace!("send block proof request to peer: {}", self.peer,);
+                            trace!("send block proof request to peer: {}", self.peer);
+                            let content = packed::GetBlocksProof::new_builder()
+                                .block_hashes(possible_match_blocks.pack())
+                                .last_hash(prove_state_block_hash)
+                                .build();
                             let message = packed::LightClientMessage::new_builder()
                                 .set(content.clone())
                                 .build();
@@ -140,9 +143,10 @@ impl<'a> BlockFiltersProcess<'a> {
                                 error!("{}", error_message);
                                 return StatusCode::Network.with_context(error_message);
                             } else {
-                                self.filter
-                                    .peers
-                                    .insert_block_proof_request(self.peer, content, fetch_tip);
+                                self.filter.peers.update_block_proof_request(
+                                    self.peer,
+                                    Some((content, fetch_tip)),
+                                );
                             }
                         }
                     }

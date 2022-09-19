@@ -243,7 +243,6 @@ pub struct NetRpcImpl {
     peers: Arc<Peers>,
 }
 
-#[allow(clippy::mutable_key_type)]
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
         let scripts = scripts
