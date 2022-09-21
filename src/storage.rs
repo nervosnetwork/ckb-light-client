@@ -602,6 +602,9 @@ impl StorageWithChainData {
         &self.storage
     }
 
+    pub(crate) fn fetched_headers(&self) -> &DashMap<H256, HeaderView> {
+        self.peers.fetched_headers()
+    }
     pub(crate) fn fetching_headers(&self) -> &DashMap<H256, Option<(u64, bool)>> {
         self.peers.fetching_headers()
     }

@@ -92,6 +92,20 @@ pub trait ChainRpc {
     ///   * If transaction not in local and the fetch request is sent, return the utc timestamp of first request
     #[rpc(name = "fetch_transaction")]
     fn fetch_transaction(&self, tx_hash: H256) -> Result<Option<u64>>;
+
+    /// Remove all fetched headers.
+    ///
+    /// Returns:
+    ///   * The removed block hashes
+    #[rpc(name = "clear_headers")]
+    fn clear_headers(&self) -> Result<Vec<H256>>;
+
+    /// Remove all fetched transactions.
+    ///
+    /// Returns:
+    ///   * The removed transaction hashes
+    #[rpc(name = "clear_transactions")]
+    fn clear_transactions(&self) -> Result<Vec<H256>>;
 }
 
 #[rpc(server)]
@@ -1011,6 +1025,24 @@ impl ChainRpc for ChainRpcImpl {
             self.swc.fetching_txs().insert(tx_hash, None);
         }
         Ok(None)
+    }
+
+    fn clear_headers(&self) -> Result<Vec<H256>> {
+        let mut block_hashes = Vec::new();
+        self.swc.fetched_headers().retain(|k, _v| {
+            block_hashes.push(k.clone());
+            false
+        });
+        Ok(block_hashes)
+    }
+
+    fn clear_transactions(&self) -> Result<Vec<H256>> {
+        let mut tx_hashes = Vec::new();
+        self.swc.fetched_txs().retain(|k, _v| {
+            tx_hashes.push(k.clone());
+            false
+        });
+        Ok(tx_hashes)
     }
 }
 
