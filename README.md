@@ -175,6 +175,58 @@ Returns the information about a transaction by hash, the block header is also re
 curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "get_transaction", "params": ["0xa0ef4eb5f4ceeb08a4c8524d84c5da95dce2f608e0ca2ec8091191b0f330c6e3"], "id": 1}'
 ```
 
+### `fetch_header`
+
+Fetch a header from remote node.
+
+#### Parameters
+
+    block_hash  - the block hash
+
+#### Returns
+
+  * If header already in local, return `Some(0)`.
+  * If header not in local and the fetch request is not send, return `None`.
+  * If header not in local and the fetch request is sent, return the utc timestamp of first request
+
+### `fetch_transaction`
+
+Fetch a transaction from remote node.
+
+#### Parameters
+
+    tx_hash  - the transaction hash
+
+#### Returns
+
+  * If transaction already in local, return `Some(0)`.
+  * If transaction not in local and the fetch request is not send, return `None`.
+  * If transaction not in local and the fetch request is sent, return the utc timestamp of first request
+
+### `clear_headers`
+
+Remove all fetched headers.
+
+#### Parameters
+
+    null
+
+#### Returns
+
+    Vec<H256> - The removed block hashes
+
+### `clear_transactions`
+
+Remove all fetched transactions.
+
+#### Parameters
+
+    null
+
+#### Returns
+
+    Vec<H256> - The removed transaction hashes
+
 ### `get_cells`
 
 To facilitate code migration, the rpc is same as ckb-indexer, please refer to ckb-indexer rpc [doc](https://github.com/nervosnetwork/ckb-indexer#get_cells)
