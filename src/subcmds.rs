@@ -50,8 +50,7 @@ impl RunConfig {
             SupportProtocols::Filter.protocol_id(),
         ];
 
-        let last_headers = Arc::new(RwLock::new(Vec::new()));
-        let peers = Arc::new(Peers::new(Arc::clone(&last_headers)));
+        let peers = Arc::new(Peers::default());
         let sync_protocol = SyncProtocol::new(storage.clone());
         let relay_protocol = RelayProtocol::new(pending_txs.clone(), Arc::clone(&peers));
         let light_client: Box<dyn CKBProtocolHandler> = Box::new(LightClientProtocol::new(
@@ -102,14 +101,7 @@ impl RunConfig {
         })?;
 
         let service = Service::new("127.0.0.1:9000");
-        let rpc_server = service.start(
-            network_controller,
-            storage,
-            last_headers,
-            peers,
-            pending_txs,
-            consensus,
-        );
+        let rpc_server = service.start(network_controller, storage, peers, pending_txs, consensus);
 
         let exit_handler_clone = exit_handler.clone();
         ctrlc::set_handler(move || {

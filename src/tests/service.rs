@@ -16,11 +16,12 @@ use ckb_types::{
 use tempfile;
 
 use crate::{
+    protocols::Peers,
     service::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, Order, ScriptStatus, SearchKey,
         SearchKeyFilter, TransactionWithHeader,
     },
-    storage::{Storage, StorageWithLastHeaders},
+    storage::{Storage, StorageWithChainData},
 };
 
 fn new_storage(prefix: &str) -> Storage {
@@ -538,12 +539,18 @@ fn rpc() {
         .epoch(EpochNumberWithFraction::new(0, 500, 1000).pack())
         .number(500.pack())
         .build();
-    let swl = StorageWithLastHeaders::new(
+    let swc = StorageWithChainData::new(
         storage.clone(),
-        Arc::new(RwLock::new(vec![extra_header.clone()])),
+        Arc::new(Peers::new(
+            RwLock::new(vec![extra_header.clone()]),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        )),
     );
 
-    let rpc = ChainRpcImpl { swl };
+    let rpc = ChainRpcImpl { swc };
     let header = rpc
         .get_header(pre_block.header().hash().unpack())
         .unwrap()

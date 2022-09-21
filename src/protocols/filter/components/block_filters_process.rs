@@ -90,7 +90,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 possible_match_blocks_len
             );
             if possible_match_blocks_len != 0 {
-                if peer_state.get_block_proof_request().is_some() {
+                if peer_state.get_blocks_proof_request().is_some() {
                     warn!("peer {} has an inflight GetBlocksProof request", self.peer);
                 } else {
                     // if the only matched block is the prove state block, then request block data directly
@@ -116,7 +116,7 @@ impl<'a> BlockFiltersProcess<'a> {
                         let fetch_tip = possible_match_blocks_len != possible_match_blocks.len();
 
                         if peer_state
-                            .get_block_proof_request()
+                            .get_blocks_proof_request()
                             .map(|req| {
                                 req.is_same_as(&prove_state_block_hash, &possible_match_blocks)
                             })
@@ -143,7 +143,7 @@ impl<'a> BlockFiltersProcess<'a> {
                                 error!("{}", error_message);
                                 return StatusCode::Network.with_context(error_message);
                             } else {
-                                self.filter.peers.update_block_proof_request(
+                                self.filter.peers.update_blocks_proof_request(
                                     self.peer,
                                     Some((content, fetch_tip)),
                                 );

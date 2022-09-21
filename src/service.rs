@@ -23,7 +23,7 @@ use std::{
 
 use crate::{
     protocols::{Peers, PendingTxs},
-    storage::{self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithLastHeaders},
+    storage::{self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithChainData},
     verify::verify_tx,
 };
 
@@ -74,6 +74,24 @@ pub trait ChainRpc {
 
     #[rpc(name = "get_transaction")]
     fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>>;
+
+    /// Fetch a header from remote node.
+    ///
+    /// Returns:
+    ///   * If header already in local, return `Some(0)`.
+    ///   * If header not in local and the fetch request is not send, return `None`.
+    ///   * If header not in local and the fetch request is sent, return the utc timestamp of first request
+    #[rpc(name = "fetch_header")]
+    fn fetch_header(&self, block_hash: H256) -> Result<Option<u64>>;
+
+    /// Fetch a transaction from remote node.
+    ///
+    /// Returns:
+    ///   * If transaction already in local, return `Some(0)`.
+    ///   * If transaction not in local and the fetch request is not send, return `None`.
+    ///   * If transaction not in local and the fetch request is sent, return the utc timestamp of first request
+    #[rpc(name = "fetch_transaction")]
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<Option<u64>>;
 }
 
 #[rpc(server)]
@@ -230,12 +248,12 @@ pub struct BlockFilterRpcImpl {
 
 pub struct TransactionRpcImpl {
     pending_txs: Arc<RwLock<PendingTxs>>,
-    swl: StorageWithLastHeaders,
+    swc: StorageWithChainData,
     consensus: Consensus,
 }
 
 pub struct ChainRpcImpl {
-    pub(crate) swl: StorageWithLastHeaders,
+    pub(crate) swc: StorageWithChainData,
 }
 
 pub struct NetRpcImpl {
@@ -928,7 +946,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let cycles = verify_tx(tx.clone(), &self.swl, &self.consensus)
+        let cycles = verify_tx(tx.clone(), &self.swc, &self.consensus)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
             .write()
@@ -941,24 +959,58 @@ impl TransactionRpc for TransactionRpcImpl {
 
 impl ChainRpc for ChainRpcImpl {
     fn get_tip_header(&self) -> Result<HeaderView> {
-        Ok(self.swl.storage().get_tip_header().into_view().into())
+        Ok(self.swc.storage().get_tip_header().into_view().into())
     }
 
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
-        Ok(self.swl.get_header(&block_hash.pack()).map(Into::into))
+        Ok(self.swc.get_header(&block_hash.pack()).map(Into::into))
     }
 
     fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>> {
         let transaction_with_header = self
-            .swl
+            .swc
             .storage()
             .get_transaction_with_header(&tx_hash.pack())
+            .or_else(|| {
+                self.swc.fetched_txs().get(&tx_hash).map(|pair| {
+                    let (tx_view, header_view) = pair.value();
+                    (tx_view.data(), header_view.data())
+                })
+            })
             .map(|(tx, header)| TransactionWithHeader {
                 transaction: tx.into_view().into(),
                 header: header.into_view().into(),
             });
 
         Ok(transaction_with_header)
+    }
+
+    fn fetch_header(&self, block_hash: H256) -> Result<Option<u64>> {
+        if self.get_header(block_hash.clone())?.is_some() {
+            return Ok(Some(0));
+        }
+        if let Some(item) = self.swc.fetching_headers().get(&block_hash) {
+            if let Some((first_sent, _timeout)) = item.value() {
+                return Ok(Some(*first_sent));
+            }
+        } else {
+            self.swc.fetching_headers().insert(block_hash, None);
+        }
+        Ok(None)
+    }
+
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<Option<u64>> {
+        if self.get_transaction(tx_hash.clone())?.is_some() {
+            return Ok(Some(0));
+        }
+        if let Some(item) = self.swc.fetching_txs().get(&tx_hash) {
+            if let Some((first_sent, _timeout)) = item.value() {
+                return Ok(Some(*first_sent));
+            }
+        } else {
+            self.swc.fetching_txs().insert(tx_hash, None);
+        }
+        Ok(None)
     }
 }
 
@@ -977,7 +1029,6 @@ impl Service {
         &self,
         network_controller: NetworkController,
         storage: Storage,
-        last_headers: Arc<RwLock<Vec<core::HeaderView>>>,
         peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
         consensus: Consensus,
@@ -986,11 +1037,11 @@ impl Service {
         let block_filter_rpc_impl = BlockFilterRpcImpl {
             storage: storage.clone(),
         };
-        let swl = StorageWithLastHeaders::new(storage, last_headers);
-        let chain_rpc_impl = ChainRpcImpl { swl: swl.clone() };
+        let swc = StorageWithChainData::new(storage, Arc::clone(&peers));
+        let chain_rpc_impl = ChainRpcImpl { swc: swc.clone() };
         let transaction_rpc_impl = TransactionRpcImpl {
             pending_txs,
-            swl,
+            swc,
             consensus,
         };
         let net_rpc_impl = NetRpcImpl {

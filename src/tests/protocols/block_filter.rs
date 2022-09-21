@@ -385,7 +385,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
 
     assert!(nc.banned_peers().borrow().is_empty());
 
-    let get_block_proof_message = {
+    let get_blocks_proof_message = {
         let content = packed::GetBlocksProof::new_builder()
             .block_hashes(vec![block_hash.pack()].pack())
             .last_hash(prove_state_block_hash)
@@ -409,7 +409,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
             (
                 SupportProtocols::LightClient.protocol_id(),
                 peer_index,
-                get_block_proof_message.as_bytes()
+                get_blocks_proof_message.as_bytes()
             ),
             (
                 SupportProtocols::Filter.protocol_id(),
