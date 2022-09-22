@@ -78,7 +78,7 @@ pub trait ChainRpc {
     /// Fetch a header from remote node.
     ///
     /// Returns:
-    ///   * If header already in local, return `Some(0)`.
+    ///   * If header already in fetched, return `Some(0)`.
     ///   * If header not in local and the fetch request is not send, return `None`.
     ///   * If header not in local and the fetch request is sent, return the utc timestamp of first request
     #[rpc(name = "fetch_header")]
@@ -87,7 +87,7 @@ pub trait ChainRpc {
     /// Fetch a transaction from remote node.
     ///
     /// Returns:
-    ///   * If transaction already in local, return `Some(0)`.
+    ///   * If transaction already fetched, return `Some(0)`.
     ///   * If transaction not in local and the fetch request is not send, return `None`.
     ///   * If transaction not in local and the fetch request is sent, return the utc timestamp of first request
     #[rpc(name = "fetch_transaction")]
