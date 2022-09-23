@@ -23,7 +23,7 @@ ckb-resource      = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1
 ckb-verification  = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
 ckb-merkle-mountain-range = "0.5.1"
 golomb-coded-set = "0.2.0"
-rocksdb = { package = "ckb-rocksdb", version ="=0.16.1", features = ["snappy"] }
+rocksdb = { package = "ckb-rocksdb", version ="=0.18.3", features = ["snappy"] }
 numext-fixed-uint = { version = "0.1", features = ["support_rand", "support_heapsize", "support_serde"] }
 anyhow = "1.0.56"
 thiserror = "1.0.30"
@@ -36,7 +36,7 @@ ctrlc = { version = "3.2.1", features = ["termination"] }
 path-clean = "0.1.0"
 rand = "0.8.5"
 dashmap = "5.3"
-linked-hash-map = "0.5"
+linked-hash-map = "0.5.6"
 faketime = "0.2.1"
 jsonrpc-core = "18.0"
 jsonrpc-derive = "18.0"
@@ -44,10 +44,19 @@ jsonrpc-http-server = "18.0"
 jsonrpc-server-utils = "18.0"
 
 [dev-dependencies]
+ckb-launcher    = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-shared      = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-chain       = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-tx-pool     = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
+ckb-store       = { git="https://github.com/nervosnetwork/ckb", rev = "0acf5b1414f5921b7374a29d082450c917a5b046" }
 tempfile = "3.0"
 rand = "0.6"
 serde_json = "1.0"
 tokio = { version = "1.20" }
+
+[features]
+default = []
+portable = ["rocksdb/portable"]
 
 [profile.release]
 overflow-checks = true

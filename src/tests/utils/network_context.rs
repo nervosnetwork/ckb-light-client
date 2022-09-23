@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use ckb_network::{
@@ -9,11 +10,17 @@ use ckb_network::{
     ProtocolId, SupportProtocols, TargetSession,
 };
 
-pub(crate) struct MockProtocolContext {
+use crate::protocols::{Status, StatusCode};
+
+struct MockProtocolContext {
     protocol: SupportProtocols,
-    pub(crate) sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
-    pub(crate) banned_peers: RefCell<Vec<(PeerIndex, Duration, String)>>,
+    sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
+    banned_peers: RefCell<Vec<(PeerIndex, Duration, String)>>,
     connected_peers: RefCell<HashSet<PeerIndex>>,
+}
+
+pub(crate) struct MockNetworkContext {
+    inner: Arc<MockProtocolContext>,
 }
 
 // test mock context with single thread
@@ -21,7 +28,7 @@ unsafe impl Send for MockProtocolContext {}
 unsafe impl Sync for MockProtocolContext {}
 
 impl MockProtocolContext {
-    pub(crate) fn new(protocol: SupportProtocols) -> Self {
+    fn new(protocol: SupportProtocols) -> Self {
         Self {
             protocol,
             sent_messages: Default::default(),
@@ -29,13 +36,59 @@ impl MockProtocolContext {
             connected_peers: Default::default(),
         }
     }
+}
+
+impl MockNetworkContext {
+    pub(crate) fn new(protocol: SupportProtocols) -> Self {
+        let context = MockProtocolContext::new(protocol);
+        let inner = Arc::new(context);
+        Self { inner }
+    }
+
+    pub(crate) fn sent_messages(&self) -> &RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>> {
+        &self.inner.sent_messages
+    }
+
+    pub(crate) fn banned_peers(&self) -> &RefCell<Vec<(PeerIndex, Duration, String)>> {
+        &self.inner.banned_peers
+    }
 
     pub(crate) fn has_banned(&self, target: PeerIndex) -> Option<(Duration, String)> {
-        self.banned_peers
+        self.banned_peers()
             .borrow()
             .iter()
             .find(|(peer, _, _)| *peer == target)
             .map(|(_, duration, reason)| (duration.clone(), reason.clone()))
+    }
+
+    pub(crate) fn not_banned(&self, target: PeerIndex) -> bool {
+        self.has_banned(target)
+            .map(|(_, reason)| {
+                eprintln!("banned reason is {}", reason);
+                false
+            })
+            .unwrap_or(true)
+    }
+
+    pub(crate) fn banned_since(&self, target: PeerIndex, code: StatusCode) -> bool {
+        self.has_banned(target)
+            .map(|(_, reason)| {
+                let status: Status = code.into();
+                let expected_reason = status.to_string();
+                let is_correct_reason = reason.starts_with(&expected_reason);
+                if !is_correct_reason {
+                    eprintln!(
+                        "banned reason is incorrect, expect {}, got {}",
+                        expected_reason, reason
+                    );
+                }
+                is_correct_reason
+            })
+            .unwrap_or(false)
+    }
+
+    pub(crate) fn context(&self) -> Arc<dyn CKBProtocolContext + Sync> {
+        Arc::clone(&self.inner) as Arc<dyn CKBProtocolContext + Sync>
     }
 }
 
