@@ -727,6 +727,169 @@ async fn samples_are_redundant() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn samples_are_not_enough_1() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(3);
+
+    let num = 20;
+    chain.mine_to(20);
+
+    let snapshot = chain.shared().snapshot();
+
+    let sampled_numbers = vec![3, 7, 11, 18];
+    let bad_sampled_numbers = vec![3, 11, 18];
+    let boundary_number = num - protocol.last_n_blocks() + 1;
+
+    // Setup the test fixture.
+    {
+        let mut prove_request = chain.build_prove_request(
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        prove_request.skip_check_tau();
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+            let headers = bad_sampled_numbers
+                .iter()
+                .map(|n| *n as BlockNumber)
+                .filter(|n| *n < first_last_n_number)
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.banned_since(peer_index, StatusCode::InvalidSamples));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn samples_are_not_enough_2() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(3);
+
+    let num = 20;
+    chain.mine_to(20);
+
+    let snapshot = chain.shared().snapshot();
+
+    let sampled_numbers = vec![3, 7, 11, 12, 13, 14, 15, 16, 17, 18];
+    let boundary_number = num - protocol.last_n_blocks() - 2;
+
+    // Setup the test fixture.
+    {
+        let mut prove_request = chain.build_prove_request(
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        prove_request.skip_check_tau();
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks()) - 1;
+            let headers = sampled_numbers
+                .iter()
+                .map(|n| *n as BlockNumber)
+                .filter(|n| *n < first_last_n_number)
+                .chain(((first_last_n_number + 1)..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.banned_since(peer_index, StatusCode::InvalidSamples));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn last_n_headers_should_be_continuous() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);

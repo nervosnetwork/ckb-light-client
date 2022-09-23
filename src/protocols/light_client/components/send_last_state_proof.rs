@@ -536,16 +536,23 @@ pub(crate) fn check_if_response_is_matched(
             let mut is_valid = false;
             // Total difficulty for any sampled blocks should be valid.
             while let Some(curr_difficulty) = difficulties.first().cloned() {
-                if curr_difficulty < total_difficulty_lhs {
-                    // Current difficulty has no sample.
-                    difficulties.remove(0);
-                    continue;
-                } else if curr_difficulty > total_difficulty_rhs {
-                    break;
-                } else {
+                if is_valid {
+                    if curr_difficulty <= total_difficulty_rhs {
+                        // Current difficulty has same sample as previous difficulty,
+                        // and the sample is current block.
+                        difficulties.remove(0);
+                        continue;
+                    } else {
+                        break;
+                    }
+                } else if total_difficulty_lhs < curr_difficulty
+                    && curr_difficulty <= total_difficulty_rhs
+                {
                     // Current difficulty has one sample, and the sample is current block.
                     difficulties.remove(0);
                     is_valid = true;
+                } else {
+                    break;
                 }
             }
 
