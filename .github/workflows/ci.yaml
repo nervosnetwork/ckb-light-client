@@ -63,8 +63,12 @@ jobs:
         scoop install llvm yasm
     - name: Build
       run: cargo build
-    - name: UnitTest
+    - if: matrix.os != 'macos-latest'
+      name: UnitTest
       run: cargo test
+    - if: matrix.os == 'macos-latest'
+      name: UnitTest
+      run: cargo test --features portable
   code_coverage:
     name: Code Coverage
     needs: [ test ]
