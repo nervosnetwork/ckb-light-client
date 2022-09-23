@@ -78,7 +78,6 @@ jobs:
         os: [ ubuntu-latest ]
     env:
       OS: ${{ matrix.os }}
-      RUST_TOOLCHAIN: nightly-2022-07-30
     steps:
       - uses: actions/checkout@v2
         with:

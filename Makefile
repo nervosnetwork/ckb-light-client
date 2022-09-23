@@ -1,26 +1,26 @@
 CARGO_TARGET_DIR ?= target
-COVERAGE_RUST_TOOLCHAIN ?= nightly-2022-07-30
+COVERAGE_PROFRAW_DIR ?= ${CARGO_TARGET_DIR}/coverage
 GRCOV_OUTPUT ?= coverage-report.info
 GRCOV_EXCL_START = ^\s*((log::)?(trace|debug|info|warn|error)|(debug_)?assert(_eq|_ne|_error_eq))!\($$
 GRCOV_EXCL_STOP  = ^\s*\)(;)?$$
 GRCOV_EXCL_LINE = \s*((log::)?(trace|debug|info|warn|error)|(debug_)?assert(_eq|_ne|_error_eq))!\(.*\)(;)?$$
 
 coverage-clean:
-	rm -rf "${CARGO_TARGET_DIR}/debug/deps" "${GRCOV_OUTPUT}" "${GRCOV_OUTPUT:.info=}"
+	rm -rf "${CARGO_TARGET_DIR}/*.profraw" "${GRCOV_OUTPUT}" "${GRCOV_OUTPUT:.info=}"
 
 coverage-install-tools:
-	rustup --toolchain "${COVERAGE_RUST_TOOLCHAIN}" component add llvm-tools-preview
-	grcov --version || cargo +"${COVERAGE_TOOLCHAIN}" install grcov
+	rustup component add llvm-tools-preview
+	grcov --version || cargo install grcov
 
 coverage-run-unittests:
-	RUSTFLAGS="-Zprofile -Ccodegen-units=1 -Copt-level=0 -Clink-dead-code -Coverflow-checks=off -Zpanic_abort_tests -Cpanic=abort" \
-		RUSTDOCFLAGS="-Cpanic=abort" \
-		CARGO_INCREMENTAL=0 \
-			cargo +"${COVERAGE_RUST_TOOLCHAIN}" test --all
+	mkdir -p "${COVERAGE_PROFRAW_DIR}"
+	rm -f "${COVERAGE_PROFRAW_DIR}/*.profraw"
+	RUSTFLAGS="${RUSTFLAGS} -Cinstrument-coverage" \
+		LLVM_PROFILE_FILE="${COVERAGE_PROFRAW_DIR}/unittests-%p-%m.profraw" \
+			cargo test --all
 
 coverage-collect-data:
-	RUSTUP_TOOLCHAIN="${COVERAGE_RUST_TOOLCHAIN}" \
-	grcov "${CARGO_TARGET_DIR}/debug/deps" --binary-path "${CARGO_TARGET_DIR}/debug/" \
+	grcov "${COVERAGE_PROFRAW_DIR}" --binary-path "${CARGO_TARGET_DIR}/debug/" \
 		-s . -t lcov --branch --ignore-not-existing \
 		--ignore "/*" \
 		--ignore "*/tests/*" \
