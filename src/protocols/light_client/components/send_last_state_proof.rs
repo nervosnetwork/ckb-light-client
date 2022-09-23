@@ -501,13 +501,13 @@ pub(crate) fn check_if_response_is_matched(
 
     let (sampled_count, last_n_count) = if total_count - reorg_count > last_n_blocks {
         let difficulty_boundary: U256 = prev_request.difficulty_boundary().unpack();
-        let sampled_count = headers
+        let before_boundary_count = headers
             .iter()
             .take_while(|h| h.total_difficulty() < difficulty_boundary)
             .count();
-        let last_n_count = total_count - reorg_count - sampled_count;
+        let last_n_count = total_count - before_boundary_count;
         if last_n_count > last_n_blocks {
-            (sampled_count, last_n_count)
+            (before_boundary_count - reorg_count, last_n_count)
         } else {
             (total_count - reorg_count - last_n_blocks, last_n_blocks)
         }
