@@ -1,3 +1,5 @@
+mod send_transactions_proof;
+
 use std::sync::Arc;
 
 use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};

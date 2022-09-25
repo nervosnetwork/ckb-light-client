@@ -82,7 +82,8 @@ impl MockChain {
         let Self { storage, consensus } = self;
 
         let config = BlockAssemblerConfig {
-            code_hash: h256!("0x0"),
+            // always success
+            code_hash: h256!("0xd483925160e4232b2cb29f012e8380b7b612d71cf4e79991476b6bcf610735f6"),
             args: Default::default(),
             hash_type: ScriptHashType::Data,
             message: Default::default(),

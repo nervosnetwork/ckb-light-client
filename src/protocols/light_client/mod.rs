@@ -405,6 +405,11 @@ impl LightClientProtocol {
     }
 
     fn fetch_headers_txs(&mut self, nc: &dyn CKBProtocolContext) {
+        if self.peers.fetching_headers().is_empty() && self.peers.fetching_txs().is_empty() {
+            trace!("no fetching headers/transactions needed");
+            return;
+        }
+
         let tip_header = self.storage.get_tip_header();
         let best_peers: Vec<PeerIndex> = self
             .peers

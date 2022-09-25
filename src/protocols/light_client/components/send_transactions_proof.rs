@@ -4,7 +4,7 @@ use ckb_types::{
     prelude::*,
     utilities::{merkle_mountain_range::VerifiableHeader, merkle_root, MerkleProof},
 };
-use log::error;
+use log::{debug, error};
 
 use super::{
     super::{LightClientProtocol, Status, StatusCode},
@@ -47,6 +47,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
 
         // Update the last state if the response contains a new one.
         if self.message.proof().is_empty() {
+            debug!("proof is empty");
             return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
             self.protocol
                 .peers()
@@ -95,7 +96,13 @@ impl<'a> SendTransactionsProofProcess<'a> {
             let lemmas: Vec<packed::Byte32> = proof.lemmas().into_iter().collect();
             let merkle_proof = MerkleProof::new(indices, lemmas);
             match merkle_proof
-                .root(&received_tx_hashes)
+                .root(
+                    &filtered_block
+                        .transactions()
+                        .into_iter()
+                        .map(|tx| tx.calc_tx_hash())
+                        .collect::<Vec<_>>(),
+                )
                 .map(|raw_transactions_root| {
                     filtered_block.header().raw().transactions_root()
                         == merkle_root(&[raw_transactions_root, witnesses_root])
@@ -110,6 +117,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 }
             }
         }
+        debug!("verify SendBlocksProof ok");
 
         for filtered_block in filtered_blocks {
             let header = filtered_block.header().into_view();

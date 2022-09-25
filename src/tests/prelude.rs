@@ -17,6 +17,7 @@ use ckb_types::{
 use crate::{
     protocols::{FilterProtocol, LastState, LightClientProtocol, Peers, ProveRequest},
     storage::Storage,
+    tests::ALWAYS_SUCCESS_BIN,
 };
 
 macro_rules! epoch {
@@ -87,6 +88,30 @@ pub(crate) trait RunningChainExt: ChainExt {
         &self.shared().tx_pool_controller()
     }
 
+    fn always_success_cell_dep(&self) -> packed::CellDep {
+        self.shared()
+            .snapshot()
+            .get_block_by_number(0)
+            .unwrap()
+            .transactions()
+            .into_iter()
+            .filter_map(|tx| {
+                tx.outputs_data()
+                    .into_iter()
+                    .enumerate()
+                    .find(|(_, data)| data.raw_data().as_ref() == ALWAYS_SUCCESS_BIN)
+                    .map(|(idx, _)| {
+                        let out_point = packed::OutPoint::new_builder()
+                            .tx_hash(tx.hash())
+                            .index((idx as u32).pack())
+                            .build();
+                        packed::CellDep::new_builder().out_point(out_point).build()
+                    })
+            })
+            .next()
+            .unwrap()
+    }
+
     fn mine_to(&self, block_number: BlockNumber) {
         let chain_tip_number = self.shared().snapshot().tip_number();
         if chain_tip_number < block_number {
@@ -94,30 +119,33 @@ pub(crate) trait RunningChainExt: ChainExt {
         }
     }
 
+    fn mine_block<F: FnMut(packed::Block) -> BlockView>(&self, mut builder: F) -> BlockNumber {
+        let block_template = self
+            .shared()
+            .get_block_template(None, None, None)
+            .unwrap()
+            .unwrap();
+        let block: packed::Block = block_template.into();
+        let block = builder(block);
+        let block_number = block.number();
+        let is_ok = self
+            .controller()
+            .process_block(Arc::new(block))
+            .expect("process block");
+        assert!(is_ok, "failed to process block {}", block_number);
+        while self
+            .tx_pool()
+            .get_tx_pool_info()
+            .expect("get tx pool info")
+            .tip_number
+            != block_number
+        {}
+        block_number
+    }
+
     fn mine_blocks(&self, blocks_count: usize) {
         for _ in 0..blocks_count {
-            let block_template = self
-                .shared()
-                .get_block_template(None, None, None)
-                .unwrap()
-                .unwrap();
-
-            let block: packed::Block = block_template.into();
-            let block = block.as_advanced_builder().build();
-            let block_number = block.number();
-            let is_ok = self
-                .controller()
-                .process_block(Arc::new(block))
-                .expect("process block");
-            assert!(is_ok, "failed to process block {}", block_number);
-
-            while self
-                .tx_pool()
-                .get_tx_pool_info()
-                .expect("get tx pool info")
-                .tip_number
-                != block_number
-            {}
+            let _ = self.mine_block(|block| block.as_advanced_builder().build());
         }
     }
 

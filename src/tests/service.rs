@@ -33,8 +33,6 @@ fn new_storage(prefix: &str) -> Storage {
 
 #[test]
 fn rpc() {
-    env_logger::init();
-
     let storage = new_storage("rpc");
     let rpc = BlockFilterRpcImpl {
         storage: storage.clone(),
