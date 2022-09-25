@@ -544,6 +544,8 @@ fn rpc() {
     let fetched_headers = {
         let map = DashMap::new();
         map.insert(h256!("0xaa11"), Header::default().into_view());
+        map.insert(h256!("0xaa77"), Header::default().into_view());
+        map.insert(h256!("0xaa88"), Header::default().into_view());
         map
     };
     let fetching_headers = {
@@ -556,7 +558,9 @@ fn rpc() {
         let map = DashMap::new();
         let tx = Transaction::default().into_view();
         let header = Header::default().into_view();
-        map.insert(h256!("0xbb11"), (tx, header));
+        map.insert(h256!("0xbb11"), (tx.clone(), header.clone()));
+        map.insert(h256!("0xbb77"), (tx.clone(), header.clone()));
+        map.insert(h256!("0xbb88"), (tx, header));
         map
     };
     let fetching_txs = {
@@ -598,9 +602,9 @@ fn rpc() {
     assert_eq!(transaction.hash, pre_tx0.hash().unpack());
     assert_eq!(header.hash, pre_block.header().hash().unpack());
 
-    assert_eq!(peers.fetched_headers().len(), 1);
+    assert_eq!(peers.fetched_headers().len(), 3);
     assert_eq!(peers.fetching_headers().len(), 2);
-    assert_eq!(peers.fetched_txs().len(), 1);
+    assert_eq!(peers.fetched_txs().len(), 3);
     assert_eq!(peers.fetching_txs().len(), 2);
 
     // test fetch_header rpc
@@ -623,16 +627,28 @@ fn rpc() {
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
     assert_eq!(rv, Some(5566));
 
-    assert_eq!(peers.fetched_headers().len(), 1);
+    assert_eq!(peers.fetched_headers().len(), 3);
     assert_eq!(peers.fetching_headers().len(), 3);
-    assert_eq!(peers.fetched_txs().len(), 1);
+    assert_eq!(peers.fetched_txs().len(), 3);
     assert_eq!(peers.fetching_txs().len(), 3);
 
-    // test clear_headers rpc
-    let block_hashes = rpc.clear_headers().unwrap();
-    assert_eq!(block_hashes, vec![h256!("0xaa11")]);
-    let tx_hashes = rpc.clear_transactions().unwrap();
-    assert_eq!(tx_hashes, vec![h256!("0xbb11")]);
+    // test remove_headers rpc
+    assert_eq!(
+        rpc.remove_headers(Some(vec![h256!("0xaa77")])).unwrap(),
+        vec![h256!("0xaa77")]
+    );
+    let mut block_hashes = rpc.remove_headers(None).unwrap();
+    block_hashes.sort();
+    assert_eq!(block_hashes, vec![h256!("0xaa11"), h256!("0xaa88")]);
+    // test remove_txs rpc
+    assert_eq!(
+        rpc.remove_transactions(Some(vec![h256!("0xbb77")]))
+            .unwrap(),
+        vec![h256!("0xbb77")]
+    );
+    let mut tx_hashes = rpc.remove_transactions(None).unwrap();
+    tx_hashes.sort();
+    assert_eq!(tx_hashes, vec![h256!("0xbb11"), h256!("0xbb88")]);
 
     assert_eq!(peers.fetched_headers().len(), 0);
     assert_eq!(peers.fetching_headers().len(), 3);

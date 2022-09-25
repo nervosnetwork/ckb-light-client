@@ -203,25 +203,25 @@ Fetch a transaction from remote node.
   * If transaction not in local and the fetch request is not send, return `None`.
   * If transaction not in local and the fetch request is sent, return the utc timestamp of first request
 
-### `clear_headers`
+### `remove_headers`
 
-Remove all fetched headers.
+Remove all fetched headers. (if `block_hashes` is `null` remove all headers)
 
 #### Parameters
 
-    null
+    null or Vec<H256>
 
 #### Returns
 
     Vec<H256> - The removed block hashes
 
-### `clear_transactions`
+### `remove_transactions`
 
-Remove all fetched transactions.
+Remove all fetched transactions. (if `tx_hashes` is `null` remove all transactions)
 
 #### Parameters
 
-    null
+    null or Vec<H256>
 
 #### Returns
 

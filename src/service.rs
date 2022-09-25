@@ -93,19 +93,19 @@ pub trait ChainRpc {
     #[rpc(name = "fetch_transaction")]
     fn fetch_transaction(&self, tx_hash: H256) -> Result<Option<u64>>;
 
-    /// Remove all fetched headers.
+    /// Remove fetched headers. (if `block_hashes` is None remove all headers)
     ///
     /// Returns:
     ///   * The removed block hashes
-    #[rpc(name = "clear_headers")]
-    fn clear_headers(&self) -> Result<Vec<H256>>;
+    #[rpc(name = "remove_headers")]
+    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
 
-    /// Remove all fetched transactions.
+    /// Remove fetched transactions. (if `tx_hashes` is None remove all transactions)
     ///
     /// Returns:
     ///   * The removed transaction hashes
-    #[rpc(name = "clear_transactions")]
-    fn clear_transactions(&self) -> Result<Vec<H256>>;
+    #[rpc(name = "remove_transactions")]
+    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
 }
 
 #[rpc(server)]
@@ -1027,22 +1027,36 @@ impl ChainRpc for ChainRpcImpl {
         Ok(None)
     }
 
-    fn clear_headers(&self) -> Result<Vec<H256>> {
-        let mut block_hashes = Vec::new();
+    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
+        let mut removed_block_hashes = Vec::new();
         self.swc.fetched_headers().retain(|k, _v| {
-            block_hashes.push(k.clone());
-            false
+            let keep = if let Some(hashes) = block_hashes.as_ref() {
+                !hashes.contains(k)
+            } else {
+                false
+            };
+            if !keep {
+                removed_block_hashes.push(k.clone());
+            }
+            keep
         });
-        Ok(block_hashes)
+        Ok(removed_block_hashes)
     }
 
-    fn clear_transactions(&self) -> Result<Vec<H256>> {
-        let mut tx_hashes = Vec::new();
+    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
+        let mut removed_tx_hashes = Vec::new();
         self.swc.fetched_txs().retain(|k, _v| {
-            tx_hashes.push(k.clone());
-            false
+            let keep = if let Some(hashes) = tx_hashes.as_ref() {
+                !hashes.contains(k)
+            } else {
+                false
+            };
+            if !keep {
+                removed_tx_hashes.push(k.clone());
+            }
+            keep
         });
-        Ok(tx_hashes)
+        Ok(removed_tx_hashes)
     }
 }
 
