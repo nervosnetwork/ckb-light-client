@@ -111,7 +111,7 @@ impl<'a> SendLastStateProofProcess<'a> {
                 end_header.compact_target(),
                 TAU,
             ) {
-                Ok(result) => result,
+                Ok(result) => !result,
                 Err(status) => return status,
             }
         } else {
@@ -622,7 +622,7 @@ pub(crate) fn verify_tau(
             error!("failed: different compact targets for a same epoch");
             return Err(StatusCode::InvalidCompactTarget.into());
         }
-        Ok(false)
+        Ok(true)
     } else {
         let start_block_difficulty = compact_to_difficulty(start_compact_target);
         let end_block_difficulty = compact_to_difficulty(end_compact_target);
