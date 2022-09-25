@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
@@ -156,8 +157,8 @@ async fn test_send_txs_proof_ok() {
             .fetched_txs()
             .iter()
             .map(|pair| pair.key().pack())
-            .collect::<Vec<_>>(),
-        tx_hashes
+            .collect::<HashSet<_>>(),
+        tx_hashes.into_iter().collect()
     );
 }
 
