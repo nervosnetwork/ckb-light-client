@@ -550,8 +550,8 @@ fn rpc() {
     };
     let fetching_headers = {
         let map = DashMap::new();
-        map.insert(h256!("0xaa22"), Some((3344, false)));
-        map.insert(h256!("0xaa33"), None);
+        map.insert(h256!("0xaa22"), (1111, 3344, false));
+        map.insert(h256!("0xaa33"), (1111, 0, false));
         map
     };
     let fetched_txs = {
@@ -565,8 +565,8 @@ fn rpc() {
     };
     let fetching_txs = {
         let map = DashMap::new();
-        map.insert(h256!("0xbb22"), Some((5566, false)));
-        map.insert(h256!("0xbb33"), None);
+        map.insert(h256!("0xbb22"), (1111, 5566, false));
+        map.insert(h256!("0xbb33"), (1111, 0, false));
         map
     };
     let peers = Arc::new(Peers::new(
@@ -616,15 +616,14 @@ fn rpc() {
         }
     );
     let rv = rpc.fetch_header(h256!("0xabcdef")).unwrap();
-    assert_eq!(rv, FetchStatus::Added);
+    assert!(matches!(rv, FetchStatus::Added { .. }));
     let rv = rpc.fetch_header(h256!("0xaa33")).unwrap();
-    assert_eq!(rv, FetchStatus::Added);
+    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
     let rv = rpc.fetch_header(h256!("0xaa22")).unwrap();
     assert_eq!(rv, FetchStatus::Fetching { first_sent: 3344 });
 
     // test fetch_transaction rpc
     let rv = rpc.fetch_transaction(h256!("0xbb11")).unwrap();
-    println!("rv: {}", serde_json::to_string_pretty(&rv).unwrap());
     assert_eq!(
         rv,
         FetchStatus::Fetched {
@@ -635,12 +634,10 @@ fn rpc() {
         }
     );
     let rv = rpc.fetch_transaction(h256!("0xabcdef")).unwrap();
-    println!("rv: {}", serde_json::to_string_pretty(&rv).unwrap());
-    assert_eq!(rv, FetchStatus::Added);
+    assert!(matches!(rv, FetchStatus::Added { .. }));
     let rv = rpc.fetch_transaction(h256!("0xbb33")).unwrap();
-    assert_eq!(rv, FetchStatus::Added);
+    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
-    println!("rv: {}", serde_json::to_string_pretty(&rv).unwrap());
     assert_eq!(rv, FetchStatus::Fetching { first_sent: 5566 });
 
     assert_eq!(peers.fetched_headers().len(), 3);

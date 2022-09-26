@@ -6,6 +6,7 @@ use ckb_jsonrpc_types::{
 use ckb_network::{extract_peer_id, NetworkController};
 use ckb_traits::HeaderProvider;
 use ckb_types::{core, packed, prelude::*, H256};
+use faketime::unix_time_as_millis;
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
@@ -112,7 +113,7 @@ pub trait NetRpc {
 #[serde(tag = "status")]
 #[serde(rename_all = "lowercase")]
 pub enum FetchStatus<T> {
-    Added,
+    Added { timestamp: u64 },
     Fetching { first_sent: u64 },
     Fetched { data: T },
 }
@@ -1006,32 +1007,46 @@ impl ChainRpc for ChainRpcImpl {
         if let Some(value) = self.get_header(block_hash.clone())? {
             return Ok(FetchStatus::Fetched { data: value });
         }
+        let now = unix_time_as_millis();
         if let Some(item) = self.swc.fetching_headers().get(&block_hash) {
-            if let Some((first_sent, _timeout)) = item.value() {
+            let (added_ts, first_sent, _timeout) = item.value();
+            if *first_sent > 0 {
                 return Ok(FetchStatus::Fetching {
                     first_sent: *first_sent,
                 });
+            } else {
+                return Ok(FetchStatus::Added {
+                    timestamp: *added_ts,
+                });
             }
         } else {
-            self.swc.fetching_headers().insert(block_hash, None);
+            self.swc
+                .fetching_headers()
+                .insert(block_hash, (now, 0, false));
         }
-        Ok(FetchStatus::Added)
+        Ok(FetchStatus::Added { timestamp: now })
     }
 
     fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>> {
         if let Some(value) = self.get_transaction(tx_hash.clone())? {
             return Ok(FetchStatus::Fetched { data: value });
         }
+        let now = unix_time_as_millis();
         if let Some(item) = self.swc.fetching_txs().get(&tx_hash) {
-            if let Some((first_sent, _timeout)) = item.value() {
+            let (added_ts, first_sent, _timeout) = item.value();
+            if *first_sent > 0 {
                 return Ok(FetchStatus::Fetching {
                     first_sent: *first_sent,
                 });
+            } else {
+                return Ok(FetchStatus::Added {
+                    timestamp: *added_ts,
+                });
             }
         } else {
-            self.swc.fetching_txs().insert(tx_hash, None);
+            self.swc.fetching_txs().insert(tx_hash, (now, 0, false));
         }
-        Ok(FetchStatus::Added)
+        Ok(FetchStatus::Added { timestamp: now })
     }
 
     fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {

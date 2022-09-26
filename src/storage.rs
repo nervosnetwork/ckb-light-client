@@ -605,13 +605,13 @@ impl StorageWithChainData {
     pub(crate) fn fetched_headers(&self) -> &DashMap<H256, HeaderView> {
         self.peers.fetched_headers()
     }
-    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, Option<(u64, bool)>> {
+    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, (u64, u64, bool)> {
         self.peers.fetching_headers()
     }
     pub(crate) fn fetched_txs(&self) -> &DashMap<H256, (TransactionView, HeaderView)> {
         self.peers.fetched_txs()
     }
-    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, Option<(u64, bool)>> {
+    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, (u64, u64, bool)> {
         self.peers.fetching_txs()
     }
 }

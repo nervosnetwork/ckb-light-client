@@ -187,7 +187,7 @@ Fetch a header from remote node.
 
     {"status": "fetched", "data": HeaderView }
     {"status": "fetching", "first_sent": u64 }
-    {"status": "added" }
+    {"status": "added", "timestamp": u64 }
 
 ### `fetch_transaction`
 
@@ -201,7 +201,7 @@ Fetch a transaction from remote node.
 
     {"status": "fetched", "data": TransactionWithHeader }
     {"status": "fetching", "first_sent": u64 }
-    {"status": "added" }
+    {"status": "added", "timestamp": u64 }
 
 ### `remove_headers`
 

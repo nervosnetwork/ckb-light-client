@@ -24,14 +24,14 @@ pub struct Peers {
     fetched_headers: DashMap<H256, HeaderView>,
     // The headers are fetching, the value is the first fetch timestamp and
     // whether the request is timeout
-    fetching_headers: DashMap<H256, Option<(u64, bool)>>,
+    fetching_headers: DashMap<H256, (u64, u64, bool)>,
     // Fetch transactions.
     //   The key is the transaction hash
     //   The value is the fetched transaction and corresponding header
     fetched_txs: DashMap<H256, (TransactionView, HeaderView)>,
     // The transactions are fetching, the value is the first fetch timestamp and
     // whether the request is timeout
-    fetching_txs: DashMap<H256, Option<(u64, bool)>>,
+    fetching_txs: DashMap<H256, (u64, u64, bool)>,
 }
 
 #[derive(Default, Clone)]
@@ -296,9 +296,9 @@ impl Peers {
     pub fn new(
         last_headers: RwLock<Vec<HeaderView>>,
         fetched_headers: DashMap<H256, HeaderView>,
-        fetching_headers: DashMap<H256, Option<(u64, bool)>>,
+        fetching_headers: DashMap<H256, (u64, u64, bool)>,
         fetched_txs: DashMap<H256, (TransactionView, HeaderView)>,
-        fetching_txs: DashMap<H256, Option<(u64, bool)>>,
+        fetching_txs: DashMap<H256, (u64, u64, bool)>,
     ) -> Self {
         Self {
             inner: Default::default(),
@@ -316,13 +316,13 @@ impl Peers {
     pub(crate) fn fetched_headers(&self) -> &DashMap<H256, HeaderView> {
         &self.fetched_headers
     }
-    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, Option<(u64, bool)>> {
+    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, (u64, u64, bool)> {
         &self.fetching_headers
     }
     pub(crate) fn fetched_txs(&self) -> &DashMap<H256, (TransactionView, HeaderView)> {
         &self.fetched_txs
     }
-    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, Option<(u64, bool)>> {
+    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, (u64, u64, bool)> {
         &self.fetching_txs
     }
 
@@ -406,7 +406,10 @@ impl Peers {
     pub(crate) fn get_headers_to_fetch(&self) -> Vec<H256> {
         self.fetching_headers
             .iter()
-            .filter(|pair| pair.value().map(|(_, timeout)| timeout).unwrap_or(true))
+            .filter(|pair| {
+                let (_, first_sent, timeout) = pair.value();
+                *first_sent == 0 || *timeout
+            })
             .map(|pair| pair.key().clone())
             .collect()
     }
@@ -414,7 +417,10 @@ impl Peers {
     pub(crate) fn get_txs_to_fetch(&self) -> Vec<H256> {
         self.fetching_txs
             .iter()
-            .filter(|pair| pair.value().map(|(_, timeout)| timeout).unwrap_or(true))
+            .filter(|pair| {
+                let (_, first_sent, timeout) = pair.value();
+                *first_sent == 0 || *timeout
+            })
             .map(|pair| pair.key().clone())
             .collect()
     }
@@ -425,9 +431,7 @@ impl Peers {
             if let Some(request) = peer_state.get_blocks_proof_request() {
                 for block_hash in request.block_hashes() {
                     if let Some(mut pair) = self.fetching_headers.get_mut(&block_hash) {
-                        if let Some((_, ref mut timeout)) = pair.value_mut() {
-                            *timeout = true;
-                        }
+                        pair.value_mut().2 = true;
                     }
                 }
             }
@@ -438,9 +442,7 @@ impl Peers {
             if let Some(request) = peer_state.get_txs_proof_request() {
                 for tx_hash in request.tx_hashes() {
                     if let Some(mut pair) = self.fetching_txs.get_mut(&tx_hash) {
-                        if let Some((_, ref mut timeout)) = pair.value_mut() {
-                            *timeout = true;
-                        }
+                        pair.value_mut().2 = true;
                     }
                 }
             }

@@ -460,9 +460,9 @@ impl LightClientProtocol {
                         .update_blocks_proof_request(*peer, Some((content, false)));
                 }
                 for block_hash in block_hashes {
-                    self.peers
-                        .fetching_headers()
-                        .insert(block_hash.clone(), Some((now, false)));
+                    if let Some(mut value) = self.peers.fetching_headers().get_mut(block_hash) {
+                        value.1 = now;
+                    }
                 }
             }
         }
@@ -499,9 +499,9 @@ impl LightClientProtocol {
                     self.peers.update_txs_proof_request(*peer, Some(content));
                 }
                 for tx_hash in tx_hashes {
-                    self.peers
-                        .fetching_txs()
-                        .insert(tx_hash.clone(), Some((now, false)));
+                    if let Some(mut value) = self.peers.fetching_txs().get_mut(tx_hash) {
+                        value.1 = now;
+                    }
                 }
             }
         }
