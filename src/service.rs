@@ -77,21 +77,15 @@ pub trait ChainRpc {
 
     /// Fetch a header from remote node.
     ///
-    /// Returns:
-    ///   * If header already in fetched, return `Some(0)`.
-    ///   * If header not in local and the fetch request is not send, return `None`.
-    ///   * If header not in local and the fetch request is sent, return the utc timestamp of first request
+    /// Returns: FetchStatus<HeaderView>
     #[rpc(name = "fetch_header")]
-    fn fetch_header(&self, block_hash: H256) -> Result<Option<u64>>;
+    fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>>;
 
     /// Fetch a transaction from remote node.
     ///
-    /// Returns:
-    ///   * If transaction already fetched, return `Some(0)`.
-    ///   * If transaction not in local and the fetch request is not send, return `None`.
-    ///   * If transaction not in local and the fetch request is sent, return the utc timestamp of first request
+    /// Returns: FetchStatus<TransactionWithHeader>
     #[rpc(name = "fetch_transaction")]
-    fn fetch_transaction(&self, tx_hash: H256) -> Result<Option<u64>>;
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>>;
 
     /// Remove fetched headers. (if `block_hashes` is None remove all headers)
     ///
@@ -112,6 +106,15 @@ pub trait ChainRpc {
 pub trait NetRpc {
     #[rpc(name = "get_peers")]
     fn get_peers(&self) -> Result<Vec<RemoteNode>>;
+}
+
+#[derive(Deserialize, Serialize, Eq, PartialEq, Debug)]
+#[serde(tag = "status")]
+#[serde(rename_all = "lowercase")]
+pub enum FetchStatus<T> {
+    Added,
+    Fetching { first_sent: u64 },
+    Fetched { data: T },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -250,7 +253,7 @@ pub struct Pagination<T> {
     pub(crate) last_cursor: JsonBytes,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Eq, PartialEq)]
 pub struct TransactionWithHeader {
     pub(crate) transaction: TransactionView,
     pub(crate) header: HeaderView,
@@ -999,32 +1002,36 @@ impl ChainRpc for ChainRpcImpl {
         Ok(transaction_with_header)
     }
 
-    fn fetch_header(&self, block_hash: H256) -> Result<Option<u64>> {
-        if self.get_header(block_hash.clone())?.is_some() {
-            return Ok(Some(0));
+    fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>> {
+        if let Some(value) = self.get_header(block_hash.clone())? {
+            return Ok(FetchStatus::Fetched { data: value });
         }
         if let Some(item) = self.swc.fetching_headers().get(&block_hash) {
             if let Some((first_sent, _timeout)) = item.value() {
-                return Ok(Some(*first_sent));
+                return Ok(FetchStatus::Fetching {
+                    first_sent: *first_sent,
+                });
             }
         } else {
             self.swc.fetching_headers().insert(block_hash, None);
         }
-        Ok(None)
+        Ok(FetchStatus::Added)
     }
 
-    fn fetch_transaction(&self, tx_hash: H256) -> Result<Option<u64>> {
-        if self.get_transaction(tx_hash.clone())?.is_some() {
-            return Ok(Some(0));
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>> {
+        if let Some(value) = self.get_transaction(tx_hash.clone())? {
+            return Ok(FetchStatus::Fetched { data: value });
         }
         if let Some(item) = self.swc.fetching_txs().get(&tx_hash) {
             if let Some((first_sent, _timeout)) = item.value() {
-                return Ok(Some(*first_sent));
+                return Ok(FetchStatus::Fetching {
+                    first_sent: *first_sent,
+                });
             }
         } else {
             self.swc.fetching_txs().insert(tx_hash, None);
         }
-        Ok(None)
+        Ok(FetchStatus::Added)
     }
 
     fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {

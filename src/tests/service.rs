@@ -20,8 +20,8 @@ use tempfile;
 use crate::{
     protocols::Peers,
     service::{
-        BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, Order, ScriptStatus, SearchKey,
-        SearchKeyFilter, TransactionWithHeader,
+        BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
+        ScriptStatus, SearchKey, SearchKeyFilter, TransactionWithHeader,
     },
     storage::{Storage, StorageWithChainData},
 };
@@ -609,23 +609,39 @@ fn rpc() {
 
     // test fetch_header rpc
     let rv = rpc.fetch_header(h256!("0xaa11")).unwrap();
-    assert_eq!(rv, Some(0));
+    assert_eq!(
+        rv,
+        FetchStatus::Fetched {
+            data: Header::default().into_view().into()
+        }
+    );
     let rv = rpc.fetch_header(h256!("0xabcdef")).unwrap();
-    assert_eq!(rv, None);
+    assert_eq!(rv, FetchStatus::Added);
     let rv = rpc.fetch_header(h256!("0xaa33")).unwrap();
-    assert_eq!(rv, None);
+    assert_eq!(rv, FetchStatus::Added);
     let rv = rpc.fetch_header(h256!("0xaa22")).unwrap();
-    assert_eq!(rv, Some(3344));
+    assert_eq!(rv, FetchStatus::Fetching { first_sent: 3344 });
 
     // test fetch_transaction rpc
     let rv = rpc.fetch_transaction(h256!("0xbb11")).unwrap();
-    assert_eq!(rv, Some(0));
+    println!("rv: {}", serde_json::to_string_pretty(&rv).unwrap());
+    assert_eq!(
+        rv,
+        FetchStatus::Fetched {
+            data: TransactionWithHeader {
+                transaction: Transaction::default().into_view().into(),
+                header: Header::default().into_view().into(),
+            }
+        }
+    );
     let rv = rpc.fetch_transaction(h256!("0xabcdef")).unwrap();
-    assert_eq!(rv, None);
+    println!("rv: {}", serde_json::to_string_pretty(&rv).unwrap());
+    assert_eq!(rv, FetchStatus::Added);
     let rv = rpc.fetch_transaction(h256!("0xbb33")).unwrap();
-    assert_eq!(rv, None);
+    assert_eq!(rv, FetchStatus::Added);
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
-    assert_eq!(rv, Some(5566));
+    println!("rv: {}", serde_json::to_string_pretty(&rv).unwrap());
+    assert_eq!(rv, FetchStatus::Fetching { first_sent: 5566 });
 
     assert_eq!(peers.fetched_headers().len(), 3);
     assert_eq!(peers.fetching_headers().len(), 3);
