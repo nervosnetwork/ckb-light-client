@@ -324,14 +324,13 @@ async fn valid_proof_with_boundary_not_in_last_n() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -415,14 +414,13 @@ async fn valid_proof_with_boundary_in_last_n() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -530,14 +528,13 @@ async fn valid_proof_with_prove_state() {
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
         };
         protocol.commit_prove_state(peer_index, prove_state);
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             prev_last_number,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -645,14 +642,13 @@ async fn valid_proof_with_reorg_blocks() {
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
         };
         protocol.commit_prove_state(peer_index, prove_state);
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             prev_last_number,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -744,14 +740,13 @@ async fn invalid_proof() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -1058,14 +1053,13 @@ async fn samples_are_incorrect() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -1141,14 +1135,13 @@ async fn samples_are_redundant() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -1224,14 +1217,13 @@ async fn samples_are_not_enough_1() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -1306,14 +1298,13 @@ async fn samples_are_not_enough_2() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -1388,14 +1379,13 @@ async fn last_n_headers_should_be_continuous() {
 
     // Setup the test fixture.
     {
-        let mut prove_request = chain.build_prove_request(
+        let prove_request = chain.build_prove_request(
             0,
             num,
             &sampled_numbers,
             boundary_number,
             protocol.last_n_blocks(),
         );
-        prove_request.skip_check_tau();
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
