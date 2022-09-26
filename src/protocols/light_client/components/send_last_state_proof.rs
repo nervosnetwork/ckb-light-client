@@ -122,22 +122,6 @@ impl<'a> SendLastStateProofProcess<'a> {
             false
         };
 
-        // The last header in `reorg_last_n_headers` should be continuous.
-        if reorg_count != 0 {
-            let last_reorg_header = &headers[reorg_count - 1];
-            let start_number: BlockNumber = original_request.get_content().start_number().unpack();
-            if last_reorg_header.number() != start_number - 1 {
-                let errmsg = format!(
-                    "failed to verify reorg last n headers \
-                    since they end at block#{} (hash: {:#x}) but we expect block#{}",
-                    last_reorg_header.number(),
-                    last_reorg_header.hash(),
-                    start_number - 1,
-                );
-                return StatusCode::InvalidReorgHeaders.with_context(errmsg);
-            }
-        }
-
         // Check parent hashes for the continuous headers.
         if reorg_count != 0 {
             return_if_failed!(check_continuous_headers(&headers[..reorg_count - 1]));
@@ -475,6 +459,7 @@ impl EpochDifficultyTrendDetails {
 }
 
 // Check if the response is matched the last request.
+// - Check reorg blocks if there has any.
 // - Check the difficulties.
 // - Check the difficulty boundary.
 pub(crate) fn check_if_response_is_matched(
@@ -499,15 +484,46 @@ pub(crate) fn check_if_response_is_matched(
         .take_while(|h| h.header().number() < start_number)
         .count();
 
+    if reorg_count != 0 {
+        // The count of reorg blocks should be `last_n_blocks`, unless the blocks are not enough.
+        if reorg_count != last_n_blocks {
+            let first_reorg_header = headers[0].header();
+            // Genesis block doesn't have chain root, so blocks should be started from 1.
+            if first_reorg_header.number() != 1 {
+                let errmsg = format!(
+                    "failed to verify reorg last n headers since the count (={}) should be {} \
+                    or the number(={}) of the first reorg block (hash: {:#x}) should 1,",
+                    reorg_count,
+                    last_n_blocks,
+                    first_reorg_header.number(),
+                    first_reorg_header.hash()
+                );
+                return Err(StatusCode::InvalidReorgHeaders.with_context(errmsg));
+            }
+        }
+        // The last header in `reorg_last_n_headers` should be continuous.
+        let last_reorg_header = headers[reorg_count - 1].header();
+        if last_reorg_header.number() != start_number - 1 {
+            let errmsg = format!(
+                "failed to verify reorg last n headers \
+                since they end at block#{} (hash: {:#x}) but we expect block#{}",
+                last_reorg_header.number(),
+                last_reorg_header.hash(),
+                start_number - 1,
+            );
+            return Err(StatusCode::InvalidReorgHeaders.with_context(errmsg));
+        }
+    }
+
     let (sampled_count, last_n_count) = if total_count - reorg_count > last_n_blocks {
         let difficulty_boundary: U256 = prev_request.difficulty_boundary().unpack();
-        let sampled_count = headers
+        let before_boundary_count = headers
             .iter()
             .take_while(|h| h.total_difficulty() < difficulty_boundary)
             .count();
-        let last_n_count = total_count - reorg_count - sampled_count;
+        let last_n_count = total_count - before_boundary_count;
         if last_n_count > last_n_blocks {
-            (sampled_count, last_n_count)
+            (before_boundary_count - reorg_count, last_n_count)
         } else {
             (total_count - reorg_count - last_n_blocks, last_n_blocks)
         }

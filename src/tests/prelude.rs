@@ -123,6 +123,7 @@ pub(crate) trait RunningChainExt: ChainExt {
 
     fn build_prove_request(
         &self,
+        start_num: BlockNumber,
         last_num: BlockNumber,
         sampled_nums: &[BlockNumber],
         boundary_num: BlockNumber,
@@ -134,7 +135,9 @@ pub(crate) trait RunningChainExt: ChainExt {
             .expect("block stored")
             .into();
         let content = {
-            let genesis_block = self.consensus().genesis_block();
+            let start_header = snapshot
+                .get_header_by_number(start_num)
+                .expect("block stored");
             let difficulties = {
                 let u256_one = &U256::from(1u64);
                 let total_diffs = (0..last_num)
@@ -155,8 +158,8 @@ pub(crate) trait RunningChainExt: ChainExt {
                 .unwrap();
             packed::GetLastStateProof::new_builder()
                 .last_hash(last_header.header().hash())
-                .start_hash(genesis_block.hash())
-                .start_number(genesis_block.number().pack())
+                .start_hash(start_header.hash())
+                .start_number(start_header.number().pack())
                 .last_n_blocks(last_n_blocks.pack())
                 .difficulty_boundary(difficulty_boundary.pack())
                 .difficulties(difficulties.pack())

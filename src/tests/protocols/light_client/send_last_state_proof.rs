@@ -6,7 +6,7 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{LastState, Peers, ProveRequest, StatusCode},
+    protocols::{LastState, Peers, ProveRequest, ProveState, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -325,6 +325,7 @@ async fn valid_proof_with_boundary_not_in_last_n() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
@@ -415,6 +416,7 @@ async fn valid_proof_with_boundary_in_last_n() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
@@ -481,6 +483,244 @@ async fn valid_proof_with_boundary_in_last_n() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn valid_proof_with_prove_state() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(3);
+
+    let num = 30;
+    chain.mine_to(30);
+
+    let snapshot = chain.shared().snapshot();
+
+    let prev_last_number = 15;
+    let prev_sampled_numbers = vec![3, 4, 7, 10];
+    let sampled_numbers = vec![17, 20, 22, 25, 28];
+    let boundary_number = num - protocol.last_n_blocks() + 1;
+
+    // Setup the test fixture.
+    {
+        let prev_boundary_number = prev_last_number - protocol.last_n_blocks() + 1;
+        let prev_prove_request = chain.build_prove_request(
+            0,
+            prev_last_number,
+            &prev_sampled_numbers,
+            prev_boundary_number,
+            protocol.last_n_blocks(),
+        );
+        let prove_state = {
+            let prev_last_n_blocks_start_number = if prev_last_number > protocol.last_n_blocks() + 1
+            {
+                prev_last_number - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
+                .into_iter()
+                .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
+                .collect::<Vec<_>>();
+            ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
+        };
+        protocol.commit_prove_state(peer_index, prove_state);
+        let mut prove_request = chain.build_prove_request(
+            prev_last_number,
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        prove_request.skip_check_tau();
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+            let headers = sampled_numbers
+                .iter()
+                .map(|n| *n as BlockNumber)
+                .filter(|n| *n < first_last_n_number)
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.not_banned(peer_index));
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        let last_header: VerifiableHeader = last_header.into();
+        assert!(prove_state.is_same_as(&last_header));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn valid_proof_with_reorg_blocks() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(3);
+
+    let num = 30;
+    chain.mine_to(30);
+
+    let snapshot = chain.shared().snapshot();
+
+    let prev_last_number = 15;
+    let prev_sampled_numbers = vec![3, 4, 7, 10];
+    let sampled_numbers = vec![17, 20, 22, 25, 28];
+    let boundary_number = num - protocol.last_n_blocks() + 1;
+
+    // Setup the test fixture.
+    {
+        let prev_boundary_number = prev_last_number - protocol.last_n_blocks() + 1;
+        let prev_prove_request = chain.build_prove_request(
+            0,
+            prev_last_number,
+            &prev_sampled_numbers,
+            prev_boundary_number,
+            protocol.last_n_blocks(),
+        );
+        let prove_state = {
+            let prev_last_n_blocks_start_number = if prev_last_number > protocol.last_n_blocks() + 1
+            {
+                prev_last_number - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
+                .into_iter()
+                .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
+                .collect::<Vec<_>>();
+            ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
+        };
+        protocol.commit_prove_state(peer_index, prove_state);
+        let mut prove_request = chain.build_prove_request(
+            prev_last_number,
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        prove_request.skip_check_tau();
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let reorg_start_number = if prev_last_number > protocol.last_n_blocks() + 1 {
+                prev_last_number - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+            let headers = (reorg_start_number..prev_last_number)
+                .chain(
+                    sampled_numbers
+                        .iter()
+                        .map(|n| *n as BlockNumber)
+                        .filter(|n| *n < first_last_n_number),
+                )
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.not_banned(peer_index));
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        let last_header: VerifiableHeader = last_header.into();
+        assert!(prove_state.is_same_as(&last_header));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn invalid_proof() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
@@ -505,6 +745,7 @@ async fn invalid_proof() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
@@ -563,6 +804,236 @@ async fn invalid_proof() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn reorg_blocks_is_not_enough() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(3);
+
+    let num = 30;
+    chain.mine_to(30);
+
+    let snapshot = chain.shared().snapshot();
+
+    let prev_last_number = 15;
+    let prev_sampled_numbers = vec![3, 4, 7, 10];
+    let sampled_numbers = vec![17, 20, 22, 25, 28];
+    let boundary_number = num - protocol.last_n_blocks() + 1;
+
+    // Setup the test fixture.
+    {
+        let prev_boundary_number = prev_last_number - protocol.last_n_blocks() + 1;
+        let prev_prove_request = chain.build_prove_request(
+            0,
+            prev_last_number,
+            &prev_sampled_numbers,
+            prev_boundary_number,
+            protocol.last_n_blocks(),
+        );
+        let prove_state = {
+            let prev_last_n_blocks_start_number = if prev_last_number > protocol.last_n_blocks() + 1
+            {
+                prev_last_number - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
+                .into_iter()
+                .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
+                .collect::<Vec<_>>();
+            ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
+        };
+        protocol.commit_prove_state(peer_index, prove_state);
+        let mut prove_request = chain.build_prove_request(
+            prev_last_number,
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        prove_request.skip_check_tau();
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let reorg_start_number = if prev_last_number > protocol.last_n_blocks() + 1 {
+                prev_last_number - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+            let headers = (reorg_start_number..prev_last_number)
+                .skip(1)
+                .chain(
+                    sampled_numbers
+                        .iter()
+                        .map(|n| *n as BlockNumber)
+                        .filter(|n| *n < first_last_n_number),
+                )
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.banned_since(peer_index, StatusCode::InvalidReorgHeaders));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reorg_blocks_is_not_continuous_with_start() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(3);
+
+    let num = 30;
+    chain.mine_to(30);
+
+    let snapshot = chain.shared().snapshot();
+
+    let prev_last_number = 15;
+    let prev_sampled_numbers = vec![3, 4, 7, 10];
+    let sampled_numbers = vec![17, 20, 22, 25, 28];
+    let boundary_number = num - protocol.last_n_blocks() + 1;
+
+    // Setup the test fixture.
+    {
+        let prev_boundary_number = prev_last_number - protocol.last_n_blocks() + 1;
+        let prev_prove_request = chain.build_prove_request(
+            0,
+            prev_last_number,
+            &prev_sampled_numbers,
+            prev_boundary_number,
+            protocol.last_n_blocks(),
+        );
+        let prove_state = {
+            let prev_last_n_blocks_start_number = if prev_last_number > protocol.last_n_blocks() + 1
+            {
+                prev_last_number - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
+                .into_iter()
+                .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
+                .collect::<Vec<_>>();
+            ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
+        };
+        protocol.commit_prove_state(peer_index, prove_state);
+        let mut prove_request = chain.build_prove_request(
+            prev_last_number,
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        prove_request.skip_check_tau();
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let reorg_start_number = if prev_last_number > protocol.last_n_blocks() + 1 {
+                prev_last_number - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+            let headers = (reorg_start_number..prev_last_number)
+                .map(|n| n - 1)
+                .chain(
+                    sampled_numbers
+                        .iter()
+                        .map(|n| *n as BlockNumber)
+                        .filter(|n| *n < first_last_n_number),
+                )
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.banned_since(peer_index, StatusCode::InvalidReorgHeaders));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn samples_are_incorrect() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
@@ -588,6 +1059,7 @@ async fn samples_are_incorrect() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
@@ -670,6 +1142,7 @@ async fn samples_are_redundant() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
@@ -752,6 +1225,7 @@ async fn samples_are_not_enough_1() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
@@ -833,6 +1307,7 @@ async fn samples_are_not_enough_2() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
@@ -914,6 +1389,7 @@ async fn last_n_headers_should_be_continuous() {
     // Setup the test fixture.
     {
         let mut prove_request = chain.build_prove_request(
+            0,
             num,
             &sampled_numbers,
             boundary_number,
