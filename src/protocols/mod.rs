@@ -6,7 +6,7 @@ use ckb_types::core::BlockNumber;
 mod status;
 
 mod filter;
-mod light_client;
+pub(crate) mod light_client;
 mod relayer;
 mod synchronizer;
 

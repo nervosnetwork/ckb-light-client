@@ -5,13 +5,18 @@ use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_store::ChainStore;
 use ckb_types::{
     core::TransactionBuilder,
+    h256,
     packed::{self},
     prelude::*,
-    utilities::CBMT,
+    utilities::{merkle_mountain_range::VerifiableHeader, CBMT},
 };
+use dashmap::DashMap;
 
 use crate::{
-    protocols::{LastState, Peers, ProveRequest, ProveState, StatusCode},
+    protocols::{
+        light_client::constant::FETCH_HEADER_TX_TOKEN, LastState, Peers, ProveRequest, ProveState,
+        StatusCode,
+    },
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -490,4 +495,68 @@ async fn test_send_txs_proof_is_empty() {
 
     assert!(nc.banned_peers().borrow().is_empty());
     assert!(nc.sent_messages().borrow().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_send_headers_txs_request() {
+    let chain = MockChain::new_with_dummy_pow("test-send-headers-txs").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+    let peer_index = PeerIndex::new(3);
+
+    let peers = {
+        let fetching_headers = {
+            let map = DashMap::new();
+            map.insert(h256!("0xaa22"), Some((3344, false)));
+            map.insert(h256!("0xaa33"), None);
+            map
+        };
+        let fetching_txs = {
+            let map = DashMap::new();
+            map.insert(h256!("0xbb22"), Some((5566, false)));
+            map.insert(h256!("0xbb33"), None);
+            map
+        };
+        let peers = Arc::new(Peers::new(
+            Default::default(),
+            Default::default(),
+            fetching_headers,
+            Default::default(),
+            fetching_txs,
+        ));
+
+        peers.add_peer(peer_index);
+
+        let tip_header = VerifiableHeader::new(
+            chain.client_storage().get_tip_header().into_view(),
+            Default::default(),
+            None,
+            Default::default(),
+        );
+        let last_state = LastState::new(tip_header);
+        let request = ProveRequest::new(last_state, Default::default());
+        let prove_state =
+            ProveState::new_from_request(request, Default::default(), Default::default());
+        peers.commit_prove_state(peer_index, prove_state);
+        peers
+    };
+
+    let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
+    protocol.notify(nc.context(), FETCH_HEADER_TX_TOKEN).await;
+
+    assert!(nc.banned_peers().borrow().is_empty());
+    assert_eq!(nc.sent_messages().borrow().len(), 2);
+
+    assert!(peers
+        .fetching_headers()
+        .get(&h256!("0xaa33"))
+        .unwrap()
+        .is_some());
+    assert!(peers
+        .fetching_txs()
+        .get(&h256!("0xbb33"))
+        .unwrap()
+        .is_some());
+    let peer_state = peers.get_state(&peer_index).unwrap();
+    assert!(peer_state.get_blocks_proof_request().is_some());
+    assert!(peer_state.get_txs_proof_request().is_some());
 }
