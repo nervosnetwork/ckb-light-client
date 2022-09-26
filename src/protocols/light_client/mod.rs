@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ckb_chain_spec::consensus::Consensus;
+use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{
     async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
 };
@@ -43,6 +44,7 @@ pub struct LightClientProtocol {
     peers: Arc<Peers>,
     consensus: Consensus,
     last_n_blocks: BlockNumber,
+    init_blocks_in_transit_per_peer: usize,
 }
 
 #[async_trait]
@@ -334,6 +336,7 @@ impl LightClientProtocol {
             peers,
             consensus,
             last_n_blocks: LAST_N_BLOCKS,
+            init_blocks_in_transit_per_peer: INIT_BLOCKS_IN_TRANSIT_PER_PEER,
         }
     }
 
@@ -344,6 +347,15 @@ impl LightClientProtocol {
     #[cfg(test)]
     pub(crate) fn set_last_n_blocks(&mut self, last_n_blocks: BlockNumber) {
         self.last_n_blocks = last_n_blocks;
+    }
+
+    pub(crate) fn init_blocks_in_transit_per_peer(&self) -> usize {
+        self.init_blocks_in_transit_per_peer
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_init_blocks_in_transit_per_peer(&mut self, value: usize) {
+        self.init_blocks_in_transit_per_peer = value;
     }
 
     pub(crate) fn mmr_activated_epoch(&self) -> EpochNumber {

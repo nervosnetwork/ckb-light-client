@@ -180,7 +180,7 @@ impl ProveState {
 }
 
 impl BlocksProofRequest {
-    fn new(content: packed::GetBlocksProof, fetch_tip: bool, when_sent: u64) -> Self {
+    pub(crate) fn new(content: packed::GetBlocksProof, fetch_tip: bool, when_sent: u64) -> Self {
         Self {
             content,
             fetch_tip,

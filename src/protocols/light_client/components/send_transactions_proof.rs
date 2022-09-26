@@ -74,7 +74,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
         // Check if the response is match the request.
         if !original_request.is_same_as(&last_header.header().hash(), &received_tx_hashes) {
             error!("peer {} send an unknown proof", self.peer);
-            return StatusCode::UnexpectedRequest.into();
+            return StatusCode::UnexpectedResponse.into();
         }
 
         // Check PoW for blocks

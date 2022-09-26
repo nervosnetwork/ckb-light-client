@@ -1,4 +1,3 @@
-use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
 use log::error;
@@ -70,7 +69,7 @@ impl<'a> SendBlocksProofProcess<'a> {
                 .collect::<Vec<_>>();
             if !original_request.is_same_as(&last_header.header().hash(), &received_block_hashes) {
                 error!("peer {} send an unknown proof", self.peer);
-                return StatusCode::UnexpectedRequest.into();
+                return StatusCode::UnexpectedResponse.into();
             }
         }
 
@@ -97,7 +96,7 @@ impl<'a> SendBlocksProofProcess<'a> {
                 .map(|header| header.hash())
                 .collect();
 
-            for hashes in block_hashes.chunks(INIT_BLOCKS_IN_TRANSIT_PER_PEER) {
+            for hashes in block_hashes.chunks(self.protocol.init_blocks_in_transit_per_peer()) {
                 let content = packed::GetBlocks::new_builder()
                     .block_hashes(hashes.to_vec().pack())
                     .build();
