@@ -175,6 +175,58 @@ Returns the information about a transaction by hash, the block header is also re
 curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "get_transaction", "params": ["0xa0ef4eb5f4ceeb08a4c8524d84c5da95dce2f608e0ca2ec8091191b0f330c6e3"], "id": 1}'
 ```
 
+### `fetch_header`
+
+Fetch a header from remote node.
+
+#### Parameters
+
+    block_hash  - the block hash
+
+#### Returns
+
+    {"status": "fetched", "data": HeaderView }
+    {"status": "fetching", "first_sent": u64 }
+    {"status": "added", "timestamp": u64 }
+
+### `fetch_transaction`
+
+Fetch a transaction from remote node.
+
+#### Parameters
+
+    tx_hash  - the transaction hash
+
+#### Returns
+
+    {"status": "fetched", "data": TransactionWithHeader }
+    {"status": "fetching", "first_sent": u64 }
+    {"status": "added", "timestamp": u64 }
+
+### `remove_headers`
+
+Remove all fetched headers. (if `block_hashes` is `null` remove all headers)
+
+#### Parameters
+
+    null or Vec<H256>
+
+#### Returns
+
+    Vec<H256> - The removed block hashes
+
+### `remove_transactions`
+
+Remove all fetched transactions. (if `tx_hashes` is `null` remove all transactions)
+
+#### Parameters
+
+    null or Vec<H256>
+
+#### Returns
+
+    Vec<H256> - The removed transaction hashes
+
 ### `get_cells`
 
 To facilitate code migration, the rpc is same as ckb-indexer, please refer to ckb-indexer rpc [doc](https://github.com/nervosnetwork/ckb-indexer#get_cells)

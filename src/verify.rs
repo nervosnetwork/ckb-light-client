@@ -17,14 +17,14 @@ use ckb_verification::{
     TimeRelativeTransactionVerifier,
 };
 
-use crate::storage::StorageWithLastHeaders;
+use crate::storage::StorageWithChainData;
 
 /// Light client can only verify non-cellbase transaction,
 /// can not reuse the `ContextualTransactionVerifier` in ckb_verification crate which is used to verify cellbase also.
 pub struct ContextualTransactionVerifier<'a> {
-    pub(crate) time_relative: TimeRelativeTransactionVerifier<'a, StorageWithLastHeaders>,
+    pub(crate) time_relative: TimeRelativeTransactionVerifier<'a, StorageWithChainData>,
     pub(crate) capacity: CapacityVerifier<'a>,
-    pub(crate) script: ScriptVerifier<'a, StorageWithLastHeaders>,
+    pub(crate) script: ScriptVerifier<'a, StorageWithChainData>,
 }
 
 impl<'a> ContextualTransactionVerifier<'a> {
@@ -32,12 +32,12 @@ impl<'a> ContextualTransactionVerifier<'a> {
     pub fn new(
         rtx: &'a ResolvedTransaction,
         consensus: &'a Consensus,
-        swl: &'a StorageWithLastHeaders,
+        swc: &'a StorageWithChainData,
         tx_env: &'a TxVerifyEnv,
     ) -> Self {
         ContextualTransactionVerifier {
-            time_relative: TimeRelativeTransactionVerifier::new(rtx, consensus, swl, tx_env),
-            script: ScriptVerifier::new(rtx, swl),
+            time_relative: TimeRelativeTransactionVerifier::new(rtx, consensus, swc, tx_env),
+            script: ScriptVerifier::new(rtx, swc),
             capacity: CapacityVerifier::new(rtx, consensus.dao_type_hash()),
         }
     }
@@ -51,20 +51,20 @@ impl<'a> ContextualTransactionVerifier<'a> {
 
 pub fn verify_tx(
     transaction: TransactionView,
-    swl: &StorageWithLastHeaders,
+    swc: &StorageWithChainData,
     consensus: &Consensus,
 ) -> Result<Cycle, Error> {
     NonContextualTransactionVerifier::new(&transaction, consensus).verify()?;
 
-    let rtx = resolve_tx(swl, transaction)?;
-    let (_, tip_header) = swl.storage().get_last_state();
+    let rtx = resolve_tx(swc, transaction)?;
+    let (_, tip_header) = swc.storage().get_last_state();
     let tx_env = TxVerifyEnv::new_submit(&tip_header.into_view());
-    ContextualTransactionVerifier::new(&rtx, consensus, swl, &tx_env)
+    ContextualTransactionVerifier::new(&rtx, consensus, swc, &tx_env)
         .verify(consensus.max_block_cycles())
 }
 
 fn resolve_tx(
-    swl: &StorageWithLastHeaders,
+    swc: &StorageWithChainData,
     transaction: TransactionView,
 ) -> Result<ResolvedTransaction, OutPointError> {
     let (mut resolved_inputs, mut resolved_cell_deps, mut resolved_dep_groups) = (
@@ -80,7 +80,7 @@ fn resolve_tx(
             match resolved_cells.entry((out_point.clone(), eager_load)) {
                 Entry::Occupied(entry) => Ok(entry.get().clone()),
                 Entry::Vacant(entry) => {
-                    let cell_status = swl.cell(out_point, eager_load);
+                    let cell_status = swc.cell(out_point, eager_load);
                     match cell_status {
                         CellStatus::Dead => Err(OutPointError::Dead(out_point.clone())),
                         CellStatus::Unknown => Err(OutPointError::Unknown(out_point.clone())),

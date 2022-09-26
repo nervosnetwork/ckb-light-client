@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ckb_chain_spec::consensus::Consensus;
-use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_network::{
+    async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
+};
 use ckb_types::{
     core::{BlockNumber, EpochNumber, HeaderView},
     packed,
@@ -47,12 +49,20 @@ pub struct LightClientProtocol {
 impl CKBProtocolHandler for LightClientProtocol {
     async fn init(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>) {
         info!("LightClient.protocol initialized");
-        nc.set_notify(
-            constant::REFRESH_PEERS_DURATION,
-            constant::REFRESH_PEERS_TOKEN,
-        )
-        .await
-        .expect("set_notify should be ok");
+        for (duration, token) in [
+            (
+                constant::REFRESH_PEERS_DURATION,
+                constant::REFRESH_PEERS_TOKEN,
+            ),
+            (
+                constant::FETCH_HEADER_TX_DURATION,
+                constant::FETCH_HEADER_TX_TOKEN,
+            ),
+        ] {
+            nc.set_notify(duration, token)
+                .await
+                .expect("set_notify should be ok");
+        }
     }
 
     async fn connected(
@@ -114,6 +124,9 @@ impl CKBProtocolHandler for LightClientProtocol {
             constant::REFRESH_PEERS_TOKEN => {
                 self.refresh_all_peers(nc.as_ref());
             }
+            constant::FETCH_HEADER_TX_TOKEN => {
+                self.fetch_headers_txs(nc.as_ref());
+            }
             _ => unreachable!(),
         }
     }
@@ -135,6 +148,9 @@ impl LightClientProtocol {
             }
             packed::LightClientMessageUnionReader::SendBlocksProof(reader) => {
                 components::SendBlocksProofProcess::new(reader, self, peer, nc).execute()
+            }
+            packed::LightClientMessageUnionReader::SendTransactionsProof(reader) => {
+                components::SendTransactionsProofProcess::new(reader, self, peer, nc).execute()
             }
             _ => StatusCode::UnexpectedProtocolMessage.into(),
         }
@@ -372,6 +388,9 @@ impl LightClientProtocol {
     fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
         let now = faketime::unix_time_as_millis();
         for peer in self.peers().get_peers_which_have_timeout(now) {
+            self.peers().mark_fetching_headers_timeout(peer);
+            self.peers().mark_fetching_txs_timeout(peer);
+
             warn!("peer {}: reach timeout", peer);
             if let Err(err) = nc.disconnect(peer, "reach timeout") {
                 error!("disconnect peer({}) error: {}", peer, err);
@@ -382,6 +401,109 @@ impl LightClientProtocol {
             // TODO Different messages should have different timeouts.
             self.get_last_state(nc, peer);
             self.get_block_samples(nc, peer);
+        }
+    }
+
+    fn fetch_headers_txs(&mut self, nc: &dyn CKBProtocolContext) {
+        if self.peers.fetching_headers().is_empty() && self.peers.fetching_txs().is_empty() {
+            trace!("no fetching headers/transactions needed");
+            return;
+        }
+
+        let tip_header = self.storage.get_tip_header();
+        let best_peers: Vec<PeerIndex> = self
+            .peers
+            .get_peers_which_are_proved()
+            .into_iter()
+            .filter(|(_, prove_state)| {
+                prove_state.get_last_header().header().data().as_slice() == tip_header.as_slice()
+            })
+            .map(|(peer_index, _)| peer_index)
+            .collect();
+        if best_peers.is_empty() {
+            debug!("no peers found for fetch headers and transactions");
+            return;
+        }
+
+        let now = unix_time_as_millis();
+        let last_hash = tip_header.calc_header_hash();
+        for block_hashes in self
+            .peers
+            .get_headers_to_fetch()
+            .chunks(constant::GET_BLOCKS_PROOF_LIMIT)
+        {
+            if let Some(peer) = best_peers.iter().find(|peer| {
+                self.peers
+                    .get_state(peer)
+                    .map(|peer_state| peer_state.get_blocks_proof_request().is_none())
+                    .unwrap_or(false)
+            }) {
+                trace!("send block proof request to peer: {}", peer);
+                let content = packed::GetBlocksProof::new_builder()
+                    .block_hashes(block_hashes.iter().map(|hash| hash.pack()).pack())
+                    .last_hash(last_hash.clone())
+                    .build();
+                let message = packed::LightClientMessage::new_builder()
+                    .set(content.clone())
+                    .build();
+
+                if let Err(err) = nc.send_message(
+                    SupportProtocols::LightClient.protocol_id(),
+                    *peer,
+                    message.as_bytes(),
+                ) {
+                    let error_message =
+                        format!("nc.send_message LightClientMessage, error: {:?}", err);
+                    error!("{}", error_message);
+                } else {
+                    self.peers
+                        .update_blocks_proof_request(*peer, Some((content, false)));
+                }
+                for block_hash in block_hashes {
+                    if let Some(mut value) = self.peers.fetching_headers().get_mut(block_hash) {
+                        value.1 = now;
+                    }
+                }
+            }
+        }
+
+        for tx_hashes in self
+            .peers
+            .get_txs_to_fetch()
+            .chunks(constant::GET_TRANSACTIONS_PROOF_LIMIT)
+        {
+            if let Some(peer) = best_peers.iter().find(|peer| {
+                self.peers
+                    .get_state(peer)
+                    .map(|peer_state| peer_state.get_txs_proof_request().is_none())
+                    .unwrap_or(false)
+            }) {
+                trace!("send transaction proof request to peer: {}", peer);
+                let content = packed::GetTransactionsProof::new_builder()
+                    .tx_hashes(tx_hashes.iter().map(|hash| hash.pack()).pack())
+                    .last_hash(last_hash.clone())
+                    .build();
+                let message = packed::LightClientMessage::new_builder()
+                    .set(content.clone())
+                    .build();
+
+                if let Err(err) = nc.send_message(
+                    SupportProtocols::LightClient.protocol_id(),
+                    *peer,
+                    message.as_bytes(),
+                ) {
+                    let error_message =
+                        format!("nc.send_message LightClientMessage, error: {:?}", err);
+                    error!("{}", error_message);
+                } else {
+                    self.peers.update_txs_proof_request(*peer, Some(content));
+                }
+                for tx_hash in tx_hashes {
+                    if let Some(mut value) = self.peers.fetching_txs().get_mut(tx_hash) {
+                        value.1 = now;
+                    }
+                }
+            }
         }
     }
 

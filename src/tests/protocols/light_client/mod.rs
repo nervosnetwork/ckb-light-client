@@ -19,6 +19,7 @@ use crate::{
 
 mod send_last_state;
 mod send_last_state_proof;
+mod send_transactions_proof;
 
 #[tokio::test]
 async fn malformed_message() {

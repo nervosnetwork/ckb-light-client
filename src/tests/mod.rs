@@ -7,3 +7,5 @@ pub(crate) mod utils;
 mod protocols;
 mod service;
 mod verify;
+
+pub const ALWAYS_SUCCESS_BIN: &[u8] = include_bytes!("specs/cells/always_success");

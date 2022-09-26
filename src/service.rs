@@ -6,6 +6,7 @@ use ckb_jsonrpc_types::{
 use ckb_network::{extract_peer_id, NetworkController};
 use ckb_traits::HeaderProvider;
 use ckb_types::{core, packed, prelude::*, H256};
+use faketime::unix_time_as_millis;
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
@@ -23,7 +24,7 @@ use std::{
 
 use crate::{
     protocols::{Peers, PendingTxs},
-    storage::{self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithLastHeaders},
+    storage::{self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithChainData},
     verify::verify_tx,
 };
 
@@ -74,12 +75,47 @@ pub trait ChainRpc {
 
     #[rpc(name = "get_transaction")]
     fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>>;
+
+    /// Fetch a header from remote node.
+    ///
+    /// Returns: FetchStatus<HeaderView>
+    #[rpc(name = "fetch_header")]
+    fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>>;
+
+    /// Fetch a transaction from remote node.
+    ///
+    /// Returns: FetchStatus<TransactionWithHeader>
+    #[rpc(name = "fetch_transaction")]
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>>;
+
+    /// Remove fetched headers. (if `block_hashes` is None remove all headers)
+    ///
+    /// Returns:
+    ///   * The removed block hashes
+    #[rpc(name = "remove_headers")]
+    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
+
+    /// Remove fetched transactions. (if `tx_hashes` is None remove all transactions)
+    ///
+    /// Returns:
+    ///   * The removed transaction hashes
+    #[rpc(name = "remove_transactions")]
+    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
 }
 
 #[rpc(server)]
 pub trait NetRpc {
     #[rpc(name = "get_peers")]
     fn get_peers(&self) -> Result<Vec<RemoteNode>>;
+}
+
+#[derive(Deserialize, Serialize, Eq, PartialEq, Debug)]
+#[serde(tag = "status")]
+#[serde(rename_all = "lowercase")]
+pub enum FetchStatus<T> {
+    Added { timestamp: u64 },
+    Fetching { first_sent: u64 },
+    Fetched { data: T },
 }
 
 #[derive(Deserialize, Serialize)]
@@ -218,7 +254,7 @@ pub struct Pagination<T> {
     pub(crate) last_cursor: JsonBytes,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Debug, Eq, PartialEq)]
 pub struct TransactionWithHeader {
     pub(crate) transaction: TransactionView,
     pub(crate) header: HeaderView,
@@ -230,12 +266,12 @@ pub struct BlockFilterRpcImpl {
 
 pub struct TransactionRpcImpl {
     pending_txs: Arc<RwLock<PendingTxs>>,
-    swl: StorageWithLastHeaders,
+    swc: StorageWithChainData,
     consensus: Consensus,
 }
 
 pub struct ChainRpcImpl {
-    pub(crate) swl: StorageWithLastHeaders,
+    pub(crate) swc: StorageWithChainData,
 }
 
 pub struct NetRpcImpl {
@@ -928,7 +964,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let cycles = verify_tx(tx.clone(), &self.swl, &self.consensus)
+        let cycles = verify_tx(tx.clone(), &self.swc, &self.consensus)
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
             .write()
@@ -941,24 +977,108 @@ impl TransactionRpc for TransactionRpcImpl {
 
 impl ChainRpc for ChainRpcImpl {
     fn get_tip_header(&self) -> Result<HeaderView> {
-        Ok(self.swl.storage().get_tip_header().into_view().into())
+        Ok(self.swc.storage().get_tip_header().into_view().into())
     }
 
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
-        Ok(self.swl.get_header(&block_hash.pack()).map(Into::into))
+        Ok(self.swc.get_header(&block_hash.pack()).map(Into::into))
     }
 
     fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>> {
         let transaction_with_header = self
-            .swl
+            .swc
             .storage()
             .get_transaction_with_header(&tx_hash.pack())
+            .or_else(|| {
+                self.swc.fetched_txs().get(&tx_hash).map(|pair| {
+                    let (tx_view, header_view) = pair.value();
+                    (tx_view.data(), header_view.data())
+                })
+            })
             .map(|(tx, header)| TransactionWithHeader {
                 transaction: tx.into_view().into(),
                 header: header.into_view().into(),
             });
 
         Ok(transaction_with_header)
+    }
+
+    fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>> {
+        if let Some(value) = self.get_header(block_hash.clone())? {
+            return Ok(FetchStatus::Fetched { data: value });
+        }
+        let now = unix_time_as_millis();
+        if let Some(item) = self.swc.fetching_headers().get(&block_hash) {
+            let (added_ts, first_sent, _timeout) = item.value();
+            if *first_sent > 0 {
+                return Ok(FetchStatus::Fetching {
+                    first_sent: *first_sent,
+                });
+            } else {
+                return Ok(FetchStatus::Added {
+                    timestamp: *added_ts,
+                });
+            }
+        } else {
+            self.swc
+                .fetching_headers()
+                .insert(block_hash, (now, 0, false));
+        }
+        Ok(FetchStatus::Added { timestamp: now })
+    }
+
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>> {
+        if let Some(value) = self.get_transaction(tx_hash.clone())? {
+            return Ok(FetchStatus::Fetched { data: value });
+        }
+        let now = unix_time_as_millis();
+        if let Some(item) = self.swc.fetching_txs().get(&tx_hash) {
+            let (added_ts, first_sent, _timeout) = item.value();
+            if *first_sent > 0 {
+                return Ok(FetchStatus::Fetching {
+                    first_sent: *first_sent,
+                });
+            } else {
+                return Ok(FetchStatus::Added {
+                    timestamp: *added_ts,
+                });
+            }
+        } else {
+            self.swc.fetching_txs().insert(tx_hash, (now, 0, false));
+        }
+        Ok(FetchStatus::Added { timestamp: now })
+    }
+
+    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
+        let mut removed_block_hashes = Vec::new();
+        self.swc.fetched_headers().retain(|k, _v| {
+            let keep = if let Some(hashes) = block_hashes.as_ref() {
+                !hashes.contains(k)
+            } else {
+                false
+            };
+            if !keep {
+                removed_block_hashes.push(k.clone());
+            }
+            keep
+        });
+        Ok(removed_block_hashes)
+    }
+
+    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
+        let mut removed_tx_hashes = Vec::new();
+        self.swc.fetched_txs().retain(|k, _v| {
+            let keep = if let Some(hashes) = tx_hashes.as_ref() {
+                !hashes.contains(k)
+            } else {
+                false
+            };
+            if !keep {
+                removed_tx_hashes.push(k.clone());
+            }
+            keep
+        });
+        Ok(removed_tx_hashes)
     }
 }
 
@@ -977,7 +1097,6 @@ impl Service {
         &self,
         network_controller: NetworkController,
         storage: Storage,
-        last_headers: Arc<RwLock<Vec<core::HeaderView>>>,
         peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
         consensus: Consensus,
@@ -986,11 +1105,11 @@ impl Service {
         let block_filter_rpc_impl = BlockFilterRpcImpl {
             storage: storage.clone(),
         };
-        let swl = StorageWithLastHeaders::new(storage, last_headers);
-        let chain_rpc_impl = ChainRpcImpl { swl: swl.clone() };
+        let swc = StorageWithChainData::new(storage, Arc::clone(&peers));
+        let chain_rpc_impl = ChainRpcImpl { swc: swc.clone() };
         let transaction_rpc_impl = TransactionRpcImpl {
             pending_txs,
-            swl,
+            swc,
             consensus,
         };
         let net_rpc_impl = NetRpcImpl {

@@ -1,24 +1,22 @@
-use std::{
-    collections::HashMap,
-    path::Path,
-    sync::{Arc, RwLock},
-};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
     bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber, HeaderView, TransactionInfo,
+        BlockNumber, HeaderView, TransactionInfo, TransactionView,
     },
     packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
-    U256,
+    H256, U256,
 };
 
+use dashmap::DashMap;
 use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 
 use crate::error::Result;
+use crate::protocols::Peers;
 
 const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
@@ -590,38 +588,57 @@ impl HeaderProvider for Storage {
 }
 
 #[derive(Clone)]
-pub struct StorageWithLastHeaders {
+pub struct StorageWithChainData {
     storage: Storage,
-    last_headers: Arc<RwLock<Vec<HeaderView>>>,
+    peers: Arc<Peers>,
 }
 
-impl StorageWithLastHeaders {
-    pub fn new(storage: Storage, last_headers: Arc<RwLock<Vec<HeaderView>>>) -> Self {
-        Self {
-            storage,
-            last_headers,
-        }
+impl StorageWithChainData {
+    pub fn new(storage: Storage, peers: Arc<Peers>) -> Self {
+        Self { storage, peers }
     }
 
     pub fn storage(&self) -> &Storage {
         &self.storage
     }
-}
 
-impl HeaderProvider for StorageWithLastHeaders {
-    fn get_header(&self, hash: &packed::Byte32) -> Option<HeaderView> {
-        self.storage.get_header(hash).or_else(|| {
-            self.last_headers
-                .read()
-                .expect("poisoned")
-                .iter()
-                .find(|header| header.hash().eq(hash))
-                .cloned()
-        })
+    pub(crate) fn fetched_headers(&self) -> &DashMap<H256, HeaderView> {
+        self.peers.fetched_headers()
+    }
+    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, (u64, u64, bool)> {
+        self.peers.fetching_headers()
+    }
+    pub(crate) fn fetched_txs(&self) -> &DashMap<H256, (TransactionView, HeaderView)> {
+        self.peers.fetched_txs()
+    }
+    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, (u64, u64, bool)> {
+        self.peers.fetching_txs()
     }
 }
 
-impl CellDataProvider for StorageWithLastHeaders {
+impl HeaderProvider for StorageWithChainData {
+    fn get_header(&self, hash: &packed::Byte32) -> Option<HeaderView> {
+        self.storage
+            .get_header(hash)
+            .or_else(|| {
+                self.peers
+                    .last_headers()
+                    .read()
+                    .expect("poisoned")
+                    .iter()
+                    .find(|header| header.hash().eq(hash))
+                    .cloned()
+            })
+            .or_else(|| {
+                self.peers
+                    .fetched_headers()
+                    .get(&hash.unpack())
+                    .map(|pair| pair.value().clone())
+            })
+    }
+}
+
+impl CellDataProvider for StorageWithChainData {
     fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
         self.storage.get_cell_data(out_point)
     }
@@ -631,7 +648,7 @@ impl CellDataProvider for StorageWithLastHeaders {
     }
 }
 
-impl CellProvider for StorageWithLastHeaders {
+impl CellProvider for StorageWithChainData {
     fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
         self.storage.cell(out_point, eager_load)
     }

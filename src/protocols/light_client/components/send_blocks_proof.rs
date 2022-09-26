@@ -33,7 +33,7 @@ impl<'a> SendBlocksProofProcess<'a> {
     pub(crate) fn execute(self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
-        let original_request = if let Some(original_request) = peer_state.get_block_proof_request()
+        let original_request = if let Some(original_request) = peer_state.get_blocks_proof_request()
         {
             original_request
         } else {
@@ -48,7 +48,10 @@ impl<'a> SendBlocksProofProcess<'a> {
             return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
             self.protocol
                 .peers()
-                .update_block_proof_request(self.peer, None);
+                .update_blocks_proof_request(self.peer, None);
+            self.protocol
+                .peers()
+                .mark_fetching_headers_timeout(self.peer);
             return Status::ok();
         }
 
@@ -112,9 +115,12 @@ impl<'a> SendBlocksProofProcess<'a> {
             }
         }
 
+        for header in headers {
+            self.protocol.peers().add_header(header);
+        }
         self.protocol
             .peers()
-            .update_block_proof_request(self.peer, None);
+            .update_blocks_proof_request(self.peer, None);
         Status::ok()
     }
 }
