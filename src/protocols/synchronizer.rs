@@ -77,6 +77,9 @@ impl CKBProtocolHandler for SyncProtocol {
                         .expect("get matched blocks from storage");
                     let matched_blocks: HashSet<_> =
                         matched_blocks.into_iter().map(|(hash, _)| hash).collect();
+
+                    // NOTE must remove matched blocks in storage first
+                    self.storage.remove_matched_blocks();
                     let blocks = self.peers.clear_matched_blocks();
                     assert_eq!(blocks.len(), matched_blocks.len());
                     info!(
@@ -93,7 +96,6 @@ impl CKBProtocolHandler for SyncProtocol {
                     }
                     let filtered_block_number = start_number - 1 + blocks_count;
                     self.storage.update_block_number(filtered_block_number);
-                    self.storage.remove_matched_blocks();
 
                     // send next GetBlockFilters message
                     let content = packed::GetBlockFilters::new_builder()

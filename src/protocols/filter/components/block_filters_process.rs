@@ -109,6 +109,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 );
                 self.filter
                     .prove_or_download_matched_blocks(self.peer, self.nc);
+                // NOTE must insert matched blocks in storage later
                 self.filter.pending_peer.storage.update_matched_blocks(
                     start_number,
                     actual_blocks_count as u64,
