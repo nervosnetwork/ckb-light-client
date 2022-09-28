@@ -2,10 +2,7 @@
 
 [![License]](#license)
 [![GitHub Actions]](https://github.com/nervosnetwork/ckb-light-client/actions)
-[![Codecov]](https://codecov.io/gh/nervosnetwork/ckb-light-client/branch/develop/graph/badge.svg)
-
-> :warning: **WARNING** This repository is unavailable, since it's still in
-> the proof-of-concept stage.
+[![Codecov]](https://codecov.io/gh/nervosnetwork/ckb-light-client)
 
 A CKB light client based on [FlyClient].
 

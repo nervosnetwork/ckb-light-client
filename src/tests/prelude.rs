@@ -197,6 +197,30 @@ pub(crate) trait RunningChainExt: ChainExt {
         ProveRequest::new(last_state, content)
     }
 
+    fn build_blocks_proof_content(
+        &self,
+        last_num: BlockNumber,
+        block_nums: &[BlockNumber],
+    ) -> packed::GetBlocksProof {
+        let snapshot = self.shared().snapshot();
+        let last_header = snapshot
+            .get_header_by_number(last_num)
+            .expect("block stored");
+        let block_hashes = block_nums
+            .iter()
+            .map(|n| {
+                snapshot
+                    .get_header_by_number(*n)
+                    .expect("block stored")
+                    .hash()
+            })
+            .collect::<Vec<_>>();
+        packed::GetBlocksProof::new_builder()
+            .last_hash(last_header.hash())
+            .block_hashes(block_hashes.pack())
+            .build()
+    }
+
     fn build_proof_by_numbers(
         &self,
         last_num: BlockNumber,

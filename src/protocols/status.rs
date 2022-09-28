@@ -31,7 +31,7 @@ pub enum StatusCode {
     /// Receives a response but the peer isn't waiting for a response.
     PeerIsNotOnProcess = 421,
     /// The response is not match our request.
-    UnexpectedRequest = 422,
+    UnexpectedResponse = 422,
 
     // Common errors for all verifications.
     /// Failed to verify chain root.
