@@ -5,7 +5,7 @@ use ckb_chain::chain::{ChainController, ChainService};
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_jsonrpc_types::ScriptHashType;
 use ckb_launcher::SharedBuilder;
-use ckb_network::{DefaultExitHandler, NetworkController, NetworkService, NetworkState};
+use ckb_network::{DefaultExitHandler, Flags, NetworkController, NetworkService, NetworkState};
 use ckb_resource::Resource;
 use ckb_shared::Shared;
 use ckb_types::h256;
@@ -135,8 +135,11 @@ fn dummy_network(shared: &Shared) -> NetworkController {
         network_state,
         vec![],
         vec![],
-        shared.consensus().identify_name(),
-        "test".to_string(),
+        (
+            shared.consensus().identify_name(),
+            "test".to_string(),
+            Flags::all(),
+        ),
         DefaultExitHandler::default(),
     )
     .start(shared.async_handle())
