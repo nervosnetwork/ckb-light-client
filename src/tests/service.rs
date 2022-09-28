@@ -15,7 +15,6 @@ use ckb_types::{
     H256,
 };
 use dashmap::DashMap;
-use tempfile;
 
 use crate::{
     protocols::Peers,

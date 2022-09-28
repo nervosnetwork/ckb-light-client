@@ -80,7 +80,6 @@ async fn last_state_is_changed() {
     let snapshot = chain.shared().snapshot();
 
     let block_numbers = vec![3, 5, 8];
-    let fetch_tip = false;
 
     // Setup the test fixture.
     {
@@ -122,7 +121,7 @@ async fn last_state_is_changed() {
         protocol.commit_prove_state(peer_index, prove_state);
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some((content, fetch_tip)));
+            .update_blocks_proof_request(peer_index, Some(content));
     }
 
     num += 1;
@@ -173,7 +172,6 @@ async fn unexpected_response() {
 
     let block_numbers = vec![3, 5, 8, 11, 16, 18];
     let bad_block_numbers = vec![3, 5, 7, 11, 16, 18];
-    let fetch_tip = true;
 
     // Setup the test fixture.
     {
@@ -215,7 +213,7 @@ async fn unexpected_response() {
         protocol.commit_prove_state(peer_index, prove_state);
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some((content, fetch_tip)));
+            .update_blocks_proof_request(peer_index, Some(content));
     }
 
     // Run the test.
@@ -256,7 +254,8 @@ async fn unexpected_response() {
     }
 }
 
-async fn valid_proof(fetch_tip: bool) {
+#[tokio::test(flavor = "multi_thread")]
+async fn valid_proof() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -315,7 +314,7 @@ async fn valid_proof(fetch_tip: bool) {
         protocol.commit_prove_state(peer_index, prove_state);
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some((content, fetch_tip)));
+            .update_blocks_proof_request(peer_index, Some(content));
     }
 
     // Run the test.
@@ -328,16 +327,7 @@ async fn valid_proof(fetch_tip: bool) {
             .map(|n| *n as BlockNumber)
             .map(|n| snapshot.get_header_by_number(n).expect("block stored"))
             .collect::<Vec<_>>();
-        let block_hashes = headers
-            .iter()
-            .map(|h| h.hash())
-            .chain(if fetch_tip {
-                Some(last_header.header().calc_header_hash())
-            } else {
-                None
-            })
-            .collect::<Vec<_>>()
-            .pack();
+        let block_hashes = headers.iter().map(|h| h.hash()).collect::<Vec<_>>().pack();
         let data = {
             let headers = headers.iter().map(|h| h.data()).collect::<Vec<_>>();
             let last_number: BlockNumber = last_header.header().raw().number().unpack();
@@ -378,16 +368,6 @@ async fn valid_proof(fetch_tip: bool) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn valid_proof_with_fetch_tip() {
-    valid_proof(true).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn valid_proof_without_fetch_tip() {
-    valid_proof(false).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn get_blocks_with_chunks() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
@@ -408,7 +388,6 @@ async fn get_blocks_with_chunks() {
     let snapshot = chain.shared().snapshot();
 
     let block_numbers = vec![3, 5, 8, 11, 13, 16, 18];
-    let fetch_tip = true;
 
     // Setup the test fixture.
     {
@@ -450,7 +429,7 @@ async fn get_blocks_with_chunks() {
         protocol.commit_prove_state(peer_index, prove_state);
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some((content, fetch_tip)));
+            .update_blocks_proof_request(peer_index, Some(content));
     }
 
     // Run the test.
@@ -463,15 +442,7 @@ async fn get_blocks_with_chunks() {
             .map(|n| *n as BlockNumber)
             .map(|n| snapshot.get_header_by_number(n).expect("block stored"))
             .collect::<Vec<_>>();
-        let block_hashes = headers
-            .iter()
-            .map(|h| h.hash())
-            .chain(if fetch_tip {
-                Some(last_header.header().calc_header_hash())
-            } else {
-                None
-            })
-            .collect::<Vec<_>>();
+        let block_hashes = headers.iter().map(|h| h.hash()).collect::<Vec<_>>();
         let data = {
             let headers = headers.iter().map(|h| h.data()).collect::<Vec<_>>();
             let last_number: BlockNumber = last_header.header().raw().number().unpack();
@@ -517,7 +488,7 @@ async fn get_blocks_with_chunks() {
                 if idx < msg_count - 1 {
                     assert_eq!(hashes.len(), chunk_size);
                 } else {
-                    assert_eq!(hashes.len(), block_numbers.len() / chunk_size);
+                    assert_eq!(hashes.len(), block_numbers.len() % chunk_size);
                 }
                 hashes
             })
@@ -593,7 +564,7 @@ async fn invalid_proof() {
         protocol.commit_prove_state(peer_index, prove_state);
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some((content, false)));
+            .update_blocks_proof_request(peer_index, Some(content));
     }
 
     // Run the test.

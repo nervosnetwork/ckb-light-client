@@ -1,6 +1,6 @@
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
-use log::error;
+use log::{debug, error, info};
 
 use super::{
     super::{LightClientProtocol, Status, StatusCode},
@@ -86,30 +86,42 @@ impl<'a> SendBlocksProofProcess<'a> {
 
         // Get blocks
         {
-            let block_hashes: Vec<packed::Byte32> = headers
-                .iter()
-                .chain(if original_request.if_fetch_tip() {
-                    Some(last_header.header())
-                } else {
-                    None
-                })
-                .map(|header| header.hash())
-                .collect();
+            let block_hashes: Vec<packed::Byte32> =
+                headers.iter().map(|header| header.hash()).collect();
+            self.protocol
+                .peers
+                .mark_matched_blocks_proved(&block_hashes);
 
-            for hashes in block_hashes.chunks(self.protocol.init_blocks_in_transit_per_peer()) {
-                let content = packed::GetBlocks::new_builder()
-                    .block_hashes(hashes.to_vec().pack())
-                    .build();
-                let message = packed::SyncMessage::new_builder().set(content).build();
+            if peer_state.get_blocks_request().is_some() {
+                info!("peer {} has an inflight GetBlocks request", self.peer);
+            } else {
+                self.protocol
+                    .peers
+                    .update_blocks_request(self.peer, Some(block_hashes.clone()));
 
-                if let Err(err) = self.nc.send_message(
-                    SupportProtocols::Sync.protocol_id(),
+                debug!(
+                    "send get blocks request to peer: {}, matched_count: {}",
                     self.peer,
-                    message.as_bytes(),
-                ) {
-                    let error_message = format!("nc.send_message SyncMessage, error: {:?}", err);
-                    error!("{}", error_message);
-                    return StatusCode::Network.with_context(error_message);
+                    block_hashes.len()
+                );
+                for hashes in block_hashes.chunks(self.protocol.init_blocks_in_transit_per_peer()) {
+                    let content = packed::GetBlocks::new_builder()
+                        .block_hashes(hashes.to_vec().pack())
+                        .build();
+                    let message = packed::SyncMessage::new_builder()
+                        .set(content)
+                        .build()
+                        .as_bytes();
+                    if let Err(err) = self.nc.send_message(
+                        SupportProtocols::Sync.protocol_id(),
+                        self.peer,
+                        message,
+                    ) {
+                        let error_message =
+                            format!("nc.send_message SyncMessage, error: {:?}", err);
+                        error!("{}", error_message);
+                        return StatusCode::Network.with_context(error_message);
+                    }
                 }
             }
         }

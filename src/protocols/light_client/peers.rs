@@ -8,7 +8,7 @@ use ckb_types::{
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use crate::protocols::MESSAGE_TIMEOUT;
@@ -22,16 +22,25 @@ pub struct Peers {
     //   The key is the block hash
     //   The value is fetched header
     fetched_headers: DashMap<H256, HeaderView>,
-    // The headers are fetching, the value is the first fetch timestamp and
-    // whether the request is timeout
+    // The headers are fetching, the value is:
+    //   * the added timestamp
+    //   * the first fetch timestamp
+    //   * whether the request is timeout
     fetching_headers: DashMap<H256, (u64, u64, bool)>,
     // Fetch transactions.
     //   The key is the transaction hash
     //   The value is the fetched transaction and corresponding header
     fetched_txs: DashMap<H256, (TransactionView, HeaderView)>,
-    // The transactions are fetching, the value is the first fetch timestamp and
-    // whether the request is timeout
+    // The transactions are fetching, the value is:
+    //   * the added timestamp
+    //   * the first fetch timestamp
+    //   * whether the request is timeout
     fetching_txs: DashMap<H256, (u64, u64, bool)>,
+
+    // The matched block filters to download, the key is the block hash, the value is:
+    //   * if the block is proved
+    //   * the downloaded block
+    matched_blocks: DashMap<H256, (bool, Option<packed::Block>)>,
 }
 
 #[derive(Default, Clone)]
@@ -53,6 +62,7 @@ pub(crate) struct PeerState {
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
     blocks_proof_request: Option<BlocksProofRequest>,
+    blocks_request: Option<BlocksRequest>,
     txs_proof_request: Option<TransactionsProofRequest>,
 }
 
@@ -73,8 +83,13 @@ pub(crate) struct ProveState {
 #[derive(Clone)]
 pub(crate) struct BlocksProofRequest {
     content: packed::GetBlocksProof,
-    // A flag indicates that corresponding tip block should be fetched or not.
-    fetch_tip: bool,
+    when_sent: u64,
+}
+
+#[derive(Clone)]
+pub(crate) struct BlocksRequest {
+    // the value indicate if the block is received
+    hashes: HashMap<H256, bool>,
     when_sent: u64,
 }
 
@@ -180,12 +195,8 @@ impl ProveState {
 }
 
 impl BlocksProofRequest {
-    pub(crate) fn new(content: packed::GetBlocksProof, fetch_tip: bool, when_sent: u64) -> Self {
-        Self {
-            content,
-            fetch_tip,
-            when_sent,
-        }
+    pub(crate) fn new(content: packed::GetBlocksProof, when_sent: u64) -> Self {
+        Self { content, when_sent }
     }
 
     pub(crate) fn block_hashes(&self) -> Vec<H256> {
@@ -207,9 +218,19 @@ impl BlocksProofRequest {
             .build();
         self.content.as_slice() == content.as_slice()
     }
+}
 
-    pub(crate) fn if_fetch_tip(&self) -> bool {
-        self.fetch_tip
+impl BlocksRequest {
+    fn new(hashes: Vec<packed::Byte32>, when_sent: u64) -> Self {
+        let hashes = hashes
+            .into_iter()
+            .map(|hash| (hash.unpack(), false))
+            .collect::<HashMap<H256, _>>();
+        Self { hashes, when_sent }
+    }
+
+    pub(crate) fn finished(&self) -> bool {
+        self.hashes.values().all(|received| *received)
     }
 }
 
@@ -257,6 +278,9 @@ impl PeerState {
     pub(crate) fn get_blocks_proof_request(&self) -> Option<&BlocksProofRequest> {
         self.blocks_proof_request.as_ref()
     }
+    pub(crate) fn get_blocks_request(&self) -> Option<&BlocksRequest> {
+        self.blocks_request.as_ref()
+    }
     pub(crate) fn get_txs_proof_request(&self) -> Option<&TransactionsProofRequest> {
         self.txs_proof_request.as_ref()
     }
@@ -276,8 +300,25 @@ impl PeerState {
     fn update_blocks_proof_request(&mut self, request: Option<BlocksProofRequest>) {
         self.blocks_proof_request = request;
     }
+    fn update_blocks_request(&mut self, request: Option<BlocksRequest>) {
+        self.blocks_request = request;
+    }
     fn update_txs_proof_request(&mut self, request: Option<TransactionsProofRequest>) {
         self.txs_proof_request = request;
+    }
+
+    fn add_block(&mut self, block_hash: &packed::Byte32) {
+        let finished = if let Some(request) = self.blocks_request.as_mut() {
+            if let Some(received) = request.hashes.get_mut(&block_hash.unpack()) {
+                *received = true;
+            }
+            request.finished()
+        } else {
+            false
+        };
+        if finished {
+            self.update_blocks_request(None);
+        }
     }
 }
 
@@ -307,6 +348,7 @@ impl Peers {
             fetching_headers,
             fetched_txs,
             fetching_txs,
+            matched_blocks: Default::default(),
         }
     }
 
@@ -387,6 +429,21 @@ impl Peers {
         }
     }
 
+    pub(crate) fn add_block(&self, block: packed::Block) -> Option<bool> {
+        let block_hash = block.header().calc_header_hash();
+        for mut pair in self.inner.iter_mut() {
+            pair.value_mut().state.add_block(&block_hash);
+        }
+        self.matched_blocks
+            .get_mut(&block_hash.unpack())
+            .map(|mut pair| {
+                if pair.value().0 {
+                    pair.value_mut().1 = Some(block);
+                }
+                pair.value().0
+            })
+    }
+
     pub(crate) fn add_header(&self, header: HeaderView) {
         let block_hash = header.hash().unpack();
         if self.fetching_headers.remove(&block_hash).is_some() {
@@ -449,19 +506,112 @@ impl Peers {
         }
     }
 
-    pub(crate) fn update_blocks_proof_request(
-        &self,
-        index: PeerIndex,
-        request: Option<(packed::GetBlocksProof, bool)>,
-    ) {
-        if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state
-                .update_blocks_proof_request(request.map(|(content, fetch_tip)| {
-                    BlocksProofRequest::new(content, fetch_tip, unix_time_as_millis())
-                }));
+    pub(crate) fn add_matched_blocks(&self, block_hashes: Vec<(packed::Byte32, bool)>) {
+        for (block_hash, proved) in block_hashes {
+            self.matched_blocks
+                .insert(block_hash.unpack(), (proved, None));
+        }
+    }
+    pub(crate) fn matched_blocks_is_empty(&self) -> bool {
+        self.matched_blocks.is_empty()
+    }
+    // mark block as proved to matched blocks
+    pub(crate) fn mark_matched_blocks_proved(&self, block_hashes: &[packed::Byte32]) {
+        for block_hash in block_hashes {
+            if let Some(mut pair) = self.matched_blocks.get_mut(&block_hash.unpack()) {
+                pair.value_mut().0 = true;
+            }
         }
     }
 
+    // get matched blocks which not yet downloaded and not in any BlocksRequest
+    pub(crate) fn get_matched_blocks_to_prove(&self, limit: usize) -> Vec<packed::Byte32> {
+        let mut proof_requested_hashes = HashSet::new();
+        for pair in self.inner.iter() {
+            let peer_state = &pair.value().state;
+            if let Some(req) = peer_state.get_blocks_proof_request() {
+                for hash in req.block_hashes() {
+                    proof_requested_hashes.insert(hash);
+                }
+            }
+        }
+        self.matched_blocks
+            .iter()
+            .filter_map(|pair| {
+                if !proof_requested_hashes.contains(pair.key()) && !pair.value().0 {
+                    Some(pair.key().pack())
+                } else {
+                    None
+                }
+            })
+            .take(limit)
+            .collect()
+    }
+    // get matched blocks which not yet downloaded and not in any BlocksRequest
+    pub(crate) fn get_matched_blocks_to_download(&self, limit: usize) -> Vec<packed::Byte32> {
+        let mut block_requested_hashes = HashSet::new();
+        for pair in self.inner.iter() {
+            let peer_state = &pair.value().state;
+            if let Some(req) = peer_state.get_blocks_request() {
+                for hash in req.hashes.keys() {
+                    block_requested_hashes.insert(hash.clone());
+                }
+            }
+        }
+        self.matched_blocks
+            .iter()
+            .filter_map(|pair| {
+                let (proved, block_opt) = pair.value();
+                if !block_requested_hashes.contains(pair.key()) && *proved && block_opt.is_none() {
+                    Some(pair.key().pack())
+                } else {
+                    None
+                }
+            })
+            .take(limit)
+            .collect()
+    }
+
+    pub(crate) fn all_matched_blocks_downloaded(&self) -> bool {
+        self.matched_blocks
+            .iter()
+            .all(|pair| pair.value().1.is_some())
+    }
+    // remove all matched blocks info and return the downloaded blocks (sorted by block number)
+    pub(crate) fn clear_matched_blocks(&self) -> Vec<packed::Block> {
+        let mut blocks = Vec::with_capacity(self.matched_blocks.len());
+        for mut pair in self.matched_blocks.iter_mut() {
+            if let Some(block) = pair.value_mut().1.take() {
+                blocks.push(block);
+            }
+        }
+        self.matched_blocks.clear();
+        blocks.sort_by_key(|b| Unpack::<u64>::unpack(&b.header().raw().number()));
+        blocks
+    }
+
+    pub(crate) fn update_blocks_proof_request(
+        &self,
+        index: PeerIndex,
+        request: Option<packed::GetBlocksProof>,
+    ) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state.update_blocks_proof_request(
+                request.map(|content| BlocksProofRequest::new(content, unix_time_as_millis())),
+            );
+        }
+    }
+    pub(crate) fn update_blocks_request(
+        &self,
+        index: PeerIndex,
+        hashes: Option<Vec<packed::Byte32>>,
+    ) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state.update_blocks_request(
+                hashes.map(|hashes| BlocksRequest::new(hashes, unix_time_as_millis())),
+            );
+        }
+    }
     pub(crate) fn update_txs_proof_request(
         &self,
         index: PeerIndex,
@@ -501,6 +651,15 @@ impl Peers {
                         } else {
                             None
                         }
+                    })
+                    .or_else(|| {
+                        peer_state.get_blocks_request().and_then(|req| {
+                            if now > req.when_sent + MESSAGE_TIMEOUT {
+                                Some(*item.key())
+                            } else {
+                                None
+                            }
+                        })
                     })
                     .or_else(|| {
                         peer_state.get_txs_proof_request().and_then(|req| {

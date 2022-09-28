@@ -26,3 +26,8 @@ pub const BAD_MESSAGE_BAN_TIME: Duration = Duration::from_secs(5 * 60);
 pub const MESSAGE_TIMEOUT: u64 = 60 * 1000;
 
 pub const LAST_N_BLOCKS: BlockNumber = 100;
+
+// Copy from ckb/util/light-client-protocol-server
+pub const GET_BLOCKS_PROOF_LIMIT: usize = 1000;
+// Copy from ckb/util/light-client-protocol-server
+pub const GET_TRANSACTIONS_PROOF_LIMIT: usize = 1000;

@@ -21,6 +21,7 @@ use crate::protocols::Peers;
 const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
+const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";
 
 #[derive(Clone)]
 pub struct Storage {
@@ -231,6 +232,61 @@ impl Storage {
                 (total_difficulty, header)
             })
             .expect("tip header should be inited")
+    }
+
+    /// when all blocks downloaded and inserted into storage call this function.
+    pub fn remove_matched_blocks(&self) {
+        let key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
+        self.db.delete(&key).expect("delete matched blocks");
+    }
+
+    /// the matched blocks must not empty
+    pub fn update_matched_blocks(
+        &self,
+        start_number: u64,
+        blocks_count: u64,
+        // (block-hash, proved)
+        matched_blocks: Vec<(Byte32, bool)>,
+    ) {
+        assert!(!matched_blocks.is_empty());
+        let key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
+        let mut value = start_number.to_le_bytes().to_vec();
+        value.extend(&blocks_count.to_le_bytes());
+        for (block_hash, proved) in matched_blocks {
+            value.extend(block_hash.as_slice());
+            let proved_value: u8 = if proved { 1 } else { 0 };
+            value.push(proved_value);
+        }
+        self.db
+            .put(key, &value)
+            .expect("db put matched blocks should be ok");
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+        let key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
+        self.db
+            .get_pinned(&key)
+            .expect("db get last state should be ok")
+            .map(|data| {
+                let mut u64_bytes = [0u8; 8];
+                u64_bytes.copy_from_slice(&data[0..8]);
+                let start_number = u64::from_le_bytes(u64_bytes);
+                u64_bytes.copy_from_slice(&data[8..16]);
+                let blocks_count = u64::from_le_bytes(u64_bytes);
+                assert!((data.len() - 16) % 33 == 0);
+                let matched_len = (data.len() - 16) / 33;
+                let matched_blocks = (0..matched_len)
+                    .map(|i| {
+                        let offset = 16 + i * 33;
+                        let part = &data[offset..offset + 32];
+                        let hash = packed::Byte32Reader::from_slice_should_be_ok(part).to_entity();
+                        let proved = data[offset + 32] == 1;
+                        (hash, proved)
+                    })
+                    .collect::<Vec<_>>();
+                (start_number, blocks_count, matched_blocks)
+            })
     }
 
     pub fn get_tip_header(&self) -> Header {

@@ -1,18 +1,23 @@
-use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_network::{
+    async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
+};
 use ckb_types::{packed, prelude::*};
-use log::{info, trace, warn};
+use log::{error, info, trace, warn};
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::BAD_MESSAGE_BAN_TIME;
+use crate::protocols::Peers;
 use crate::storage::Storage;
 
 pub(crate) struct SyncProtocol {
     storage: Storage,
+    peers: Arc<Peers>,
 }
 
 impl SyncProtocol {
-    pub fn new(storage: Storage) -> Self {
-        Self { storage }
+    pub fn new(storage: Storage, peers: Arc<Peers>) -> Self {
+        Self { storage, peers }
     }
 }
 
@@ -62,7 +67,50 @@ impl CKBProtocolHandler for SyncProtocol {
         );
         match message {
             packed::SyncMessageUnionReader::SendBlock(reader) => {
-                self.storage.filter_block(reader.to_entity().block());
+                let new_block = reader.to_entity().block();
+                self.peers.add_block(new_block);
+
+                if self.peers.all_matched_blocks_downloaded() {
+                    let (start_number, blocks_count, matched_blocks) = self
+                        .storage
+                        .get_matched_blocks()
+                        .expect("get matched blocks from storage");
+                    let matched_blocks: HashSet<_> =
+                        matched_blocks.into_iter().map(|(hash, _)| hash).collect();
+                    let blocks = self.peers.clear_matched_blocks();
+                    assert_eq!(blocks.len(), matched_blocks.len());
+                    info!(
+                        "all matched blocks downloaded, start_number={}, blocks_count={}, matched_count={}",
+                        start_number,
+                        blocks_count,
+                        matched_blocks.len()
+                    );
+
+                    // update storage
+                    for block in blocks {
+                        assert!(matched_blocks.contains(&block.header().calc_header_hash()));
+                        self.storage.filter_block(block);
+                    }
+                    let filtered_block_number = start_number - 1 + blocks_count;
+                    self.storage.update_block_number(filtered_block_number);
+                    self.storage.remove_matched_blocks();
+
+                    // send next GetBlockFilters message
+                    let content = packed::GetBlockFilters::new_builder()
+                        .start_number((filtered_block_number + 1).pack())
+                        .build();
+                    let message = packed::BlockFilterMessage::new_builder()
+                        .set(content)
+                        .build()
+                        .as_bytes();
+                    if let Err(err) =
+                        nc.send_message(SupportProtocols::Filter.protocol_id(), peer, message)
+                    {
+                        let error_message =
+                            format!("nc.send_message BlockFilterMessage, error: {:?}", err);
+                        error!("{}", error_message);
+                    }
+                }
             }
             _ => {
                 let content = packed::InIBD::new_builder().build();

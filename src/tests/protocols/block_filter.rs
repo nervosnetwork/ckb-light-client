@@ -394,29 +394,13 @@ async fn test_block_filter_ok_with_blocks_matched() {
             .set(content.clone())
             .build()
     };
-    let get_block_filters_message = {
-        let start_number: u64 = min_filtered_block_number + 1;
-        let content = packed::GetBlockFilters::new_builder()
-            .start_number((start_number + 1).pack())
-            .build();
-        packed::BlockFilterMessage::new_builder()
-            .set(content)
-            .build()
-    };
     assert_eq!(
         nc.sent_messages().borrow().clone(),
-        vec![
-            (
-                SupportProtocols::LightClient.protocol_id(),
-                peer_index,
-                get_blocks_proof_message.as_bytes()
-            ),
-            (
-                SupportProtocols::Filter.protocol_id(),
-                peer_index,
-                get_block_filters_message.as_bytes()
-            )
-        ]
+        vec![(
+            SupportProtocols::LightClient.protocol_id(),
+            peer_index,
+            get_blocks_proof_message.as_bytes()
+        )]
     );
 }
 
