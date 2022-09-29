@@ -21,15 +21,15 @@ bootnodes = [
 ]
 
 ### Whitelist-only mode
-whitelist_only = true
+# whitelist_only = false
 ### Whitelist peers connecting from the given IP addresses
-whitelist_peers = [
-    "/ip4/52.221.65.114/tcp/8115/p2p/QmcNN4VGBTmVvWsrsQPu3diXJpRFQ2cvqvZUezq7WD96Y7",
-    "/ip4/127.0.0.1/tcp/8115/p2p/QmUwUvGeRrrER1i9LiBtgGGw5FHaXnSU3as8qcNZxhNx48"
-]
+# whitelist_peers = []
 
-max_peers = 5000
-max_outbound_peers = 2500
+### Enable `SO_REUSEPORT` feature to reuse port on Linux, not supported on other OS yet
+# reuse_port_on_linux = true
+
+max_peers = 125
+max_outbound_peers = 8
 # 2 minutes
 ping_interval_secs = 120
 # 20 minutes

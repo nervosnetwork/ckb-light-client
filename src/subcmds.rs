@@ -3,8 +3,8 @@ use std::sync::{Arc, RwLock};
 use ckb_async_runtime::new_global_runtime;
 use ckb_chain_spec::ChainSpec;
 use ckb_network::{
-    CKBProtocol, CKBProtocolHandler, DefaultExitHandler, ExitHandler, NetworkService, NetworkState,
-    SupportProtocols,
+    CKBProtocol, CKBProtocolHandler, DefaultExitHandler, ExitHandler, Flags, NetworkService,
+    NetworkState, SupportProtocols,
 };
 use ckb_resource::Resource;
 
@@ -39,7 +39,15 @@ impl RunConfig {
 
         let pending_txs = Arc::new(RwLock::new(PendingTxs::new(64)));
         let network_state = NetworkState::from_config(self.run_env.network)
-            .map(Arc::new)
+            .map(|network_state| {
+                Arc::new(network_state.required_flags(
+                    Flags::DISCOVERY
+                        | Flags::SYNC
+                        | Flags::RELAY
+                        | Flags::LIGHT_CLIENT
+                        | Flags::BLOCK_FILTER,
+                ))
+            })
             .map_err(|err| {
                 let errmsg = format!("failed to initialize network state since {}", err);
                 Error::runtime(errmsg)
@@ -90,8 +98,11 @@ impl RunConfig {
             Arc::clone(&network_state),
             protocols,
             required_protocol_ids,
-            consensus.identify_name(),
-            clap::crate_version!().to_owned(),
+            (
+                consensus.identify_name(),
+                clap::crate_version!().to_owned(),
+                Flags::DISCOVERY,
+            ),
             exit_handler.clone(),
         )
         .start(&handle)

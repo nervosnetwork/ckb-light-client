@@ -52,7 +52,7 @@ get full node peer id
 curl http://localhost:8114/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"local_node_info", "params": [], "id": 1}'
 ```
 
-copy `config.toml` to new folder and modify the `bootnodes`, `whitelist_peers` to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
+copy `config.toml` to new folder and modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
 
 start light client
 ```
