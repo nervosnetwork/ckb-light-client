@@ -162,7 +162,7 @@ fn build_prove_request_content() {
 
 #[tokio::test]
 async fn test_light_client_get_idle_matched_blocks() {
-    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
     let peer_index = PeerIndex::new(3);
