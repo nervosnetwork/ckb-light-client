@@ -356,7 +356,6 @@ async fn test_block_filter_ok_with_blocks_matched() {
         peers.commit_prove_state(peer_index, prove_state);
         (peers, prove_state_block_hash)
     };
-    let mut protocol = chain.create_filter_protocol(peers);
 
     let filter_data = {
         let mut writer = std::io::Cursor::new(Vec::new());
@@ -376,13 +375,11 @@ async fn test_block_filter_ok_with_blocks_matched() {
         .build();
     let message = packed::BlockFilterMessage::new_builder()
         .set(content)
-        .build();
+        .build()
+        .as_bytes();
 
-    let peer_index = PeerIndex::new(3);
-    protocol
-        .received(nc.context(), peer_index, message.as_bytes())
-        .await;
-
+    let mut protocol = chain.create_filter_protocol(peers);
+    protocol.received(nc.context(), peer_index, message).await;
     assert!(nc.banned_peers().borrow().is_empty());
 
     let get_blocks_proof_message = {
@@ -391,16 +388,37 @@ async fn test_block_filter_ok_with_blocks_matched() {
             .last_hash(prove_state_block_hash)
             .build();
         packed::LightClientMessage::new_builder()
-            .set(content.clone())
+            .set(content)
             .build()
+            .as_bytes()
+    };
+    let get_block_filters_message = {
+        let blocks_count = 2;
+        let limit = proved_number - start_number + 1;
+        let actual_blocks_count = blocks_count.min(limit);
+        let new_start_number = start_number - 1 + actual_blocks_count + 1;
+        let content = packed::GetBlockFilters::new_builder()
+            .start_number(new_start_number.pack())
+            .build();
+        packed::BlockFilterMessage::new_builder()
+            .set(content)
+            .build()
+            .as_bytes()
     };
     assert_eq!(
         nc.sent_messages().borrow().clone(),
-        vec![(
-            SupportProtocols::LightClient.protocol_id(),
-            peer_index,
-            get_blocks_proof_message.as_bytes()
-        )]
+        vec![
+            (
+                SupportProtocols::LightClient.protocol_id(),
+                peer_index,
+                get_blocks_proof_message
+            ),
+            (
+                SupportProtocols::Filter.protocol_id(),
+                peer_index,
+                get_block_filters_message
+            )
+        ]
     );
 }
 
@@ -590,7 +608,7 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     ];
     chain
         .client_storage()
-        .update_matched_blocks(2, 2, matched_blocks);
+        .add_matched_blocks(2, 2, matched_blocks);
     let mut protocol = chain.create_filter_protocol(peers);
 
     protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;

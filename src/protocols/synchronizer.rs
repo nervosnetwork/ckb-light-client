@@ -1,14 +1,13 @@
-use ckb_network::{
-    async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
-};
+use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{packed, prelude::*};
-use log::{error, info, trace, warn};
+use log::{info, trace, warn};
 use std::collections::HashSet;
 use std::sync::Arc;
 
 use super::BAD_MESSAGE_BAN_TIME;
 use crate::protocols::Peers;
 use crate::storage::Storage;
+use crate::utils::network::prove_or_download_matched_blocks;
 
 pub(crate) struct SyncProtocol {
     storage: Storage,
@@ -71,16 +70,17 @@ impl CKBProtocolHandler for SyncProtocol {
                 let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
                 self.peers.add_block(&mut matched_blocks, new_block);
 
-                if self.peers.all_matched_blocks_downloaded(&matched_blocks) {
+                if !matched_blocks.is_empty()
+                    && self.peers.all_matched_blocks_downloaded(&matched_blocks)
+                {
                     let (start_number, blocks_count, db_blocks) = self
                         .storage
-                        .get_matched_blocks()
+                        .get_earliest_matched_blocks()
                         .expect("get matched blocks from storage");
                     let db_blocks: HashSet<_> =
                         db_blocks.into_iter().map(|(hash, _)| hash).collect();
 
-                    // NOTE must remove matched blocks in storage first
-                    self.storage.remove_matched_blocks();
+                    self.storage.remove_matched_blocks(start_number);
                     let blocks = self.peers.clear_matched_blocks(&mut matched_blocks);
                     assert_eq!(blocks.len(), db_blocks.len());
                     info!(
@@ -98,20 +98,18 @@ impl CKBProtocolHandler for SyncProtocol {
                     let filtered_block_number = start_number - 1 + blocks_count;
                     self.storage.update_block_number(filtered_block_number);
 
-                    // send next GetBlockFilters message
-                    let content = packed::GetBlockFilters::new_builder()
-                        .start_number((filtered_block_number + 1).pack())
-                        .build();
-                    let message = packed::BlockFilterMessage::new_builder()
-                        .set(content)
-                        .build()
-                        .as_bytes();
-                    if let Err(err) =
-                        nc.send_message(SupportProtocols::Filter.protocol_id(), peer, message)
+                    // send more GetBlocksProof/GetBlocks requests
+                    if let Some((_start_number, _blocks_count, db_blocks)) =
+                        self.storage.get_earliest_matched_blocks()
                     {
-                        let error_message =
-                            format!("nc.send_message BlockFilterMessage, error: {:?}", err);
-                        error!("{}", error_message);
+                        self.peers
+                            .add_matched_blocks(&mut matched_blocks, db_blocks);
+                        prove_or_download_matched_blocks(
+                            Arc::clone(&self.peers),
+                            &matched_blocks,
+                            peer,
+                            nc.as_ref(),
+                        );
                     }
                 }
             }

@@ -1,5 +1,6 @@
 use crate::protocols::FilterProtocol;
 use crate::protocols::{Status, StatusCode};
+use crate::utils::network::prove_or_download_matched_blocks;
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::core::BlockNumber;
 use ckb_types::{packed, prelude::*};
@@ -82,7 +83,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 return Status::ok();
             }
             let limit = (prove_state_block_number - start_number + 1) as usize;
-            let mut possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
+            let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
             let possible_match_blocks_len = possible_match_blocks.len();
             trace!(
                 "peer {}, matched blocks: {}",
@@ -101,35 +102,35 @@ impl<'a> BlockFiltersProcess<'a> {
                     .iter()
                     .map(|block_hash| (block_hash.clone(), block_hash == &prove_state_block_hash))
                     .collect::<Vec<_>>();
-                possible_match_blocks.retain(|block_hash| block_hash != &prove_state_block_hash);
-                if possible_match_blocks.len() != possible_match_blocks_len {
-                    self.filter.peers.add_matched_blocks(
-                        &mut matched_blocks,
-                        vec![(prove_state_block_hash, true)],
-                    );
-                }
-                self.filter.peers.add_matched_blocks(
-                    &mut matched_blocks,
-                    possible_match_blocks
-                        .into_iter()
-                        .map(|hash| (hash, false))
-                        .collect(),
-                );
-                self.filter
-                    .prove_or_download_matched_blocks(&matched_blocks, self.peer, self.nc);
-                // NOTE must insert matched blocks in storage later
-                self.filter.pending_peer.storage.update_matched_blocks(
+                self.filter.pending_peer.storage.add_matched_blocks(
                     start_number,
                     actual_blocks_count as u64,
                     blocks,
                 );
-            } else {
-                let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
-                pending_peer.update_block_number(filtered_block_number);
-                // send next batch GetBlockFilters message to peer
-                self.filter
-                    .send_get_block_filters(self.nc, self.peer, filtered_block_number + 1);
+                if matched_blocks.is_empty() {
+                    if let Some((_start_number, _blocks_count, db_blocks)) = self
+                        .filter
+                        .pending_peer
+                        .storage
+                        .get_earliest_matched_blocks()
+                    {
+                        self.filter
+                            .peers
+                            .add_matched_blocks(&mut matched_blocks, db_blocks);
+                        prove_or_download_matched_blocks(
+                            Arc::clone(&self.filter.peers),
+                            &matched_blocks,
+                            self.peer,
+                            self.nc.as_ref(),
+                        );
+                    }
+                }
             }
+            let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
+            pending_peer.update_block_number(filtered_block_number);
+            // send next batch GetBlockFilters message to peer
+            self.filter
+                .send_get_block_filters(self.nc, self.peer, filtered_block_number + 1);
         }
         Status::ok()
     }

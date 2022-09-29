@@ -1,14 +1,11 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
-use crate::protocols::{Peers, Status, StatusCode, GET_BLOCKS_PROOF_LIMIT};
+use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
-use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
-use ckb_network::{
-    async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
-};
-use ckb_types::{core::BlockNumber, packed, prelude::*, H256};
+use crate::utils::network::prove_or_download_matched_blocks;
+use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
+use ckb_types::{core::BlockNumber, packed, prelude::*};
 use golomb_coded_set::{GCSFilterReader, SipHasher24Builder, M, P};
 use log::{debug, error, info, trace, warn};
-use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::RwLock;
 use std::time::Instant;
@@ -133,89 +130,6 @@ impl FilterProtocol {
             error!("{}", error_message);
         }
     }
-
-    pub(crate) fn prove_or_download_matched_blocks(
-        &self,
-        matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
-        peer: PeerIndex,
-        nc: Arc<dyn CKBProtocolContext + Sync>,
-    ) {
-        let peer_state = if let Some(peer_state) = self.peers.get_state(&peer) {
-            peer_state
-        } else {
-            info!("ignoring, peer {} is disconnected", peer);
-            return;
-        };
-        if peer_state.get_blocks_proof_request().is_some() {
-            info!("peer {} has an inflight GetBlocksProof request", peer);
-        } else {
-            let blocks_to_prove = self
-                .peers
-                .get_matched_blocks_to_prove(matched_blocks, GET_BLOCKS_PROOF_LIMIT);
-            if !blocks_to_prove.is_empty() {
-                debug!(
-                    "send get blocks proof request to peer: {}, count={}",
-                    peer,
-                    blocks_to_prove.len()
-                );
-                let prove_state_block_hash = if let Some(hash) = peer_state
-                    .get_prove_state()
-                    .map(|prove_state| prove_state.get_last_header().header().hash())
-                {
-                    hash
-                } else {
-                    warn!("ignoring, peer {} prove state is none", peer);
-                    return;
-                };
-                let content = packed::GetBlocksProof::new_builder()
-                    .block_hashes(blocks_to_prove.pack())
-                    .last_hash(prove_state_block_hash)
-                    .build();
-                let message = packed::LightClientMessage::new_builder()
-                    .set(content.clone())
-                    .build()
-                    .as_bytes();
-                self.peers.update_blocks_proof_request(peer, Some(content));
-                if let Err(err) =
-                    nc.send_message(SupportProtocols::LightClient.protocol_id(), peer, message)
-                {
-                    let error_message =
-                        format!("nc.send_message LightClientMessage, error: {:?}", err);
-                    error!("{}", error_message);
-                }
-            }
-        }
-
-        if peer_state.get_blocks_request().is_some() {
-            info!("peer {} has an inflight GetBlocks request", peer);
-        } else {
-            let blocks_to_download = self
-                .peers
-                .get_matched_blocks_to_download(matched_blocks, INIT_BLOCKS_IN_TRANSIT_PER_PEER);
-            if !blocks_to_download.is_empty() {
-                debug!(
-                    "send get blocks request to peer: {}, count={}",
-                    peer,
-                    blocks_to_download.len()
-                );
-                self.peers
-                    .update_blocks_request(peer, Some(blocks_to_download.clone()));
-                let content = packed::GetBlocks::new_builder()
-                    .block_hashes(blocks_to_download.pack())
-                    .build();
-                let message = packed::SyncMessage::new_builder()
-                    .set(content)
-                    .build()
-                    .as_bytes();
-                if let Err(err) =
-                    nc.send_message(SupportProtocols::Sync.protocol_id(), peer, message)
-                {
-                    let error_message = format!("nc.send_message SyncMessage, error: {:?}", err);
-                    error!("{}", error_message);
-                }
-            }
-        }
-    }
 }
 
 #[async_trait]
@@ -300,7 +214,7 @@ impl CKBProtocolHandler for FilterProtocol {
 
                     let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
                     if let Some((start_number, blocks_count, blocks)) =
-                        self.pending_peer.storage.get_matched_blocks()
+                        self.pending_peer.storage.get_earliest_matched_blocks()
                     {
                         if matched_blocks.is_empty() {
                             debug!(
@@ -310,10 +224,11 @@ impl CKBProtocolHandler for FilterProtocol {
                             );
                             // recover matched blocks from storage
                             self.peers.add_matched_blocks(&mut matched_blocks, blocks);
-                            self.prove_or_download_matched_blocks(
+                            prove_or_download_matched_blocks(
+                                Arc::clone(&self.peers),
                                 &matched_blocks,
                                 *peer,
-                                Arc::clone(&nc),
+                                nc.as_ref(),
                             );
                         }
                     } else if self.pending_peer.should_ask() && prove_state_number >= start_number {

@@ -36,7 +36,7 @@ async fn test_sync_add_block() {
     let blocks_count = 1;
     let block_view = BlockBuilder::default().build();
     let proved_block_hash = block_view.hash();
-    chain.client_storage().update_matched_blocks(
+    chain.client_storage().add_matched_blocks(
         start_number,
         blocks_count,
         vec![(proved_block_hash.clone(), true)],
@@ -66,32 +66,19 @@ async fn test_sync_add_block() {
     protocol.received(nc.context(), peer_index, message).await;
 
     assert!(peers.matched_blocks().read().unwrap().is_empty());
-    assert!(chain.client_storage().get_matched_blocks().is_none());
+    assert!(chain
+        .client_storage()
+        .get_earliest_matched_blocks()
+        .is_none());
     assert!(nc.banned_peers().borrow().is_empty());
-    let get_block_filters_message = {
-        let storage_filtered_block_number = chain
-            .client_storage()
-            .get_filter_scripts()
-            .values()
-            .min()
-            .cloned()
-            .unwrap_or_default();
-        let filtered_block_number = start_number - 1 + blocks_count;
-        assert_eq!(storage_filtered_block_number, filtered_block_number);
-        let content = packed::GetBlockFilters::new_builder()
-            .start_number((filtered_block_number + 1).pack())
-            .build();
-        packed::BlockFilterMessage::new_builder()
-            .set(content)
-            .build()
-            .as_bytes()
-    };
-    assert_eq!(
-        nc.sent_messages().borrow().clone(),
-        vec![(
-            SupportProtocols::Filter.protocol_id(),
-            peer_index,
-            get_block_filters_message
-        )]
-    );
+    let storage_filtered_block_number = chain
+        .client_storage()
+        .get_filter_scripts()
+        .values()
+        .min()
+        .cloned()
+        .unwrap_or_default();
+    let filtered_block_number = start_number - 1 + blocks_count;
+    assert_eq!(storage_filtered_block_number, filtered_block_number);
+    assert!(nc.sent_messages().borrow().is_empty());
 }
