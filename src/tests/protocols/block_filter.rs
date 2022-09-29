@@ -555,3 +555,74 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
 
     assert!(nc.sent_messages().borrow().is_empty());
 }
+
+#[tokio::test]
+async fn test_block_filter_notify_recover_matched_blocks() {
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
+    let peer_index = PeerIndex::new(3);
+    let tip_header = VerifiableHeader::new(
+        HeaderBuilder::default()
+            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
+            .number(3u64.pack())
+            .build(),
+        Default::default(),
+        None,
+        Default::default(),
+    );
+    let tip_hash = tip_header.header().hash();
+    let peers = {
+        let last_state = LastState::new(tip_header);
+        let request = ProveRequest::new(last_state, Default::default());
+        let prove_state =
+            ProveState::new_from_request(request, Default::default(), Default::default());
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers.commit_prove_state(peer_index, prove_state);
+        peers
+    };
+    let unproved_block_hash = H256(rand::random()).pack();
+    let proved_block_hash = H256(rand::random()).pack();
+    let matched_blocks = vec![
+        (unproved_block_hash.clone(), false),
+        (proved_block_hash.clone(), true),
+    ];
+    chain
+        .client_storage()
+        .update_matched_blocks(2, 2, matched_blocks);
+    let mut protocol = chain.create_filter_protocol(peers);
+
+    protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
+
+    let content = packed::GetBlocksProof::new_builder()
+        .block_hashes(vec![unproved_block_hash].pack())
+        .last_hash(tip_hash.clone())
+        .build();
+    let get_blocks_proof_message = packed::LightClientMessage::new_builder()
+        .set(content.clone())
+        .build()
+        .as_bytes();
+    let content = packed::GetBlocks::new_builder()
+        .block_hashes(vec![proved_block_hash].pack())
+        .build();
+    let get_blocks_message = packed::SyncMessage::new_builder()
+        .set(content.clone())
+        .build()
+        .as_bytes();
+    assert_eq!(
+        nc.sent_messages().borrow().clone(),
+        vec![
+            (
+                SupportProtocols::LightClient.protocol_id(),
+                peer_index,
+                get_blocks_proof_message,
+            ),
+            (
+                SupportProtocols::Sync.protocol_id(),
+                peer_index,
+                get_blocks_message,
+            )
+        ]
+    );
+}
