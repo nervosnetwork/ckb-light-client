@@ -5,9 +5,10 @@ use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{
     async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
 };
-use ckb_types::{core::BlockNumber, packed, prelude::*};
+use ckb_types::{core::BlockNumber, packed, prelude::*, H256};
 use golomb_coded_set::{GCSFilterReader, SipHasher24Builder, M, P};
 use log::{debug, error, info, trace, warn};
+use std::collections::HashMap;
 use std::io::Cursor;
 use std::sync::RwLock;
 use std::time::Instant;
@@ -135,6 +136,7 @@ impl FilterProtocol {
 
     pub(crate) fn prove_or_download_matched_blocks(
         &self,
+        matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
         peer: PeerIndex,
         nc: Arc<dyn CKBProtocolContext + Sync>,
     ) {
@@ -149,7 +151,7 @@ impl FilterProtocol {
         } else {
             let blocks_to_prove = self
                 .peers
-                .get_matched_blocks_to_prove(GET_BLOCKS_PROOF_LIMIT);
+                .get_matched_blocks_to_prove(matched_blocks, GET_BLOCKS_PROOF_LIMIT);
             if !blocks_to_prove.is_empty() {
                 debug!(
                     "send get blocks proof request to peer: {}, count={}",
@@ -189,7 +191,7 @@ impl FilterProtocol {
         } else {
             let blocks_to_download = self
                 .peers
-                .get_matched_blocks_to_download(INIT_BLOCKS_IN_TRANSIT_PER_PEER);
+                .get_matched_blocks_to_download(matched_blocks, INIT_BLOCKS_IN_TRANSIT_PER_PEER);
             if !blocks_to_download.is_empty() {
                 debug!(
                     "send get blocks request to peer: {}, count={}",
@@ -295,18 +297,24 @@ impl CKBProtocolHandler for FilterProtocol {
                         start_number,
                         prove_state.get_last_header().header().number()
                     );
-                    if let Some((start_number, blocks_count, matched_blocks)) =
+
+                    let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
+                    if let Some((start_number, blocks_count, blocks)) =
                         self.pending_peer.storage.get_matched_blocks()
                     {
-                        if self.peers.matched_blocks_is_empty() {
+                        if matched_blocks.is_empty() {
                             debug!(
                                 "recover matched blocks from storage, start_number={}, blocks_count={}, matched_count: {}",
                                 start_number, blocks_count,
                                 matched_blocks.len(),
                             );
                             // recover matched blocks from storage
-                            self.peers.add_matched_blocks(matched_blocks);
-                            self.prove_or_download_matched_blocks(*peer, Arc::clone(&nc));
+                            self.peers.add_matched_blocks(&mut matched_blocks, blocks);
+                            self.prove_or_download_matched_blocks(
+                                &matched_blocks,
+                                *peer,
+                                Arc::clone(&nc),
+                            );
                         }
                     } else if self.pending_peer.should_ask() && prove_state_number >= start_number {
                         debug!(

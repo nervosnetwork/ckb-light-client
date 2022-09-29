@@ -91,29 +91,37 @@ impl<'a> BlockFiltersProcess<'a> {
             );
             let actual_blocks_count = blocks_count.min(limit);
             if possible_match_blocks_len != 0 {
-                let matched_blocks = possible_match_blocks
+                let mut matched_blocks = self
+                    .filter
+                    .peers
+                    .matched_blocks()
+                    .write()
+                    .expect("poisoned");
+                let blocks = possible_match_blocks
                     .iter()
                     .map(|block_hash| (block_hash.clone(), block_hash == &prove_state_block_hash))
                     .collect::<Vec<_>>();
                 possible_match_blocks.retain(|block_hash| block_hash != &prove_state_block_hash);
                 if possible_match_blocks.len() != possible_match_blocks_len {
-                    self.filter
-                        .peers
-                        .add_matched_blocks(vec![(prove_state_block_hash, true)]);
+                    self.filter.peers.add_matched_blocks(
+                        &mut matched_blocks,
+                        vec![(prove_state_block_hash, true)],
+                    );
                 }
                 self.filter.peers.add_matched_blocks(
+                    &mut matched_blocks,
                     possible_match_blocks
                         .into_iter()
                         .map(|hash| (hash, false))
                         .collect(),
                 );
                 self.filter
-                    .prove_or_download_matched_blocks(self.peer, self.nc);
+                    .prove_or_download_matched_blocks(&matched_blocks, self.peer, self.nc);
                 // NOTE must insert matched blocks in storage later
                 self.filter.pending_peer.storage.update_matched_blocks(
                     start_number,
                     actual_blocks_count as u64,
-                    matched_blocks,
+                    blocks,
                 );
             } else {
                 let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;

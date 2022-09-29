@@ -440,11 +440,12 @@ impl LightClientProtocol {
             .map(|(peer_index, _)| peer_index)
             .collect();
 
+        let matched_blocks = self.peers.matched_blocks().read().expect("poisoned");
         let last_hash = tip_header.calc_header_hash();
         loop {
             let block_hashes = self
                 .peers
-                .get_matched_blocks_to_prove(GET_BLOCKS_PROOF_LIMIT);
+                .get_matched_blocks_to_prove(&matched_blocks, GET_BLOCKS_PROOF_LIMIT);
             if block_hashes.is_empty() {
                 break;
             }
@@ -469,7 +470,7 @@ impl LightClientProtocol {
         loop {
             let block_hashes = self
                 .peers
-                .get_matched_blocks_to_download(INIT_BLOCKS_IN_TRANSIT_PER_PEER);
+                .get_matched_blocks_to_download(&matched_blocks, INIT_BLOCKS_IN_TRANSIT_PER_PEER);
             if block_hashes.is_empty() {
                 break;
             }

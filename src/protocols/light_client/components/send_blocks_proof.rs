@@ -88,9 +88,17 @@ impl<'a> SendBlocksProofProcess<'a> {
         {
             let block_hashes: Vec<packed::Byte32> =
                 headers.iter().map(|header| header.hash()).collect();
-            self.protocol
-                .peers
-                .mark_matched_blocks_proved(&block_hashes);
+            {
+                let mut matched_blocks = self
+                    .protocol
+                    .peers()
+                    .matched_blocks()
+                    .write()
+                    .expect("poisoned");
+                self.protocol
+                    .peers
+                    .mark_matched_blocks_proved(&mut matched_blocks, &block_hashes);
+            }
 
             if peer_state.get_blocks_request().is_some() {
                 info!("peer {} has an inflight GetBlocks request", self.peer);

@@ -68,30 +68,31 @@ impl CKBProtocolHandler for SyncProtocol {
         match message {
             packed::SyncMessageUnionReader::SendBlock(reader) => {
                 let new_block = reader.to_entity().block();
-                self.peers.add_block(new_block);
+                let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
+                self.peers.add_block(&mut matched_blocks, new_block);
 
-                if self.peers.all_matched_blocks_downloaded() {
-                    let (start_number, blocks_count, matched_blocks) = self
+                if self.peers.all_matched_blocks_downloaded(&matched_blocks) {
+                    let (start_number, blocks_count, db_blocks) = self
                         .storage
                         .get_matched_blocks()
                         .expect("get matched blocks from storage");
-                    let matched_blocks: HashSet<_> =
-                        matched_blocks.into_iter().map(|(hash, _)| hash).collect();
+                    let db_blocks: HashSet<_> =
+                        db_blocks.into_iter().map(|(hash, _)| hash).collect();
 
                     // NOTE must remove matched blocks in storage first
                     self.storage.remove_matched_blocks();
-                    let blocks = self.peers.clear_matched_blocks();
-                    assert_eq!(blocks.len(), matched_blocks.len());
+                    let blocks = self.peers.clear_matched_blocks(&mut matched_blocks);
+                    assert_eq!(blocks.len(), db_blocks.len());
                     info!(
                         "all matched blocks downloaded, start_number={}, blocks_count={}, matched_count={}",
                         start_number,
                         blocks_count,
-                        matched_blocks.len()
+                        db_blocks.len()
                     );
 
                     // update storage
                     for block in blocks {
-                        assert!(matched_blocks.contains(&block.header().calc_header_hash()));
+                        assert!(db_blocks.contains(&block.header().calc_header_hash()));
                         self.storage.filter_block(block);
                     }
                     let filtered_block_number = start_number - 1 + blocks_count;
