@@ -191,7 +191,7 @@ impl FilterProtocol {
         } else {
             let blocks_to_download = self
                 .peers
-                .get_matched_blocks_to_download(&matched_blocks, INIT_BLOCKS_IN_TRANSIT_PER_PEER);
+                .get_matched_blocks_to_download(matched_blocks, INIT_BLOCKS_IN_TRANSIT_PER_PEER);
             if !blocks_to_download.is_empty() {
                 debug!(
                     "send get blocks request to peer: {}, count={}",

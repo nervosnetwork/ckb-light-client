@@ -440,6 +440,11 @@ impl LightClientProtocol {
             .map(|(peer_index, _)| peer_index)
             .collect();
 
+        if best_peers.is_empty() {
+            debug!("no peers found for get idle blocks");
+            return;
+        }
+
         let matched_blocks = self.peers.matched_blocks().read().expect("poisoned");
         let last_hash = tip_header.calc_header_hash();
         loop {
