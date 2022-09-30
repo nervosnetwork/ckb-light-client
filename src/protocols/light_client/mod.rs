@@ -39,6 +39,7 @@ use super::{
 
 use crate::protocols::{GET_BLOCKS_PROOF_LIMIT, GET_TRANSACTIONS_PROOF_LIMIT, LAST_N_BLOCKS};
 use crate::storage::Storage;
+use crate::utils::network::prove_or_download_matched_blocks;
 
 pub struct LightClientProtocol {
     storage: Storage,
@@ -426,91 +427,14 @@ impl LightClientProtocol {
 
     fn get_idle_blocks(&mut self, nc: &dyn CKBProtocolContext) {
         let tip_header = self.storage.get_tip_header();
-        let best_peers: Vec<_> = self
-            .peers
-            .get_peers_which_are_proved()
-            .into_iter()
-            .filter(|(_, prove_state)| {
-                Some(prove_state.get_last_header().header())
-                    .into_iter()
-                    .chain(prove_state.get_last_headers().iter())
-                    .chain(prove_state.get_reorg_last_headers().iter())
-                    .any(|header| header.data().as_slice() == tip_header.as_slice())
-            })
-            .map(|(peer_index, _)| peer_index)
-            .collect();
-
-        if best_peers.is_empty() {
-            debug!("no peers found for get idle blocks");
-            return;
-        }
-
         let matched_blocks = self.peers.matched_blocks().read().expect("poisoned");
-        let last_hash = tip_header.calc_header_hash();
-        loop {
-            let block_hashes = self
-                .peers
-                .get_matched_blocks_to_prove(&matched_blocks, GET_BLOCKS_PROOF_LIMIT);
-            if block_hashes.is_empty() {
-                break;
-            }
-            if let Some(peer) = best_peers.iter().find(|peer| {
-                self.peers
-                    .get_state(peer)
-                    .map(|peer_state| peer_state.get_blocks_proof_request().is_none())
-                    .unwrap_or(false)
-            }) {
-                debug!(
-                    "send get blocks proof request to peer: {}, matched_count: {}",
-                    peer,
-                    block_hashes.len()
-                );
-                self.send_get_blocks_proof(*peer, nc, last_hash.clone(), block_hashes);
-            } else {
-                debug!("all valid peers are busy for get blocks proof");
-                break;
-            }
-        }
-
-        loop {
-            let block_hashes = self
-                .peers
-                .get_matched_blocks_to_download(&matched_blocks, INIT_BLOCKS_IN_TRANSIT_PER_PEER);
-            if block_hashes.is_empty() {
-                break;
-            }
-
-            if let Some(peer) = best_peers.iter().find(|peer| {
-                self.peers
-                    .get_state(peer)
-                    .map(|peer_state| peer_state.get_blocks_request().is_none())
-                    .unwrap_or(false)
-            }) {
-                debug!(
-                    "send get blocks request to peer: {}, matched_count: {}",
-                    peer,
-                    block_hashes.len()
-                );
-                self.peers
-                    .update_blocks_request(*peer, Some(block_hashes.clone()));
-                let content = packed::GetBlocks::new_builder()
-                    .block_hashes(block_hashes.pack())
-                    .build();
-                let message = packed::SyncMessage::new_builder()
-                    .set(content)
-                    .build()
-                    .as_bytes();
-                if let Err(err) =
-                    nc.send_message(SupportProtocols::Sync.protocol_id(), *peer, message)
-                {
-                    let error_message = format!("nc.send_message SyncMessage, error: {:?}", err);
-                    error!("{}", error_message);
-                }
-            } else {
-                debug!("all valid peers are busy for get blocks");
-                break;
-            }
-        }
+        prove_or_download_matched_blocks(
+            Arc::clone(&self.peers),
+            &tip_header,
+            &matched_blocks,
+            nc,
+            self.init_blocks_in_transit_per_peer(),
+        );
     }
 
     fn fetch_headers_txs(&mut self, nc: &dyn CKBProtocolContext) {
@@ -520,15 +444,7 @@ impl LightClientProtocol {
         }
 
         let tip_header = self.storage.get_tip_header();
-        let best_peers: Vec<PeerIndex> = self
-            .peers
-            .get_peers_which_are_proved()
-            .into_iter()
-            .filter(|(_, prove_state)| {
-                prove_state.get_last_header().header().data().as_slice() == tip_header.as_slice()
-            })
-            .map(|(peer_index, _)| peer_index)
-            .collect();
+        let best_peers: Vec<PeerIndex> = self.peers.get_best_proved_peers(&tip_header);
         if best_peers.is_empty() {
             debug!("no peers found for fetch headers and transactions");
             return;
@@ -547,8 +463,25 @@ impl LightClientProtocol {
                     .map(|peer_state| peer_state.get_blocks_proof_request().is_none())
                     .unwrap_or(false)
             }) {
-                let hashes = block_hashes.iter().map(|hash| hash.pack()).collect();
-                self.send_get_blocks_proof(*peer, nc, last_hash.clone(), hashes);
+                let hashes: Vec<_> = block_hashes.iter().map(|hash| hash.pack()).collect();
+                debug!("send block proof request to peer: {}", peer);
+                let content = packed::GetBlocksProof::new_builder()
+                    .block_hashes(hashes.pack())
+                    .last_hash(last_hash.clone())
+                    .build();
+                let message = packed::LightClientMessage::new_builder()
+                    .set(content.clone())
+                    .build()
+                    .as_bytes();
+
+                self.peers.update_blocks_proof_request(*peer, Some(content));
+                if let Err(err) =
+                    nc.send_message(SupportProtocols::LightClient.protocol_id(), *peer, message)
+                {
+                    let error_message =
+                        format!("nc.send_message LightClientMessage, error: {:?}", err);
+                    error!("{}", error_message);
+                }
                 for block_hash in block_hashes {
                     if let Some(mut value) = self.peers.fetching_headers().get_mut(block_hash) {
                         value.1 = now;
@@ -599,32 +532,6 @@ impl LightClientProtocol {
                 debug!("all valid peers are busy for fetching transactions");
                 break;
             }
-        }
-    }
-
-    fn send_get_blocks_proof(
-        &self,
-        peer: PeerIndex,
-        nc: &dyn CKBProtocolContext,
-        last_hash: packed::Byte32,
-        block_hashes: Vec<packed::Byte32>,
-    ) {
-        debug!("send block proof request to peer: {}", peer);
-        let content = packed::GetBlocksProof::new_builder()
-            .block_hashes(block_hashes.pack())
-            .last_hash(last_hash)
-            .build();
-        let message = packed::LightClientMessage::new_builder()
-            .set(content.clone())
-            .build()
-            .as_bytes();
-
-        self.peers.update_blocks_proof_request(peer, Some(content));
-        if let Err(err) =
-            nc.send_message(SupportProtocols::LightClient.protocol_id(), peer, message)
-        {
-            let error_message = format!("nc.send_message LightClientMessage, error: {:?}", err);
-            error!("{}", error_message);
         }
     }
 

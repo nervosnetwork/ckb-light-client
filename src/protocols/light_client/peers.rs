@@ -711,6 +711,20 @@ impl Peers {
             })
             .collect()
     }
+
+    pub(crate) fn get_best_proved_peers(&self, best_tip: &packed::Header) -> Vec<PeerIndex> {
+        self.get_peers_which_are_proved()
+            .into_iter()
+            .filter(|(_, prove_state)| {
+                Some(prove_state.get_last_header().header())
+                    .into_iter()
+                    .chain(prove_state.get_last_headers().iter())
+                    .chain(prove_state.get_reorg_last_headers().iter())
+                    .any(|header| header.data().as_slice() == best_tip.as_slice())
+            })
+            .map(|(peer_index, _)| peer_index)
+            .collect()
+    }
 }
 
 fn if_verifiable_headers_are_same(lhs: &VerifiableHeader, rhs: &VerifiableHeader) -> bool {

@@ -1,3 +1,4 @@
+use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{packed, prelude::*};
 use log::{info, trace, warn};
@@ -104,11 +105,13 @@ impl CKBProtocolHandler for SyncProtocol {
                     {
                         self.peers
                             .add_matched_blocks(&mut matched_blocks, db_blocks);
+                        let tip_header = self.storage.get_tip_header();
                         prove_or_download_matched_blocks(
                             Arc::clone(&self.peers),
+                            &tip_header,
                             &matched_blocks,
-                            peer,
                             nc.as_ref(),
+                            INIT_BLOCKS_IN_TRANSIT_PER_PEER,
                         );
                     }
                 }

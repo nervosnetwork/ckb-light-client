@@ -10,7 +10,7 @@ use ckb_types::{
     packed::{self, Script},
     prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader,
-    H256,
+    H256, U256,
 };
 
 use crate::{
@@ -338,15 +338,19 @@ async fn test_block_filter_ok_with_blocks_matched() {
             .collect(),
     );
 
+    let header = HeaderBuilder::default()
+        .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
+        .number((proved_number).pack())
+        .build();
+    let tip_header =
+        VerifiableHeader::new(header.clone(), Default::default(), None, Default::default());
+    chain
+        .client_storage()
+        .update_last_state(&U256::one(), &tip_header.header().data());
+
     let peer_index = PeerIndex::new(3);
     let (peers, prove_state_block_hash) = {
-        let header = HeaderBuilder::default()
-            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-            .number((proved_number).pack())
-            .build();
         let prove_state_block_hash = header.hash();
-        let tip_header =
-            VerifiableHeader::new(header, Default::default(), None, Default::default());
         let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());
         let prove_state =
@@ -590,6 +594,9 @@ async fn test_block_filter_notify_recover_matched_blocks() {
         Default::default(),
     );
     let tip_hash = tip_header.header().hash();
+    chain
+        .client_storage()
+        .update_last_state(&U256::one(), &tip_header.header().data());
     let peers = {
         let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());

@@ -2,6 +2,7 @@ use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
 use crate::utils::network::prove_or_download_matched_blocks;
+use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
 use golomb_coded_set::{GCSFilterReader, SipHasher24Builder, M, P};
@@ -224,11 +225,13 @@ impl CKBProtocolHandler for FilterProtocol {
                             );
                             // recover matched blocks from storage
                             self.peers.add_matched_blocks(&mut matched_blocks, blocks);
+                            let tip_header = self.pending_peer.storage.get_tip_header();
                             prove_or_download_matched_blocks(
                                 Arc::clone(&self.peers),
+                                &tip_header,
                                 &matched_blocks,
-                                *peer,
                                 nc.as_ref(),
+                                INIT_BLOCKS_IN_TRANSIT_PER_PEER,
                             );
                         }
                     } else if self.pending_peer.should_ask() && prove_state_number >= start_number {

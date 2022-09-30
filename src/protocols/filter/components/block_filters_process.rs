@@ -1,10 +1,12 @@
 use crate::protocols::FilterProtocol;
 use crate::protocols::{Status, StatusCode};
 use crate::utils::network::prove_or_download_matched_blocks;
+use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::core::BlockNumber;
 use ckb_types::{packed, prelude::*};
 use log::{info, trace, warn};
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 
 pub struct BlockFiltersProcess<'a> {
@@ -91,6 +93,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 possible_match_blocks_len
             );
             let actual_blocks_count = blocks_count.min(limit);
+            let tip_header = self.filter.pending_peer.storage.get_tip_header();
             if possible_match_blocks_len != 0 {
                 let mut matched_blocks = self
                     .filter
@@ -119,18 +122,27 @@ impl<'a> BlockFiltersProcess<'a> {
                             .add_matched_blocks(&mut matched_blocks, db_blocks);
                         prove_or_download_matched_blocks(
                             Arc::clone(&self.filter.peers),
+                            &tip_header,
                             &matched_blocks,
-                            self.peer,
                             self.nc.as_ref(),
+                            INIT_BLOCKS_IN_TRANSIT_PER_PEER,
                         );
                     }
                 }
             }
             let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
             pending_peer.update_block_number(filtered_block_number);
-            // send next batch GetBlockFilters message to peer
+            // send next batch GetBlockFilters message to a random best peer
+            let best_peers: Vec<_> = self.filter.peers.get_best_proved_peers(&tip_header);
+            let next_peer = best_peers
+                .into_iter()
+                .filter(|peer| *peer != self.peer)
+                .collect::<Vec<_>>()
+                .choose(&mut rand::thread_rng())
+                .cloned()
+                .unwrap_or(self.peer);
             self.filter
-                .send_get_block_filters(self.nc, self.peer, filtered_block_number + 1);
+                .send_get_block_filters(self.nc, next_peer, filtered_block_number + 1);
         }
         Status::ok()
     }
