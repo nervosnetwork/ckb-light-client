@@ -101,7 +101,7 @@ impl Storage {
         }
     }
 
-    fn get_genesis_block(&self) -> Block {
+    pub fn get_genesis_block(&self) -> Block {
         let genesis_hash_and_txs_hash = self
             .get(Key::Meta(GENESIS_BLOCK_KEY).into_vec())
             .expect("get genesis block")

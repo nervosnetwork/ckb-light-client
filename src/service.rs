@@ -1,6 +1,6 @@
 use ckb_chain_spec::consensus::Consensus;
 use ckb_jsonrpc_types::{
-    BlockNumber, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
+    BlockNumber, BlockView, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
     RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
 };
 use ckb_network::{extract_peer_id, NetworkController};
@@ -69,6 +69,9 @@ pub trait TransactionRpc {
 pub trait ChainRpc {
     #[rpc(name = "get_tip_header")]
     fn get_tip_header(&self) -> Result<HeaderView>;
+
+    #[rpc(name = "get_genesis_block")]
+    fn get_genesis_block(&self) -> Result<BlockView>;
 
     #[rpc(name = "get_header")]
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>>;
@@ -978,6 +981,10 @@ impl TransactionRpc for TransactionRpcImpl {
 impl ChainRpc for ChainRpcImpl {
     fn get_tip_header(&self) -> Result<HeaderView> {
         Ok(self.swc.storage().get_tip_header().into_view().into())
+    }
+
+    fn get_genesis_block(&self) -> Result<BlockView> {
+        Ok(self.swc.storage().get_genesis_block().into_view().into())
     }
 
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
