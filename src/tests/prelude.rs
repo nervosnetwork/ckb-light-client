@@ -15,7 +15,9 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{FilterProtocol, LastState, LightClientProtocol, Peers, ProveRequest},
+    protocols::{
+        FilterProtocol, LastState, LightClientProtocol, Peers, ProveRequest, SyncProtocol,
+    },
     storage::Storage,
     tests::ALWAYS_SUCCESS_BIN,
 };
@@ -76,6 +78,11 @@ pub(crate) trait ChainExt {
     fn create_filter_protocol(&self, peers: Arc<Peers>) -> FilterProtocol {
         let storage = self.client_storage().to_owned();
         FilterProtocol::new(storage, peers)
+    }
+
+    fn create_sync_protocol(&self, peers: Arc<Peers>) -> SyncProtocol {
+        let storage = self.client_storage().to_owned();
+        SyncProtocol::new(storage, peers)
     }
 }
 

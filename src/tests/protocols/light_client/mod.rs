@@ -6,11 +6,14 @@ use ckb_types::{
     packed,
     prelude::*,
     utilities::{merkle_mountain_range::VerifiableHeader, DIFF_TWO},
-    U256,
+    H256, U256,
 };
 
 use crate::{
-    protocols::{PeerState, Peers, BAD_MESSAGE_BAN_TIME},
+    protocols::{
+        light_client::constant::GET_IDLE_BLOCKS_TOKEN, LastState, PeerState, Peers, ProveRequest,
+        ProveState, BAD_MESSAGE_BAN_TIME,
+    },
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -155,4 +158,79 @@ fn build_prove_request_content() {
             }
         }
     }
+}
+
+#[tokio::test]
+async fn test_light_client_get_idle_matched_blocks() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client");
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(3);
+    let tip_header = VerifiableHeader::new(
+        HeaderBuilder::default()
+            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
+            .number(3u64.pack())
+            .build(),
+        Default::default(),
+        None,
+        Default::default(),
+    );
+    chain
+        .client_storage()
+        .update_last_state(&U256::one(), &tip_header.header().data());
+    let tip_hash = tip_header.header().hash();
+    let peers = {
+        let last_state = LastState::new(tip_header);
+        let request = ProveRequest::new(last_state, Default::default());
+        let prove_state =
+            ProveState::new_from_request(request, Default::default(), Default::default());
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers.commit_prove_state(peer_index, prove_state);
+        peers
+    };
+    let unproved_block_hash = H256(rand::random()).pack();
+    let proved_block_hash = H256(rand::random()).pack();
+    let blocks = vec![
+        (unproved_block_hash.clone(), false),
+        (proved_block_hash.clone(), true),
+    ];
+    {
+        let mut matched_blocks = peers.matched_blocks().write().expect("poisoned");
+        peers.add_matched_blocks(&mut matched_blocks, blocks);
+    }
+
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.notify(nc.context(), GET_IDLE_BLOCKS_TOKEN).await;
+
+    let content = packed::GetBlocksProof::new_builder()
+        .block_hashes(vec![unproved_block_hash].pack())
+        .last_hash(tip_hash.clone())
+        .build();
+    let get_blocks_proof_message = packed::LightClientMessage::new_builder()
+        .set(content.clone())
+        .build()
+        .as_bytes();
+    let content = packed::GetBlocks::new_builder()
+        .block_hashes(vec![proved_block_hash].pack())
+        .build();
+    let get_blocks_message = packed::SyncMessage::new_builder()
+        .set(content.clone())
+        .build()
+        .as_bytes();
+    assert_eq!(
+        nc.sent_messages().borrow().clone(),
+        vec![
+            (
+                SupportProtocols::LightClient.protocol_id(),
+                peer_index,
+                get_blocks_proof_message,
+            ),
+            (
+                SupportProtocols::Sync.protocol_id(),
+                peer_index,
+                get_blocks_message,
+            )
+        ]
+    );
 }

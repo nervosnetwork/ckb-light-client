@@ -16,6 +16,7 @@ use ckb_types::{
     prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader,
 };
+
 use faketime::unix_time_as_millis;
 use log::{debug, error, info, trace, warn};
 
@@ -36,8 +37,9 @@ use super::{
     BAD_MESSAGE_BAN_TIME,
 };
 
-use crate::protocols::LAST_N_BLOCKS;
+use crate::protocols::{GET_BLOCKS_PROOF_LIMIT, GET_TRANSACTIONS_PROOF_LIMIT, LAST_N_BLOCKS};
 use crate::storage::Storage;
+use crate::utils::network::prove_or_download_matched_blocks;
 
 pub struct LightClientProtocol {
     storage: Storage,
@@ -59,6 +61,10 @@ impl CKBProtocolHandler for LightClientProtocol {
             (
                 constant::FETCH_HEADER_TX_DURATION,
                 constant::FETCH_HEADER_TX_TOKEN,
+            ),
+            (
+                constant::GET_IDLE_BLOCKS_DURATION,
+                constant::GET_IDLE_BLOCKS_TOKEN,
             ),
         ] {
             nc.set_notify(duration, token)
@@ -128,6 +134,9 @@ impl CKBProtocolHandler for LightClientProtocol {
             }
             constant::FETCH_HEADER_TX_TOKEN => {
                 self.fetch_headers_txs(nc.as_ref());
+            }
+            constant::GET_IDLE_BLOCKS_TOKEN => {
+                self.get_idle_blocks(nc.as_ref());
             }
             _ => unreachable!(),
         }
@@ -416,6 +425,18 @@ impl LightClientProtocol {
         }
     }
 
+    fn get_idle_blocks(&mut self, nc: &dyn CKBProtocolContext) {
+        let tip_header = self.storage.get_tip_header();
+        let matched_blocks = self.peers.matched_blocks().read().expect("poisoned");
+        prove_or_download_matched_blocks(
+            Arc::clone(&self.peers),
+            &tip_header,
+            &matched_blocks,
+            nc,
+            self.init_blocks_in_transit_per_peer(),
+        );
+    }
+
     fn fetch_headers_txs(&mut self, nc: &dyn CKBProtocolContext) {
         if self.peers.fetching_headers().is_empty() && self.peers.fetching_txs().is_empty() {
             trace!("no fetching headers/transactions needed");
@@ -423,15 +444,7 @@ impl LightClientProtocol {
         }
 
         let tip_header = self.storage.get_tip_header();
-        let best_peers: Vec<PeerIndex> = self
-            .peers
-            .get_peers_which_are_proved()
-            .into_iter()
-            .filter(|(_, prove_state)| {
-                prove_state.get_last_header().header().data().as_slice() == tip_header.as_slice()
-            })
-            .map(|(peer_index, _)| peer_index)
-            .collect();
+        let best_peers: Vec<PeerIndex> = self.peers.get_best_proved_peers(&tip_header);
         if best_peers.is_empty() {
             debug!("no peers found for fetch headers and transactions");
             return;
@@ -442,7 +455,7 @@ impl LightClientProtocol {
         for block_hashes in self
             .peers
             .get_headers_to_fetch()
-            .chunks(constant::GET_BLOCKS_PROOF_LIMIT)
+            .chunks(GET_BLOCKS_PROOF_LIMIT)
         {
             if let Some(peer) = best_peers.iter().find(|peer| {
                 self.peers
@@ -450,39 +463,40 @@ impl LightClientProtocol {
                     .map(|peer_state| peer_state.get_blocks_proof_request().is_none())
                     .unwrap_or(false)
             }) {
-                trace!("send block proof request to peer: {}", peer);
+                let hashes: Vec<_> = block_hashes.iter().map(|hash| hash.pack()).collect();
+                debug!("send block proof request to peer: {}", peer);
                 let content = packed::GetBlocksProof::new_builder()
-                    .block_hashes(block_hashes.iter().map(|hash| hash.pack()).pack())
+                    .block_hashes(hashes.pack())
                     .last_hash(last_hash.clone())
                     .build();
                 let message = packed::LightClientMessage::new_builder()
                     .set(content.clone())
-                    .build();
+                    .build()
+                    .as_bytes();
 
-                if let Err(err) = nc.send_message(
-                    SupportProtocols::LightClient.protocol_id(),
-                    *peer,
-                    message.as_bytes(),
-                ) {
+                self.peers.update_blocks_proof_request(*peer, Some(content));
+                if let Err(err) =
+                    nc.send_message(SupportProtocols::LightClient.protocol_id(), *peer, message)
+                {
                     let error_message =
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
-                } else {
-                    self.peers
-                        .update_blocks_proof_request(*peer, Some((content, false)));
                 }
                 for block_hash in block_hashes {
                     if let Some(mut value) = self.peers.fetching_headers().get_mut(block_hash) {
                         value.1 = now;
                     }
                 }
+            } else {
+                debug!("all valid peers are busy for fetching blocks proof (headers)");
+                break;
             }
         }
 
         for tx_hashes in self
             .peers
             .get_txs_to_fetch()
-            .chunks(constant::GET_TRANSACTIONS_PROOF_LIMIT)
+            .chunks(GET_TRANSACTIONS_PROOF_LIMIT)
         {
             if let Some(peer) = best_peers.iter().find(|peer| {
                 self.peers
@@ -490,7 +504,7 @@ impl LightClientProtocol {
                     .map(|peer_state| peer_state.get_txs_proof_request().is_none())
                     .unwrap_or(false)
             }) {
-                trace!("send transaction proof request to peer: {}", peer);
+                debug!("send transaction proof request to peer: {}", peer);
                 let content = packed::GetTransactionsProof::new_builder()
                     .tx_hashes(tx_hashes.iter().map(|hash| hash.pack()).pack())
                     .last_hash(last_hash.clone())
@@ -499,6 +513,7 @@ impl LightClientProtocol {
                     .set(content.clone())
                     .build();
 
+                self.peers.update_txs_proof_request(*peer, Some(content));
                 if let Err(err) = nc.send_message(
                     SupportProtocols::LightClient.protocol_id(),
                     *peer,
@@ -507,14 +522,15 @@ impl LightClientProtocol {
                     let error_message =
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
-                } else {
-                    self.peers.update_txs_proof_request(*peer, Some(content));
                 }
                 for tx_hash in tx_hashes {
                     if let Some(mut value) = self.peers.fetching_txs().get_mut(tx_hash) {
                         value.1 = now;
                     }
                 }
+            } else {
+                debug!("all valid peers are busy for fetching transactions");
+                break;
             }
         }
     }

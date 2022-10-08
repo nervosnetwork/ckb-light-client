@@ -1,6 +1,8 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
+use crate::utils::network::prove_or_download_matched_blocks;
+use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
 use golomb_coded_set::{GCSFilterReader, SipHasher24Builder, M, P};
@@ -111,6 +113,24 @@ impl FilterProtocol {
             _ => StatusCode::UnexpectedProtocolMessage.into(),
         }
     }
+
+    pub(crate) fn send_get_block_filters(
+        &self,
+        nc: Arc<dyn CKBProtocolContext + Sync>,
+        peer: PeerIndex,
+        start_number: u64,
+    ) {
+        let content = packed::GetBlockFilters::new_builder()
+            .start_number(start_number.pack())
+            .build();
+        let message = packed::BlockFilterMessage::new_builder()
+            .set(content)
+            .build();
+        if let Err(err) = nc.send_message_to(peer, message.as_bytes()) {
+            let error_message = format!("nc.send_message BlockFilterMessage, error: {:?}", err);
+            error!("{}", error_message);
+        }
+    }
 }
 
 #[async_trait]
@@ -179,9 +199,8 @@ impl CKBProtocolHandler for FilterProtocol {
     async fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
         match token {
             GET_BLOCK_FILTERS_TOKEN => {
-                if let Some((peer, prove_state)) = self
-                    .peers
-                    .get_peers_which_are_proved()
+                let proved_peers = self.peers.get_peers_which_are_proved();
+                if let Some((peer, prove_state)) = proved_peers
                     .iter()
                     .max_by_key(|(_, prove_state)| prove_state.get_last_header().total_difficulty())
                 {
@@ -193,20 +212,34 @@ impl CKBProtocolHandler for FilterProtocol {
                         start_number,
                         prove_state.get_last_header().header().number()
                     );
-                    if self.pending_peer.should_ask() && prove_state_number >= start_number {
-                        let content = packed::GetBlockFilters::new_builder()
-                            .start_number(start_number.pack())
-                            .build();
 
-                        let message = packed::BlockFilterMessage::new_builder()
-                            .set(content)
-                            .build();
-
-                        if let Err(err) = nc.send_message_to(*peer, message.as_bytes()) {
-                            let error_message =
-                                format!("nc.send_message BlockFilterMessage, error: {:?}", err);
-                            error!("{}", error_message);
+                    let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
+                    if let Some((start_number, blocks_count, blocks)) =
+                        self.pending_peer.storage.get_earliest_matched_blocks()
+                    {
+                        if matched_blocks.is_empty() {
+                            debug!(
+                                "recover matched blocks from storage, start_number={}, blocks_count={}, matched_count: {}",
+                                start_number, blocks_count,
+                                matched_blocks.len(),
+                            );
+                            // recover matched blocks from storage
+                            self.peers.add_matched_blocks(&mut matched_blocks, blocks);
+                            let tip_header = self.pending_peer.storage.get_tip_header();
+                            prove_or_download_matched_blocks(
+                                Arc::clone(&self.peers),
+                                &tip_header,
+                                &matched_blocks,
+                                nc.as_ref(),
+                                INIT_BLOCKS_IN_TRANSIT_PER_PEER,
+                            );
                         }
+                    } else if self.pending_peer.should_ask() && prove_state_number >= start_number {
+                        debug!(
+                            "send get block filters to {}, start_number={}",
+                            peer, start_number
+                        );
+                        self.send_get_block_filters(Arc::clone(&nc), *peer, start_number);
                     }
                 } else {
                     debug!("cannot find peers which are proved");

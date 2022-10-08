@@ -13,7 +13,7 @@ use ckb_types::{
     },
     U256,
 };
-use log::{error, trace, warn};
+use log::{debug, error, trace, warn};
 
 use super::super::{
     peers::ProveRequest, prelude::*, LastState, LightClientProtocol, ProveState, Status, StatusCode,
@@ -197,7 +197,7 @@ impl<'a> SendLastStateProofProcess<'a> {
             self.protocol.commit_prove_state(self.peer, prove_state);
         }
 
-        trace!("block proof verify passed");
+        debug!("block proof verify passed for peer: {}", self.peer);
         Status::ok()
     }
 }

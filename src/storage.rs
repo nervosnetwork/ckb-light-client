@@ -21,6 +21,7 @@ use crate::protocols::Peers;
 const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
+const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";
 
 #[derive(Clone)]
 pub struct Storage {
@@ -231,6 +232,69 @@ impl Storage {
                 (total_difficulty, header)
             })
             .expect("tip header should be inited")
+    }
+
+    /// when all blocks downloaded and inserted into storage call this function.
+    ///
+    /// # Panics
+    ///  when given start_number is not the smallest in storage
+    pub fn remove_matched_blocks(&self, start_number: u64) {
+        let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
+        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+        let earliest_start_number = self
+            .db
+            .iterator(mode)
+            .take_while(|(key, _value)| key.starts_with(&key_prefix))
+            .map(|(key, _)| {
+                u64::from_be_bytes(key[key_prefix.len()..].try_into().expect("start_number"))
+            })
+            .next()
+            .expect("storage matched blocks exists");
+        assert_eq!(start_number, earliest_start_number);
+
+        let mut key = key_prefix.clone();
+        key.extend(start_number.to_be_bytes());
+        self.db.delete(&key).expect("delete matched blocks");
+    }
+
+    /// the matched blocks must not empty
+    pub fn add_matched_blocks(
+        &self,
+        start_number: u64,
+        blocks_count: u64,
+        // (block-hash, proved)
+        matched_blocks: Vec<(Byte32, bool)>,
+    ) {
+        assert!(!matched_blocks.is_empty());
+        let mut key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
+        key.extend(start_number.to_be_bytes());
+
+        let mut value = blocks_count.to_le_bytes().to_vec();
+        for (block_hash, proved) in matched_blocks {
+            value.extend(block_hash.as_slice());
+            let proved_value: u8 = if proved { 1 } else { 0 };
+            value.push(proved_value);
+        }
+        self.db
+            .put(key, &value)
+            .expect("db put matched blocks should be ok");
+    }
+
+    #[allow(clippy::type_complexity)]
+    pub fn get_earliest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+        let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
+        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+        self.db
+            .iterator(mode)
+            .take_while(|(key, _value)| key.starts_with(&key_prefix))
+            .map(|(key, value)| {
+                let mut u64_bytes = [0u8; 8];
+                u64_bytes.copy_from_slice(&key[key_prefix.len()..]);
+                let start_number = u64::from_be_bytes(u64_bytes);
+                let (blocks_count, blocks) = parse_matched_blocks(&value);
+                (start_number, blocks_count, blocks)
+            })
+            .next()
     }
 
     pub fn get_tip_header(&self) -> Header {
@@ -818,6 +882,24 @@ fn append_key(
     encoded.extend_from_slice(&block_number.to_be_bytes());
     encoded.extend_from_slice(&tx_index.to_be_bytes());
     encoded.extend_from_slice(&io_index.to_be_bytes());
+}
+
+fn parse_matched_blocks(data: &[u8]) -> (u64, Vec<(Byte32, bool)>) {
+    let mut u64_bytes = [0u8; 8];
+    u64_bytes.copy_from_slice(&data[0..8]);
+    let blocks_count = u64::from_le_bytes(u64_bytes);
+    assert!((data.len() - 8) % 33 == 0);
+    let matched_len = (data.len() - 8) / 33;
+    let matched_blocks = (0..matched_len)
+        .map(|i| {
+            let offset = 8 + i * 33;
+            let part = &data[offset..offset + 32];
+            let hash = packed::Byte32Reader::from_slice_should_be_ok(part).to_entity();
+            let proved = data[offset + 32] == 1;
+            (hash, proved)
+        })
+        .collect::<Vec<_>>();
+    (blocks_count, matched_blocks)
 }
 
 // a helper fn extracts script fields raw data

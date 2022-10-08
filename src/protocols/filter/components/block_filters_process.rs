@@ -1,15 +1,18 @@
 use crate::protocols::FilterProtocol;
 use crate::protocols::{Status, StatusCode};
-use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
+use crate::utils::network::prove_or_download_matched_blocks;
+use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
+use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::core::BlockNumber;
 use ckb_types::{packed, prelude::*};
-use log::{error, info, trace, warn};
+use log::{info, trace, warn};
+use rand::seq::SliceRandom;
 use std::sync::Arc;
 
 pub struct BlockFiltersProcess<'a> {
     message: packed::BlockFiltersReader<'a>,
     filter: &'a FilterProtocol,
-    nc: Arc<dyn CKBProtocolContext>,
+    nc: Arc<dyn CKBProtocolContext + Sync>,
     peer: PeerIndex,
 }
 
@@ -17,7 +20,7 @@ impl<'a> BlockFiltersProcess<'a> {
     pub fn new(
         message: packed::BlockFiltersReader<'a>,
         filter: &'a FilterProtocol,
-        nc: Arc<dyn CKBProtocolContext>,
+        nc: Arc<dyn CKBProtocolContext + Sync>,
         peer: PeerIndex,
     ) -> Self {
         Self {
@@ -82,96 +85,64 @@ impl<'a> BlockFiltersProcess<'a> {
                 return Status::ok();
             }
             let limit = (prove_state_block_number - start_number + 1) as usize;
-            let mut possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
+            let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
             let possible_match_blocks_len = possible_match_blocks.len();
             trace!(
                 "peer {}, matched blocks: {}",
                 self.peer,
                 possible_match_blocks_len
             );
+            let actual_blocks_count = blocks_count.min(limit);
+            let tip_header = self.filter.pending_peer.storage.get_tip_header();
             if possible_match_blocks_len != 0 {
-                if peer_state.get_blocks_proof_request().is_some() {
-                    warn!("peer {} has an inflight GetBlocksProof request", self.peer);
-                } else {
-                    // if the only matched block is the prove state block, then request block data directly
-                    possible_match_blocks
-                        .retain(|block_hash| block_hash != &prove_state_block_hash);
-                    if possible_match_blocks.is_empty() {
-                        let content = packed::GetBlocks::new_builder()
-                            .block_hashes(vec![prove_state_block_hash].pack())
-                            .build();
-                        let message = packed::SyncMessage::new_builder().set(content).build();
-
-                        if let Err(err) = self.nc.send_message(
-                            SupportProtocols::Sync.protocol_id(),
-                            self.peer,
-                            message.as_bytes(),
-                        ) {
-                            let error_message =
-                                format!("nc.send_message SyncMessage, error: {:?}", err);
-                            error!("{}", error_message);
-                            return StatusCode::Network.with_context(error_message);
-                        }
-                    } else {
-                        let fetch_tip = possible_match_blocks_len != possible_match_blocks.len();
-
-                        if peer_state
-                            .get_blocks_proof_request()
-                            .map(|req| {
-                                req.is_same_as(&prove_state_block_hash, &possible_match_blocks)
-                            })
-                            .unwrap_or(false)
-                        {
-                            trace!("already sent block proof request to peer: {}", self.peer);
-                        } else {
-                            trace!("send block proof request to peer: {}", self.peer);
-                            let content = packed::GetBlocksProof::new_builder()
-                                .block_hashes(possible_match_blocks.pack())
-                                .last_hash(prove_state_block_hash)
-                                .build();
-                            let message = packed::LightClientMessage::new_builder()
-                                .set(content.clone())
-                                .build();
-
-                            if let Err(err) = self.nc.send_message(
-                                SupportProtocols::LightClient.protocol_id(),
-                                self.peer,
-                                message.as_bytes(),
-                            ) {
-                                let error_message =
-                                    format!("nc.send_message LightClientMessage, error: {:?}", err);
-                                error!("{}", error_message);
-                                return StatusCode::Network.with_context(error_message);
-                            } else {
-                                self.filter.peers.update_blocks_proof_request(
-                                    self.peer,
-                                    Some((content, fetch_tip)),
-                                );
-                            }
-                        }
+                let mut matched_blocks = self
+                    .filter
+                    .peers
+                    .matched_blocks()
+                    .write()
+                    .expect("poisoned");
+                let blocks = possible_match_blocks
+                    .iter()
+                    .map(|block_hash| (block_hash.clone(), block_hash == &prove_state_block_hash))
+                    .collect::<Vec<_>>();
+                self.filter.pending_peer.storage.add_matched_blocks(
+                    start_number,
+                    actual_blocks_count as u64,
+                    blocks,
+                );
+                if matched_blocks.is_empty() {
+                    if let Some((_start_number, _blocks_count, db_blocks)) = self
+                        .filter
+                        .pending_peer
+                        .storage
+                        .get_earliest_matched_blocks()
+                    {
+                        self.filter
+                            .peers
+                            .add_matched_blocks(&mut matched_blocks, db_blocks);
+                        prove_or_download_matched_blocks(
+                            Arc::clone(&self.filter.peers),
+                            &tip_header,
+                            &matched_blocks,
+                            self.nc.as_ref(),
+                            INIT_BLOCKS_IN_TRANSIT_PER_PEER,
+                        );
                     }
                 }
             }
-
-            let filtered_block_number = start_number - 1 + blocks_count.min(limit) as BlockNumber;
+            let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
             pending_peer.update_block_number(filtered_block_number);
-            // send next batch GetBlockFilters message to peer
-            {
-                let content = packed::GetBlockFilters::new_builder()
-                    .start_number((filtered_block_number + 1).pack())
-                    .build();
-
-                let message = packed::BlockFilterMessage::new_builder()
-                    .set(content)
-                    .build();
-
-                if let Err(err) = self.nc.send_message_to(self.peer, message.as_bytes()) {
-                    let error_message =
-                        format!("nc.send_message BlockFilterMessage, error: {:?}", err);
-                    error!("{}", error_message);
-                    return StatusCode::Network.with_context(error_message);
-                }
-            }
+            // send next batch GetBlockFilters message to a random best peer
+            let best_peers: Vec<_> = self.filter.peers.get_best_proved_peers(&tip_header);
+            let next_peer = best_peers
+                .into_iter()
+                .filter(|peer| *peer != self.peer)
+                .collect::<Vec<_>>()
+                .choose(&mut rand::thread_rng())
+                .cloned()
+                .unwrap_or(self.peer);
+            self.filter
+                .send_get_block_filters(self.nc, next_peer, filtered_block_number + 1);
         }
         Status::ok()
     }
