@@ -208,6 +208,7 @@ pub(crate) trait RunningChainExt: ChainExt {
         &self,
         last_num: BlockNumber,
         block_nums: &[BlockNumber],
+        missing_block_hashes: &[packed::Byte32],
     ) -> packed::GetBlocksProof {
         let snapshot = self.shared().snapshot();
         let last_header = snapshot
@@ -221,6 +222,7 @@ pub(crate) trait RunningChainExt: ChainExt {
                     .expect("block stored")
                     .hash()
             })
+            .chain(missing_block_hashes.iter().map(ToOwned::to_owned))
             .collect::<Vec<_>>();
         packed::GetBlocksProof::new_builder()
             .last_hash(last_header.hash())

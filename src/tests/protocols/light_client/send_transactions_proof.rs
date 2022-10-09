@@ -29,6 +29,8 @@ async fn test_send_txs_proof_ok() {
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
     let peer_index = PeerIndex::new(3);
 
+    let missing_tx_hashes = vec![h256!("0x1").pack(), h256!("0x2").pack()];
+
     chain.mine_to(20);
     let tx_hashes: Vec<_> = [13, 15, 17]
         .into_iter()
@@ -124,6 +126,7 @@ async fn test_send_txs_proof_ok() {
             .last_header(last_header.clone())
             .proof(proof.pack())
             .filtered_blocks(items)
+            .missing_tx_hashes(missing_tx_hashes.clone().pack())
             .build();
         packed::LightClientMessage::new_builder()
             .set(content)
@@ -140,7 +143,14 @@ async fn test_send_txs_proof_ok() {
         peers.commit_prove_state(peer_index, prove_state);
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
-            .tx_hashes(tx_hashes.clone().pack())
+            .tx_hashes(
+                tx_hashes
+                    .clone()
+                    .into_iter()
+                    .chain(missing_tx_hashes.into_iter())
+                    .collect::<Vec<_>>()
+                    .pack(),
+            )
             .build();
         peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
         peers

@@ -53,7 +53,10 @@ impl<'a> SendBlocksProofProcess<'a> {
 
         // Update the last state if the response contains a new one.
         if original_request.last_hash() != last_header.header().hash() {
-            if self.message.proof().is_empty() && self.message.headers().is_empty() {
+            if self.message.proof().is_empty()
+                && self.message.headers().is_empty()
+                && self.message.missing_block_hashes().is_empty()
+            {
                 return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
                 self.protocol
                     .peers()
@@ -79,7 +82,13 @@ impl<'a> SendBlocksProofProcess<'a> {
                 .iter()
                 .map(|header| header.hash())
                 .collect::<Vec<_>>();
-            if !original_request.is_same_as(&last_header.header().hash(), &received_block_hashes) {
+            let missing_block_hashes = self
+                .message
+                .missing_block_hashes()
+                .to_entity()
+                .into_iter()
+                .collect::<Vec<_>>();
+            if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
                 error!("peer {} send an unknown proof", self.peer);
                 return StatusCode::UnexpectedResponse.into();
             }
