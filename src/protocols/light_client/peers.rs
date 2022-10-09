@@ -199,6 +199,10 @@ impl BlocksProofRequest {
         Self { content, when_sent }
     }
 
+    pub(crate) fn last_hash(&self) -> packed::Byte32 {
+        self.content.last_hash()
+    }
+
     pub(crate) fn block_hashes(&self) -> Vec<H256> {
         self.content
             .block_hashes()
@@ -237,6 +241,10 @@ impl BlocksRequest {
 impl TransactionsProofRequest {
     fn new(content: packed::GetTransactionsProof, when_sent: u64) -> Self {
         Self { content, when_sent }
+    }
+
+    pub(crate) fn last_hash(&self) -> packed::Byte32 {
+        self.content.last_hash()
     }
 
     pub(crate) fn tx_hashes(&self) -> Vec<H256> {

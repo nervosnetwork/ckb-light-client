@@ -54,11 +54,16 @@ impl<'a> SendTransactionsProofProcess<'a> {
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
 
         // Update the last state if the response contains a new one.
-        if self.message.proof().is_empty() {
-            debug!("proof is empty");
-            return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
-            self.protocol.peers().mark_fetching_txs_timeout(self.peer);
-            return Status::ok();
+        if original_request.last_hash() != last_header.header().hash() {
+            if self.message.proof().is_empty() && self.message.filtered_blocks().is_empty() {
+                return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
+                self.protocol.peers().mark_fetching_txs_timeout(self.peer);
+                return Status::ok();
+            } else {
+                // Since the last state is different, then no data should be contained.
+                error!("peer {} send a proof with different last state", self.peer);
+                return StatusCode::UnexpectedResponse.into();
+            }
         }
 
         let filtered_blocks: Vec<packed::FilteredBlock> = self
