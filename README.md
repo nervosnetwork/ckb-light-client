@@ -135,6 +135,24 @@ Returns the header with the highest block number in the canonical chain
 curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "get_tip_header", "params": [], "id": 1}'
 ```
 
+### `get_genesis_block`
+
+Returns the genesis block
+
+#### Parameters
+
+    null
+
+#### Returns
+
+    block - BlockView
+
+#### Examples
+
+```
+curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method": "get_genesis_block", "params": [], "id": 1}'
+```
+
 ### `get_header`
 
 Returns the information about a block header by hash.
