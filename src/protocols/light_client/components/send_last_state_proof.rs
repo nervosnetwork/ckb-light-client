@@ -1,4 +1,4 @@
-use std::cmp::Ordering;
+use std::{cmp::Ordering, fmt};
 
 use ckb_constant::consensus::TAU;
 use ckb_merkle_mountain_range::{leaf_index_to_mmr_size, leaf_index_to_pos};
@@ -13,7 +13,7 @@ use ckb_types::{
     },
     U256,
 };
-use log::{debug, error, trace, warn};
+use log::{debug, error, log_enabled, trace, warn, Level};
 
 use super::super::{
     peers::ProveRequest, prelude::*, LastState, LightClientProtocol, ProveState, Status, StatusCode,
@@ -458,6 +458,30 @@ impl EpochDifficultyTrendDetails {
     }
 }
 
+struct TotalDifficulties {
+    parent: U256,
+    current: U256,
+}
+
+impl fmt::Display for TotalDifficulties {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "[{:#x}, {:#x}]", self.parent, self.current)
+    }
+}
+
+macro_rules! trace_sample {
+    ($difficulty:ident, $number:ident, $total_diff:ident, $state:literal, $action:literal) => {
+        trace!(
+            "difficulty sample {:#x} {} block {} ({}) {}",
+            $difficulty,
+            $state,
+            $number,
+            $total_diff,
+            $action
+        );
+    };
+}
+
 // Check if the response is matched the last request.
 // - Check reorg blocks if there has any.
 // - Check the difficulties.
@@ -536,6 +560,10 @@ pub(crate) fn check_if_response_is_matched(
         let first_last_n_total_difficulty: U256 =
             headers[reorg_count + sampled_count].total_difficulty();
 
+        if log_enabled!(Level::Trace) {
+            output_debug_messages(prev_request, headers, &first_last_n_total_difficulty);
+        }
+
         let mut difficulties: Vec<U256> = prev_request
             .difficulties()
             .into_iter()
@@ -545,61 +573,75 @@ pub(crate) fn check_if_response_is_matched(
 
         for item in &headers[reorg_count..reorg_count + sampled_count] {
             let header = item.header();
+            let num = header.number();
 
-            let total_difficulty_lhs: U256 = item.parent_chain_root().total_difficulty().unpack();
-            let total_difficulty_rhs = item.total_difficulty();
+            let total_diff = TotalDifficulties {
+                parent: item.parent_chain_root().total_difficulty().unpack(),
+                current: item.total_difficulty(),
+            };
 
             let mut is_valid = false;
             // Total difficulty for any sampled blocks should be valid.
-            while let Some(curr_difficulty) = difficulties.first().cloned() {
+            while let Some(diff) = difficulties.first().cloned() {
                 if is_valid {
-                    if curr_difficulty <= total_difficulty_rhs {
+                    if diff <= total_diff.current {
                         // Current difficulty has same sample as previous difficulty,
                         // and the sample is current block.
+                        trace_sample!(diff, num, total_diff, "in", "skipped");
                         difficulties.remove(0);
                         continue;
                     } else {
+                        trace_sample!(diff, num, total_diff, ">>", "unsure");
                         break;
                     }
-                } else if total_difficulty_lhs < curr_difficulty
-                    && curr_difficulty <= total_difficulty_rhs
-                {
+                } else if total_diff.parent < diff && diff <= total_diff.current {
                     // Current difficulty has one sample, and the sample is current block.
+                    trace_sample!(diff, num, total_diff, "in", "found");
                     difficulties.remove(0);
                     is_valid = true;
                 } else {
+                    trace_sample!(diff, num, total_diff, "??", "invalid");
                     break;
                 }
             }
 
             if !is_valid {
                 error!(
-                    "failed: total difficulty is not valid for sampled block#{}, \
-                    hash is {:#x}, difficulty range is [{:#x},{:#x}].",
+                    "failed: block {} (hash: {:#x}) is not a valid sample, \
+                    its total-difficulties is {}.",
                     header.number(),
                     header.hash(),
-                    total_difficulty_lhs,
-                    total_difficulty_rhs,
+                    total_diff,
                 );
                 return Err(StatusCode::InvalidSamples.into());
             }
         }
 
         if !difficulties.is_empty() {
+            for diff in &difficulties {
+                debug!("difficulty sample {:#x} has no matched blocks", diff);
+            }
             let next_difficulty = difficulties
                 .first()
                 .cloned()
                 .expect("checked: difficulties is not empty");
-            let last_sampled_number = headers[reorg_count + sampled_count - 1].header().number();
-            let first_last_n_number = headers[reorg_count + sampled_count].header().number();
-            if last_sampled_number + 1 != first_last_n_number {
+            let last_sampled_header = &headers[reorg_count + sampled_count - 1];
+            let first_last_n_header = &headers[reorg_count + sampled_count];
+            let previous_total_diff_before_last_n: U256 = first_last_n_header
+                .parent_chain_root()
+                .total_difficulty()
+                .unpack();
+            if last_sampled_header.header().number() + 1 != first_last_n_header.header().number() {
                 error!(
-                    "failed: there should at least exist a block between \
-                    numbers ({},{}) whose total difficulty in [{:#x},{:#x}).",
-                    last_sampled_number,
-                    first_last_n_number,
-                    next_difficulty,
-                    first_last_n_total_difficulty
+                    "failed: there should at least exist one block between \
+                    numbers {} and {} (difficulties: {:#x}, ..., {:#x}, {:#x}), \
+                    next difficulty sample is {:#x}",
+                    last_sampled_header.header().number(),
+                    first_last_n_header.header().number(),
+                    last_sampled_header.total_difficulty(),
+                    previous_total_diff_before_last_n,
+                    first_last_n_header.total_difficulty(),
+                    next_difficulty
                 );
                 return Err(StatusCode::InvalidSamples.into());
             }
@@ -607,6 +649,70 @@ pub(crate) fn check_if_response_is_matched(
     }
 
     Ok((reorg_count, sampled_count, last_n_count))
+}
+
+fn output_debug_messages(
+    prev_request: &packed::GetLastStateProof,
+    headers: &[VerifiableHeader],
+    last_n_start: &U256,
+) {
+    let mut difficulties = prev_request
+        .difficulties()
+        .into_iter()
+        .map(|item| item.unpack())
+        .peekable();
+    let mut headers = headers.iter().peekable();
+
+    let mut checked_last_n_start = false;
+    let mut checked_boundary = false;
+    let boundary: U256 = prev_request.difficulty_boundary().unpack();
+
+    loop {
+        match (difficulties.peek(), headers.peek()) {
+            (Some(ref d), Some(h)) => {
+                let total_diff = h.total_difficulty();
+                let number = h.header().number();
+                if **d <= total_diff {
+                    debug!("----- ---------  difficulty {:#x}", d);
+                    let _ = difficulties.next();
+                } else {
+                    if !checked_boundary && boundary <= total_diff {
+                        checked_boundary = true;
+                        debug!("##### #########  boundary   {:#x}", boundary);
+                    }
+                    if !checked_last_n_start && *last_n_start <= total_diff {
+                        checked_last_n_start = true;
+                        debug!("##### #########  last-n     {:#x}", last_n_start);
+                    }
+                    debug!("block {:9}: difficulty {:#x}", number, total_diff);
+                    let _ = headers.next();
+                }
+                continue;
+            }
+            (Some(_), None) => {
+                for d in difficulties {
+                    debug!("----- ---------  difficulty {:#x}", d);
+                }
+            }
+            (None, Some(_)) => {
+                for h in headers {
+                    let total_diff = h.total_difficulty();
+                    let number = h.header().number();
+                    if !checked_boundary && boundary <= total_diff {
+                        checked_boundary = true;
+                        debug!("##### #########  boundary   {:#x}", boundary);
+                    }
+                    if !checked_last_n_start && *last_n_start <= total_diff {
+                        checked_last_n_start = true;
+                        debug!("##### #########  last-n     {:#x}", last_n_start);
+                    }
+                    debug!("block {:9}: difficulty {:#x}", number, total_diff);
+                }
+            }
+            (None, None) => {}
+        }
+        break;
+    }
 }
 
 pub(crate) fn verify_tau(

@@ -481,6 +481,122 @@ async fn valid_proof_with_boundary_in_last_n() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn valid_proof_with_no_matched_sample() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(3);
+
+    let num = 20;
+    chain.mine_to(20);
+
+    let snapshot = chain.shared().snapshot();
+
+    let sampled_numbers = vec![3, 7, 11];
+    let boundary_number = num - protocol.last_n_blocks() + 1;
+    let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+
+    // Setup the test fixture.
+    {
+        let prove_request = {
+            let last_header: VerifiableHeader = snapshot
+                .get_verifiable_header_by_number(num)
+                .expect("block stored")
+                .into();
+            let content = {
+                let start_header = snapshot.get_header_by_number(0).expect("block stored");
+                let difficulties = {
+                    let u256_one = &U256::from(1u64);
+                    let total_diffs = (0..num)
+                        .into_iter()
+                        .map(|num| snapshot.get_total_difficulty_by_number(num).unwrap())
+                        .collect::<Vec<_>>();
+                    let mut difficulties = Vec::new();
+                    for n in &sampled_numbers {
+                        let n = *n as usize;
+                        difficulties.push(&total_diffs[n - 1] + u256_one);
+                        difficulties.push(&total_diffs[n] - u256_one);
+                        difficulties.push(total_diffs[n].to_owned());
+                    }
+                    let last_not_sampled_number = first_last_n_number as usize - 1;
+                    difficulties.push(&total_diffs[last_not_sampled_number] + u256_one);
+                    difficulties.sort();
+                    difficulties.dedup();
+                    difficulties.into_iter().map(|diff| diff.pack())
+                };
+                let difficulty_boundary = snapshot
+                    .get_total_difficulty_by_number(boundary_number)
+                    .unwrap();
+                packed::GetLastStateProof::new_builder()
+                    .last_hash(last_header.header().hash())
+                    .start_hash(start_header.hash())
+                    .start_number(start_header.number().pack())
+                    .last_n_blocks(protocol.last_n_blocks().pack())
+                    .difficulty_boundary(difficulty_boundary.pack())
+                    .difficulties(difficulties.pack())
+                    .build()
+            };
+            let last_state = LastState::new(last_header);
+            ProveRequest::new(last_state, content)
+        };
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let headers = sampled_numbers
+                .iter()
+                .map(|n| *n as BlockNumber)
+                .filter(|n| *n < first_last_n_number)
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        // TODO waiting for a fix
+        assert!(nc.banned_since(peer_index, StatusCode::InvalidSamples));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn valid_proof_with_prove_state() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
