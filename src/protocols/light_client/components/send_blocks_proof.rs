@@ -31,6 +31,14 @@ impl<'a> SendBlocksProofProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
+        let status = self.execute_internally();
+        self.protocol
+            .peers()
+            .update_blocks_proof_request(self.peer, None);
+        status
+    }
+
+    fn execute_internally(&self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
         let original_request = if let Some(original_request) = peer_state.get_blocks_proof_request()
@@ -46,9 +54,6 @@ impl<'a> SendBlocksProofProcess<'a> {
         // Update the last state if the response contains a new one.
         if self.message.proof().is_empty() {
             return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
-            self.protocol
-                .peers()
-                .update_blocks_proof_request(self.peer, None);
             self.protocol
                 .peers()
                 .mark_fetching_headers_timeout(self.peer);
@@ -152,9 +157,6 @@ impl<'a> SendBlocksProofProcess<'a> {
         for header in headers {
             self.protocol.peers().add_header(header);
         }
-        self.protocol
-            .peers()
-            .update_blocks_proof_request(self.peer, None);
         Status::ok()
     }
 }

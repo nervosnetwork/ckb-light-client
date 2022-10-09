@@ -34,6 +34,14 @@ impl<'a> SendTransactionsProofProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
+        let status = self.execute_internally();
+        self.protocol
+            .peers()
+            .update_txs_proof_request(self.peer, None);
+        status
+    }
+
+    fn execute_internally(&self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
         let original_request = if let Some(original_request) = peer_state.get_txs_proof_request() {
@@ -49,9 +57,6 @@ impl<'a> SendTransactionsProofProcess<'a> {
         if self.message.proof().is_empty() {
             debug!("proof is empty");
             return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
-            self.protocol
-                .peers()
-                .update_txs_proof_request(self.peer, None);
             self.protocol.peers().mark_fetching_txs_timeout(self.peer);
             return Status::ok();
         }
@@ -127,9 +132,6 @@ impl<'a> SendTransactionsProofProcess<'a> {
                     .add_transaction(tx.into_view(), header.clone());
             }
         }
-        self.protocol
-            .peers()
-            .update_txs_proof_request(self.peer, None);
         Status::ok()
     }
 }
