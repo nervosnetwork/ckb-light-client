@@ -160,10 +160,11 @@ async fn test_send_txs_proof_ok() {
     assert!(nc.banned_peers().borrow().is_empty());
     assert!(nc.sent_messages().borrow().is_empty());
     assert_eq!(
-        peers
-            .fetched_txs()
+        chain
+            .client_storage()
+            .get_fetched_txs()
             .iter()
-            .map(|pair| pair.key().pack())
+            .map(|(tx, _)| tx.calc_tx_hash())
             .collect::<HashSet<_>>(),
         tx_hashes.into_iter().collect()
     );
@@ -306,7 +307,7 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
 
     assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
     assert!(nc.sent_messages().borrow().is_empty());
-    assert!(peers.fetched_txs().is_empty());
+    assert!(chain.client_storage().get_fetched_txs().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -454,7 +455,7 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
 
     assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
     assert!(nc.sent_messages().borrow().is_empty());
-    assert!(peers.fetched_txs().is_empty());
+    assert!(chain.client_storage().get_fetched_txs().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -524,9 +525,7 @@ async fn test_send_headers_txs_request() {
         };
         let peers = Arc::new(Peers::new(
             Default::default(),
-            Default::default(),
             fetching_headers,
-            Default::default(),
             fetching_txs,
         ));
 

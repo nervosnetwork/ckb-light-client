@@ -989,12 +989,7 @@ impl ChainRpc for ChainRpcImpl {
             .swc
             .storage()
             .get_transaction_with_header(&tx_hash.pack())
-            .or_else(|| {
-                self.swc.fetched_txs().get(&tx_hash).map(|pair| {
-                    let (tx_view, header_view) = pair.value();
-                    (tx_view.data(), header_view.data())
-                })
-            })
+            .or_else(|| self.swc.storage().get_fetched_tx(&tx_hash.pack()))
             .map(|(tx, header)| TransactionWithHeader {
                 transaction: tx.into_view().into(),
                 header: header.into_view().into(),
@@ -1050,35 +1045,27 @@ impl ChainRpc for ChainRpcImpl {
     }
 
     fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
-        let mut removed_block_hashes = Vec::new();
-        self.swc.fetched_headers().retain(|k, _v| {
-            let keep = if let Some(hashes) = block_hashes.as_ref() {
-                !hashes.contains(k)
-            } else {
-                false
-            };
-            if !keep {
-                removed_block_hashes.push(k.clone());
-            }
-            keep
-        });
-        Ok(removed_block_hashes)
+        Ok(self
+            .swc
+            .storage()
+            .remove_fetched_headers(
+                block_hashes.map(|hashes| hashes.into_iter().map(|hash| hash.pack()).collect()),
+            )
+            .into_iter()
+            .map(|hash| hash.unpack())
+            .collect())
     }
 
     fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
-        let mut removed_tx_hashes = Vec::new();
-        self.swc.fetched_txs().retain(|k, _v| {
-            let keep = if let Some(hashes) = tx_hashes.as_ref() {
-                !hashes.contains(k)
-            } else {
-                false
-            };
-            if !keep {
-                removed_tx_hashes.push(k.clone());
-            }
-            keep
-        });
-        Ok(removed_tx_hashes)
+        Ok(self
+            .swc
+            .storage()
+            .remove_fetched_txs(
+                tx_hashes.map(|hashes| hashes.into_iter().map(|hash| hash.pack()).collect()),
+            )
+            .into_iter()
+            .map(|hash| hash.unpack())
+            .collect())
     }
 }
 
