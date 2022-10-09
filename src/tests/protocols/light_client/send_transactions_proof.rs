@@ -157,7 +157,7 @@ async fn test_send_txs_proof_ok() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
     assert_eq!(
         peers
@@ -499,7 +499,7 @@ async fn test_send_txs_proof_is_empty() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
 }
 
@@ -549,7 +549,7 @@ async fn test_send_headers_txs_request() {
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
     protocol.notify(nc.context(), FETCH_HEADER_TX_TOKEN).await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert_eq!(nc.sent_messages().borrow().len(), 2);
 
     assert!(peers.fetching_headers().get(&h256!("0xaa33")).unwrap().1 > 0);
