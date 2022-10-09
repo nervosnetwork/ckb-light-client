@@ -631,7 +631,7 @@ pub(crate) fn check_if_response_is_matched(
                 .parent_chain_root()
                 .total_difficulty()
                 .unpack();
-            if last_sampled_header.header().number() + 1 != first_last_n_header.header().number() {
+            if next_difficulty <= previous_total_diff_before_last_n {
                 error!(
                     "failed: there should at least exist one block between \
                     numbers {} and {} (difficulties: {:#x}, ..., {:#x}, {:#x}), \

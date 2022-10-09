@@ -591,8 +591,16 @@ async fn valid_proof_with_no_matched_sample() {
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        // TODO waiting for a fix
-        assert!(nc.banned_since(peer_index, StatusCode::InvalidSamples));
+        assert!(nc.not_banned(peer_index));
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        let last_header: VerifiableHeader = last_header.into();
+        assert!(prove_state.is_same_as(&last_header));
     }
 }
 
