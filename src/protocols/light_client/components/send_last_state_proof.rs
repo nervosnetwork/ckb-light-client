@@ -778,6 +778,20 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
     raw_proof: packed::HeaderDigestVecReader,
     headers: T,
 ) -> Result<(), Status> {
+    if last_header.is_valid(mmr_activated_epoch) {
+        trace!(
+            "passed: verify extra hash for block-{} ({:#x})",
+            last_header.header().number(),
+            last_header.header().hash(),
+        );
+    } else {
+        let errmsg = format!(
+            "failed to verify extra hash for block-{} ({:#x})",
+            last_header.header().number(),
+            last_header.header().hash(),
+        );
+        return Err(StatusCode::InvalidProof.with_context(errmsg));
+    };
     let parent_chain_root = last_header.parent_chain_root();
     let proof: MMRProof = {
         let mmr_size = leaf_index_to_mmr_size(parent_chain_root.end_number().unpack());
@@ -819,21 +833,5 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
         let errmsg = "failed to verify the mmr proof since the result is false";
         return Err(StatusCode::InvalidProof.with_context(errmsg));
     }
-    let check_extra_hash_result = last_header.is_valid(mmr_activated_epoch);
-    if check_extra_hash_result {
-        trace!(
-            "passed: verify extra hash for block-{} ({:#x})",
-            last_header.header().number(),
-            last_header.header().hash(),
-        );
-    } else {
-        let errmsg = format!(
-            "failed to verify extra hash for block-{} ({:#x})",
-            last_header.header().number(),
-            last_header.header().hash(),
-        );
-        return Err(StatusCode::InvalidProof.with_context(errmsg));
-    };
-
     Ok(())
 }
