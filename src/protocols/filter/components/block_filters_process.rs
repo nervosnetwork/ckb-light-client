@@ -51,9 +51,8 @@ impl<'a> BlockFiltersProcess<'a> {
 
         let block_filters = self.message.to_entity();
         let start_number: BlockNumber = block_filters.start_number().unpack();
-        let pending_peer = &self.filter.pending_peer;
 
-        let min_filtered_block_number = pending_peer.min_filtered_block_number();
+        let min_filtered_block_number = self.filter.min_filtered_block_number();
         if min_filtered_block_number + 1 != start_number {
             info!(
                 "ignoring, the start_number of block_filters message {} is not continuous with min_filtered_block_number: {}",
@@ -61,15 +60,8 @@ impl<'a> BlockFiltersProcess<'a> {
                 min_filtered_block_number
             );
             // Get matched blocks finished, update filter scripts block number
-            if self
-                .filter
-                .pending_peer
-                .storage
-                .get_earliest_matched_blocks()
-                .is_none()
-            {
+            if self.filter.storage.get_earliest_matched_blocks().is_none() {
                 self.filter
-                    .pending_peer
                     .storage
                     .update_block_number(min_filtered_block_number);
             }
@@ -98,7 +90,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 return Status::ok();
             }
             let limit = (prove_state_block_number - start_number + 1) as usize;
-            let possible_match_blocks = pending_peer.check_filters_data(block_filters, limit);
+            let possible_match_blocks = self.filter.check_filters_data(block_filters, limit);
             let possible_match_blocks_len = possible_match_blocks.len();
             trace!(
                 "peer {}, matched blocks: {}",
@@ -106,7 +98,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 possible_match_blocks_len
             );
             let actual_blocks_count = blocks_count.min(limit);
-            let tip_header = self.filter.pending_peer.storage.get_tip_header();
+            let tip_header = self.filter.storage.get_tip_header();
             if possible_match_blocks_len != 0 {
                 let mut matched_blocks = self
                     .filter
@@ -118,17 +110,14 @@ impl<'a> BlockFiltersProcess<'a> {
                     .iter()
                     .map(|block_hash| (block_hash.clone(), block_hash == &prove_state_block_hash))
                     .collect::<Vec<_>>();
-                self.filter.pending_peer.storage.add_matched_blocks(
+                self.filter.storage.add_matched_blocks(
                     start_number,
                     actual_blocks_count as u64,
                     blocks,
                 );
                 if matched_blocks.is_empty() {
-                    if let Some((_start_number, _blocks_count, db_blocks)) = self
-                        .filter
-                        .pending_peer
-                        .storage
-                        .get_earliest_matched_blocks()
+                    if let Some((_start_number, _blocks_count, db_blocks)) =
+                        self.filter.storage.get_earliest_matched_blocks()
                     {
                         self.filter
                             .peers
@@ -144,7 +133,8 @@ impl<'a> BlockFiltersProcess<'a> {
                 }
             }
             let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
-            pending_peer.update_min_filtered_block_number(filtered_block_number);
+            self.filter
+                .update_min_filtered_block_number(filtered_block_number);
             // send next batch GetBlockFilters message to a random best peer
             let best_peers: Vec<_> = self.filter.peers.get_best_proved_peers(&tip_header);
             let next_peer = best_peers

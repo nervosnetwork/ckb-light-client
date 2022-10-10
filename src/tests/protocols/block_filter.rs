@@ -531,7 +531,7 @@ async fn test_block_filter_notify_not_reach_ask() {
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
-    protocol.pending_peer.last_ask_time = Arc::new(RwLock::new(Some(Instant::now())));
+    protocol.last_ask_time = Arc::new(RwLock::new(Some(Instant::now())));
 
     protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
 

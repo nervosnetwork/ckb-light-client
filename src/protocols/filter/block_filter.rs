@@ -15,12 +15,21 @@ use std::{sync::Arc, time::Duration};
 pub(crate) const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
 const GET_BLOCK_FILTERS_TIMEOUT: Duration = Duration::from_secs(15);
 
-pub struct PendingGetBlockFiltersPeer {
+pub struct FilterProtocol {
     pub(crate) storage: Storage,
+    pub(crate) peers: Arc<Peers>,
     pub(crate) last_ask_time: Arc<RwLock<Option<Instant>>>,
 }
 
-impl PendingGetBlockFiltersPeer {
+impl FilterProtocol {
+    pub fn new(storage: Storage, peers: Arc<Peers>) -> Self {
+        Self {
+            storage,
+            peers,
+            last_ask_time: Arc::new(RwLock::new(None)),
+        }
+    }
+
     pub fn check_filters_data(
         &self,
         block_filters: packed::BlockFilters,
@@ -59,7 +68,7 @@ impl PendingGetBlockFiltersPeer {
             .collect()
     }
 
-    pub fn should_ask(&self) -> bool {
+    fn should_ask(&self) -> bool {
         !self.storage.get_filter_scripts().is_empty()
             && (self.last_ask_time.read().unwrap().is_none()
                 || self.last_ask_time.read().unwrap().unwrap().elapsed()
@@ -73,23 +82,6 @@ impl PendingGetBlockFiltersPeer {
     pub fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
         self.storage.update_min_filtered_block_number(block_number);
         self.last_ask_time.write().unwrap().replace(Instant::now());
-    }
-}
-
-pub struct FilterProtocol {
-    pub(crate) pending_peer: PendingGetBlockFiltersPeer,
-    pub(crate) peers: Arc<Peers>,
-}
-
-impl FilterProtocol {
-    pub fn new(storage: Storage, peers: Arc<Peers>) -> Self {
-        Self {
-            pending_peer: PendingGetBlockFiltersPeer {
-                storage,
-                last_ask_time: Arc::new(RwLock::new(None)),
-            },
-            peers,
-        }
     }
 }
 
@@ -199,7 +191,7 @@ impl CKBProtocolHandler for FilterProtocol {
                     .iter()
                     .max_by_key(|(_, prove_state)| prove_state.get_last_header().total_difficulty())
                 {
-                    let start_number = self.pending_peer.min_filtered_block_number() + 1;
+                    let start_number = self.min_filtered_block_number() + 1;
                     let prove_state_number = prove_state.get_last_header().header().number();
                     debug!(
                         "found proved peer {}, start_number: {}, prove_state number: {:?}",
@@ -210,7 +202,7 @@ impl CKBProtocolHandler for FilterProtocol {
 
                     let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
                     if let Some((db_start_number, blocks_count, db_blocks)) =
-                        self.pending_peer.storage.get_earliest_matched_blocks()
+                        self.storage.get_earliest_matched_blocks()
                     {
                         if matched_blocks.is_empty() {
                             debug!(
@@ -221,7 +213,7 @@ impl CKBProtocolHandler for FilterProtocol {
                             // recover matched blocks from storage
                             self.peers
                                 .add_matched_blocks(&mut matched_blocks, db_blocks);
-                            let tip_header = self.pending_peer.storage.get_tip_header();
+                            let tip_header = self.storage.get_tip_header();
                             prove_or_download_matched_blocks(
                                 Arc::clone(&self.peers),
                                 &tip_header,
@@ -237,7 +229,7 @@ impl CKBProtocolHandler for FilterProtocol {
                                 self.send_get_block_filters(Arc::clone(&nc), *peer, start_number);
                             }
                         }
-                    } else if self.pending_peer.should_ask() && prove_state_number >= start_number {
+                    } else if self.should_ask() && prove_state_number >= start_number {
                         debug!(
                             "send get block filters to {}, start_number={}",
                             peer, start_number
