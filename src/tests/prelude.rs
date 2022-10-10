@@ -186,6 +186,8 @@ pub(crate) trait RunningChainExt: ChainExt {
                     difficulties.push(&total_diffs[n] - u256_one);
                     difficulties.push(total_diffs[n].to_owned());
                 }
+                difficulties.sort();
+                difficulties.dedup();
                 difficulties.into_iter().map(|diff| diff.pack())
             };
             let difficulty_boundary = snapshot
