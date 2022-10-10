@@ -187,6 +187,10 @@ impl BlocksProofRequest {
         Self { content, when_sent }
     }
 
+    pub(crate) fn last_hash(&self) -> packed::Byte32 {
+        self.content.last_hash()
+    }
+
     pub(crate) fn block_hashes(&self) -> Vec<H256> {
         self.content
             .block_hashes()
@@ -195,16 +199,25 @@ impl BlocksProofRequest {
             .collect()
     }
 
-    pub(crate) fn is_same_as(
+    pub(crate) fn check_block_hashes(
         &self,
-        last_hash: &packed::Byte32,
-        block_hashes: &[packed::Byte32],
+        received_block_hashes: &[packed::Byte32],
+        missing_block_hashes: &[packed::Byte32],
     ) -> bool {
-        let content = packed::GetBlocksProof::new_builder()
-            .block_hashes(block_hashes.to_vec().pack())
-            .last_hash(last_hash.to_owned())
-            .build();
-        self.content.as_slice() == content.as_slice()
+        if self.content.block_hashes().len()
+            == received_block_hashes.len() + missing_block_hashes.len()
+        {
+            let block_hashes = received_block_hashes
+                .iter()
+                .chain(missing_block_hashes)
+                .collect::<HashSet<_>>();
+            self.content
+                .block_hashes()
+                .into_iter()
+                .all(|hash| block_hashes.contains(&hash))
+        } else {
+            false
+        }
     }
 }
 
@@ -227,6 +240,10 @@ impl TransactionsProofRequest {
         Self { content, when_sent }
     }
 
+    pub(crate) fn last_hash(&self) -> packed::Byte32 {
+        self.content.last_hash()
+    }
+
     pub(crate) fn tx_hashes(&self) -> Vec<H256> {
         self.content
             .tx_hashes()
@@ -235,18 +252,23 @@ impl TransactionsProofRequest {
             .collect()
     }
 
-    pub(crate) fn is_same_as(
+    pub(crate) fn check_tx_hashes(
         &self,
-        last_hash: &packed::Byte32,
-        tx_hashes: &[packed::Byte32],
+        received_tx_hashes: &[packed::Byte32],
+        missing_tx_hashes: &[packed::Byte32],
     ) -> bool {
-        let origin_last_hash = self.content.last_hash();
-        let origin_tx_hashes: HashSet<_> = self.content.tx_hashes().into_iter().collect();
-        origin_last_hash.as_slice() == last_hash.as_slice()
-            && origin_tx_hashes.len() == tx_hashes.len()
-            && tx_hashes
+        if self.content.tx_hashes().len() == received_tx_hashes.len() + missing_tx_hashes.len() {
+            let tx_hashes = received_tx_hashes
                 .iter()
-                .all(|tx_hash| origin_tx_hashes.contains(tx_hash))
+                .chain(missing_tx_hashes)
+                .collect::<HashSet<_>>();
+            self.content
+                .tx_hashes()
+                .into_iter()
+                .all(|hash| tx_hashes.contains(&hash))
+        } else {
+            false
+        }
     }
 }
 

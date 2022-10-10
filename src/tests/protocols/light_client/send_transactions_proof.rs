@@ -28,6 +28,8 @@ async fn test_send_txs_proof_ok() {
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
     let peer_index = PeerIndex::new(3);
 
+    let missing_tx_hashes = vec![h256!("0x1").pack(), h256!("0x2").pack()];
+
     chain.mine_to(20);
     let tx_hashes: Vec<_> = [13, 15, 17]
         .into_iter()
@@ -123,6 +125,7 @@ async fn test_send_txs_proof_ok() {
             .last_header(last_header.clone())
             .proof(proof.pack())
             .filtered_blocks(items)
+            .missing_tx_hashes(missing_tx_hashes.clone().pack())
             .build();
         packed::LightClientMessage::new_builder()
             .set(content)
@@ -139,7 +142,14 @@ async fn test_send_txs_proof_ok() {
         peers.commit_prove_state(peer_index, prove_state);
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
-            .tx_hashes(tx_hashes.clone().pack())
+            .tx_hashes(
+                tx_hashes
+                    .clone()
+                    .into_iter()
+                    .chain(missing_tx_hashes.into_iter())
+                    .collect::<Vec<_>>()
+                    .pack(),
+            )
             .build();
         peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
         peers
@@ -156,7 +166,7 @@ async fn test_send_txs_proof_ok() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
     for tx_hash in tx_hashes {
         assert!(chain
@@ -506,7 +516,7 @@ async fn test_send_txs_proof_is_empty() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
     assert!(nc.sent_messages().borrow().is_empty());
 }
 
@@ -554,7 +564,7 @@ async fn test_send_headers_txs_request() {
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
     protocol.notify(nc.context(), FETCH_HEADER_TX_TOKEN).await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert_eq!(nc.sent_messages().borrow().len(), 2);
 
     assert!(peers.fetching_headers().get(&h256!("0xaa33")).unwrap().1 > 0);

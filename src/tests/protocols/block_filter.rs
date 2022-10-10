@@ -88,7 +88,7 @@ async fn test_block_filter_ignore_start_number() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
 }
 
@@ -139,7 +139,7 @@ async fn test_block_filter_empty_filters() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
 }
 
@@ -246,7 +246,7 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
 }
 
@@ -299,7 +299,7 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
 
     let message = {
         let start_number: u64 = min_filtered_block_number + 1;
@@ -384,7 +384,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
 
     let mut protocol = chain.create_filter_protocol(peers);
     protocol.received(nc.context(), peer_index, message).await;
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
 
     let get_blocks_proof_message = {
         let content = packed::GetBlocksProof::new_builder()

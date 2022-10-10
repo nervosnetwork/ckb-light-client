@@ -49,7 +49,7 @@ impl MockNetworkContext {
         &self.inner.sent_messages
     }
 
-    pub(crate) fn banned_peers(&self) -> &RefCell<Vec<(PeerIndex, Duration, String)>> {
+    fn banned_peers(&self) -> &RefCell<Vec<(PeerIndex, Duration, String)>> {
         &self.inner.banned_peers
     }
 

@@ -70,7 +70,7 @@ async fn test_sync_add_block() {
         .client_storage()
         .get_earliest_matched_blocks()
         .is_none());
-    assert!(nc.banned_peers().borrow().is_empty());
+    assert!(nc.not_banned(peer_index));
     let storage_filtered_block_number = chain
         .client_storage()
         .get_filter_scripts()

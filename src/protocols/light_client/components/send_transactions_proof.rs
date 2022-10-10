@@ -34,6 +34,14 @@ impl<'a> SendTransactionsProofProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
+        let status = self.execute_internally();
+        self.protocol
+            .peers()
+            .update_txs_proof_request(self.peer, None);
+        status
+    }
+
+    fn execute_internally(&self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
         let original_request = if let Some(original_request) = peer_state.get_txs_proof_request() {
@@ -46,35 +54,48 @@ impl<'a> SendTransactionsProofProcess<'a> {
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
 
         // Update the last state if the response contains a new one.
-        if self.message.proof().is_empty() {
-            debug!("proof is empty");
-            return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
-            self.protocol
-                .peers()
-                .update_txs_proof_request(self.peer, None);
-            self.protocol.peers().mark_fetching_txs_timeout(self.peer);
-            return Status::ok();
+        if original_request.last_hash() != last_header.header().hash() {
+            if self.message.proof().is_empty()
+                && self.message.filtered_blocks().is_empty()
+                && self.message.missing_tx_hashes().is_empty()
+            {
+                return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
+                self.protocol.peers().mark_fetching_txs_timeout(self.peer);
+                return Status::ok();
+            } else {
+                // Since the last state is different, then no data should be contained.
+                error!("peer {} send a proof with different last state", self.peer);
+                return StatusCode::UnexpectedResponse.into();
+            }
         }
 
         let filtered_blocks: Vec<packed::FilteredBlock> = self
             .message
             .filtered_blocks()
-            .iter()
-            .map(|filtered_block| filtered_block.to_entity())
+            .to_entity()
+            .into_iter()
             .collect();
         let headers: Vec<_> = filtered_blocks
             .iter()
             .map(|block| block.header().into_view())
             .collect();
-        let received_tx_hashes = filtered_blocks
-            .iter()
-            .flat_map(|block| block.transactions().into_iter().map(|tx| tx.calc_tx_hash()))
-            .collect::<Vec<_>>();
 
         // Check if the response is match the request.
-        if !original_request.is_same_as(&last_header.header().hash(), &received_tx_hashes) {
-            error!("peer {} send an unknown proof", self.peer);
-            return StatusCode::UnexpectedResponse.into();
+        {
+            let received_tx_hashes = filtered_blocks
+                .iter()
+                .flat_map(|block| block.transactions().into_iter().map(|tx| tx.calc_tx_hash()))
+                .collect::<Vec<_>>();
+            let missing_tx_hashes = self
+                .message
+                .missing_tx_hashes()
+                .to_entity()
+                .into_iter()
+                .collect::<Vec<_>>();
+            if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
+                error!("peer {} send an unknown proof", self.peer);
+                return StatusCode::UnexpectedResponse.into();
+            }
         }
 
         // Check PoW for blocks
@@ -110,7 +131,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 Some(true) => {}
                 _ => {
                     let errmsg = format!(
-                        "failed to verify the transactions merkle proof of filtered block {}",
+                        "failed to verify the transactions merkle proof of filtered block {:#x}",
                         filtered_block.header().calc_header_hash()
                     );
                     return StatusCode::InvalidProof.with_context(errmsg);
@@ -131,9 +152,6 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 }
             }
         }
-        self.protocol
-            .peers()
-            .update_txs_proof_request(self.peer, None);
         Status::ok()
     }
 }

@@ -31,6 +31,14 @@ impl<'a> SendBlocksProofProcess<'a> {
     }
 
     pub(crate) fn execute(self) -> Status {
+        let status = self.execute_internally();
+        self.protocol
+            .peers()
+            .update_blocks_proof_request(self.peer, None);
+        status
+    }
+
+    fn execute_internally(&self) -> Status {
         let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
 
         let original_request = if let Some(original_request) = peer_state.get_blocks_proof_request()
@@ -44,15 +52,21 @@ impl<'a> SendBlocksProofProcess<'a> {
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
 
         // Update the last state if the response contains a new one.
-        if self.message.proof().is_empty() {
-            return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
-            self.protocol
-                .peers()
-                .update_blocks_proof_request(self.peer, None);
-            self.protocol
-                .peers()
-                .mark_fetching_headers_timeout(self.peer);
-            return Status::ok();
+        if original_request.last_hash() != last_header.header().hash() {
+            if self.message.proof().is_empty()
+                && self.message.headers().is_empty()
+                && self.message.missing_block_hashes().is_empty()
+            {
+                return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
+                self.protocol
+                    .peers()
+                    .mark_fetching_headers_timeout(self.peer);
+                return Status::ok();
+            } else {
+                // Since the last state is different, then no data should be contained.
+                error!("peer {} send a proof with different last state", self.peer);
+                return StatusCode::UnexpectedResponse.into();
+            }
         }
 
         let headers: Vec<_> = self
@@ -68,7 +82,13 @@ impl<'a> SendBlocksProofProcess<'a> {
                 .iter()
                 .map(|header| header.hash())
                 .collect::<Vec<_>>();
-            if !original_request.is_same_as(&last_header.header().hash(), &received_block_hashes) {
+            let missing_block_hashes = self
+                .message
+                .missing_block_hashes()
+                .to_entity()
+                .into_iter()
+                .collect::<Vec<_>>();
+            if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
                 error!("peer {} send an unknown proof", self.peer);
                 return StatusCode::UnexpectedResponse.into();
             }
@@ -154,9 +174,6 @@ impl<'a> SendBlocksProofProcess<'a> {
                 self.protocol.storage().add_fetched_header(&header.data());
             }
         }
-        self.protocol
-            .peers()
-            .update_blocks_proof_request(self.peer, None);
         Status::ok()
     }
 }
