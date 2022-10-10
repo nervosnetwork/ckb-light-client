@@ -218,30 +218,6 @@ Fetch a transaction from remote node.
     {"status": "fetching", "first_sent": u64 }
     {"status": "added", "timestamp": u64 }
 
-### `remove_headers`
-
-Remove all fetched headers. (if `block_hashes` is `null` remove all headers)
-
-#### Parameters
-
-    null or Vec<H256>
-
-#### Returns
-
-    Vec<H256> - The removed block hashes
-
-### `remove_transactions`
-
-Remove all fetched transactions. (if `tx_hashes` is `null` remove all transactions)
-
-#### Parameters
-
-    null or Vec<H256>
-
-#### Returns
-
-    Vec<H256> - The removed transaction hashes
-
 ### `get_cells`
 
 To facilitate code migration, the rpc is same as ckb-indexer, please refer to ckb-indexer rpc [doc](https://github.com/nervosnetwork/ckb-indexer#get_cells)

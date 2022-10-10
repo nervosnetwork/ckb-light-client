@@ -394,6 +394,10 @@ impl LightClientProtocol {
         Ok(())
     }
 
+    pub fn storage(&self) -> &Storage {
+        &self.storage
+    }
+
     pub(crate) fn peers(&self) -> &Peers {
         &self.peers
     }

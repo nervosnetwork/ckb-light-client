@@ -10,7 +10,7 @@ use ckb_types::{
         ScriptHashType, TransactionBuilder,
     },
     h256,
-    packed::{CellInput, CellOutputBuilder, Header, OutPoint, Script, ScriptBuilder, Transaction},
+    packed::{CellInput, CellOutputBuilder, Header, OutPoint, Script, ScriptBuilder},
     prelude::*,
     H256,
 };
@@ -540,39 +540,40 @@ fn rpc() {
         .epoch(EpochNumberWithFraction::new(0, 500, 1000).pack())
         .number(500.pack())
         .build();
-    let fetched_headers = {
-        let map = DashMap::new();
-        map.insert(h256!("0xaa11"), Header::default().into_view());
-        map.insert(h256!("0xaa77"), Header::default().into_view());
-        map.insert(h256!("0xaa88"), Header::default().into_view());
-        map
-    };
+    let fetched_headers: Vec<H256> = [0xaa11, 0xaa77, 0xaa88]
+        .into_iter()
+        .map(|nonce| {
+            let header = Header::new_builder().nonce(nonce.pack()).build();
+            storage.add_fetched_header(&header);
+            header.calc_header_hash().unpack()
+        })
+        .collect();
     let fetching_headers = {
         let map = DashMap::new();
         map.insert(h256!("0xaa22"), (1111, 3344, false));
         map.insert(h256!("0xaa33"), (1111, 0, false));
         map
     };
-    let fetched_txs = {
-        let map = DashMap::new();
-        let tx = Transaction::default().into_view();
-        let header = Header::default().into_view();
-        map.insert(h256!("0xbb11"), (tx.clone(), header.clone()));
-        map.insert(h256!("0xbb77"), (tx.clone(), header.clone()));
-        map.insert(h256!("0xbb88"), (tx, header));
-        map
-    };
+    let fetched_txs: Vec<H256> = [h256!("0xbb11"), h256!("0xbb77"), h256!("0xbb88")]
+        .into_iter()
+        .map(|header_dep| {
+            let tx = TransactionBuilder::default()
+                .header_dep(header_dep.pack())
+                .build();
+            storage.add_fetched_tx(&tx.data(), &Header::default());
+            tx.hash().unpack()
+        })
+        .collect();
     let fetching_txs = {
         let map = DashMap::new();
         map.insert(h256!("0xbb22"), (1111, 5566, false));
         map.insert(h256!("0xbb33"), (1111, 0, false));
         map
     };
+    // insert fetched headers
     let peers = Arc::new(Peers::new(
         RwLock::new(vec![extra_header.clone()]),
-        fetched_headers,
         fetching_headers,
-        fetched_txs,
         fetching_txs,
     ));
 
@@ -601,17 +602,19 @@ fn rpc() {
     assert_eq!(transaction.hash, pre_tx0.hash().unpack());
     assert_eq!(header.hash, pre_block.header().hash().unpack());
 
-    assert_eq!(peers.fetched_headers().len(), 3);
     assert_eq!(peers.fetching_headers().len(), 2);
-    assert_eq!(peers.fetched_txs().len(), 3);
     assert_eq!(peers.fetching_txs().len(), 2);
 
     // test fetch_header rpc
-    let rv = rpc.fetch_header(h256!("0xaa11")).unwrap();
+    let rv = rpc.fetch_header(fetched_headers[0].clone()).unwrap();
     assert_eq!(
         rv,
         FetchStatus::Fetched {
-            data: Header::default().into_view().into()
+            data: Header::new_builder()
+                .nonce(0xaa11.pack())
+                .build()
+                .into_view()
+                .into()
         }
     );
     let rv = rpc.fetch_header(h256!("0xabcdef")).unwrap();
@@ -622,12 +625,15 @@ fn rpc() {
     assert_eq!(rv, FetchStatus::Fetching { first_sent: 3344 });
 
     // test fetch_transaction rpc
-    let rv = rpc.fetch_transaction(h256!("0xbb11")).unwrap();
+    let rv = rpc.fetch_transaction(fetched_txs[0].clone()).unwrap();
     assert_eq!(
         rv,
         FetchStatus::Fetched {
             data: TransactionWithHeader {
-                transaction: Transaction::default().into_view().into(),
+                transaction: TransactionBuilder::default()
+                    .header_dep(h256!("0xbb11").pack())
+                    .build()
+                    .into(),
                 header: Header::default().into_view().into(),
             }
         }
@@ -639,32 +645,7 @@ fn rpc() {
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
     assert_eq!(rv, FetchStatus::Fetching { first_sent: 5566 });
 
-    assert_eq!(peers.fetched_headers().len(), 3);
     assert_eq!(peers.fetching_headers().len(), 3);
-    assert_eq!(peers.fetched_txs().len(), 3);
-    assert_eq!(peers.fetching_txs().len(), 3);
-
-    // test remove_headers rpc
-    assert_eq!(
-        rpc.remove_headers(Some(vec![h256!("0xaa77")])).unwrap(),
-        vec![h256!("0xaa77")]
-    );
-    let mut block_hashes = rpc.remove_headers(None).unwrap();
-    block_hashes.sort();
-    assert_eq!(block_hashes, vec![h256!("0xaa11"), h256!("0xaa88")]);
-    // test remove_txs rpc
-    assert_eq!(
-        rpc.remove_transactions(Some(vec![h256!("0xbb77")]))
-            .unwrap(),
-        vec![h256!("0xbb77")]
-    );
-    let mut tx_hashes = rpc.remove_transactions(None).unwrap();
-    tx_hashes.sort();
-    assert_eq!(tx_hashes, vec![h256!("0xbb11"), h256!("0xbb88")]);
-
-    assert_eq!(peers.fetched_headers().len(), 0);
-    assert_eq!(peers.fetching_headers().len(), 3);
-    assert_eq!(peers.fetched_txs().len(), 0);
     assert_eq!(peers.fetching_txs().len(), 3);
 
     // test rollback_filtered_transactions

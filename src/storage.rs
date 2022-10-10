@@ -5,7 +5,7 @@ use ckb_types::{
     bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber, HeaderView, TransactionInfo, TransactionView,
+        BlockNumber, HeaderView, TransactionInfo,
     },
     packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
@@ -295,6 +295,41 @@ impl Storage {
                 (start_number, blocks_count, blocks)
             })
             .next()
+    }
+
+    pub fn add_fetched_header(&self, header: &Header) {
+        let mut batch = self.batch();
+        let block_hash = header.calc_header_hash();
+        batch
+            .put(Key::BlockHash(&block_hash).into_vec(), header.as_slice())
+            .expect("batch put should be ok");
+        batch
+            .put(
+                Key::BlockNumber(header.raw().number().unpack()).into_vec(),
+                block_hash.as_slice(),
+            )
+            .expect("batch put should be ok");
+        batch.commit().expect("batch commit should be ok");
+    }
+    pub fn add_fetched_tx(&self, tx: &Transaction, header: &Header) {
+        let mut batch = self.batch();
+        let block_hash = header.calc_header_hash();
+        let block_number: u64 = header.raw().number().unpack();
+        batch
+            .put(Key::BlockHash(&block_hash).into_vec(), header.as_slice())
+            .expect("batch put should be ok");
+        batch
+            .put(
+                Key::BlockNumber(block_number).into_vec(),
+                block_hash.as_slice(),
+            )
+            .expect("batch put should be ok");
+        let tx_hash = tx.calc_tx_hash();
+        let tx_index = u32::max_value();
+        let key = Key::TxHash(&tx_hash).into_vec();
+        let value = Value::Transaction(block_number, tx_index as TxIndex, tx);
+        batch.put_kv(key, value).expect("batch put should be ok");
+        batch.commit().expect("batch commit should be ok");
     }
 
     pub fn get_tip_header(&self) -> Header {
@@ -666,14 +701,8 @@ impl StorageWithChainData {
         &self.storage
     }
 
-    pub(crate) fn fetched_headers(&self) -> &DashMap<H256, HeaderView> {
-        self.peers.fetched_headers()
-    }
     pub(crate) fn fetching_headers(&self) -> &DashMap<H256, (u64, u64, bool)> {
         self.peers.fetching_headers()
-    }
-    pub(crate) fn fetched_txs(&self) -> &DashMap<H256, (TransactionView, HeaderView)> {
-        self.peers.fetched_txs()
     }
     pub(crate) fn fetching_txs(&self) -> &DashMap<H256, (u64, u64, bool)> {
         self.peers.fetching_txs()
@@ -682,23 +711,15 @@ impl StorageWithChainData {
 
 impl HeaderProvider for StorageWithChainData {
     fn get_header(&self, hash: &packed::Byte32) -> Option<HeaderView> {
-        self.storage
-            .get_header(hash)
-            .or_else(|| {
-                self.peers
-                    .last_headers()
-                    .read()
-                    .expect("poisoned")
-                    .iter()
-                    .find(|header| header.hash().eq(hash))
-                    .cloned()
-            })
-            .or_else(|| {
-                self.peers
-                    .fetched_headers()
-                    .get(&hash.unpack())
-                    .map(|pair| pair.value().clone())
-            })
+        self.storage.get_header(hash).or_else(|| {
+            self.peers
+                .last_headers()
+                .read()
+                .expect("poisoned")
+                .iter()
+                .find(|header| header.hash().eq(hash))
+                .cloned()
+        })
     }
 }
 
@@ -763,7 +784,7 @@ pub enum CellType {
 /// | 128          | TxTypeScript       | TxHash                   |
 /// | 160          | BlockHash          | Header                   |
 /// | 192          | BlockNumber        | BlockHash                |
-/// | 224          | Meta               | Meta                |
+/// | 224          | Meta               | Meta                     |
 /// +--------------+--------------------+--------------------------+
 ///
 pub enum Key<'a> {

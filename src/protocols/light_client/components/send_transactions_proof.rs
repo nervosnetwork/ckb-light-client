@@ -122,9 +122,13 @@ impl<'a> SendTransactionsProofProcess<'a> {
         for filtered_block in filtered_blocks {
             let header = filtered_block.header().into_view();
             for tx in filtered_block.transactions() {
-                self.protocol
+                if self
+                    .protocol
                     .peers()
-                    .add_transaction(tx.into_view(), header.clone());
+                    .add_transaction(&tx.calc_tx_hash().unpack(), &header.hash().unpack())
+                {
+                    self.protocol.storage().add_fetched_tx(&tx, &header.data());
+                }
             }
         }
         self.protocol

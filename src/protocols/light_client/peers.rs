@@ -1,10 +1,6 @@
 use ckb_network::PeerIndex;
 use ckb_types::{
-    core::{HeaderView, TransactionView},
-    packed,
-    prelude::*,
-    utilities::merkle_mountain_range::VerifiableHeader,
-    H256,
+    core::HeaderView, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, H256,
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
@@ -18,19 +14,11 @@ pub struct Peers {
     inner: DashMap<PeerIndex, Peer>,
     // verified last N block headers
     last_headers: RwLock<Vec<HeaderView>>,
-    // Fetched headers.
-    //   The key is the block hash
-    //   The value is fetched header
-    fetched_headers: DashMap<H256, HeaderView>,
     // The headers are fetching, the value is:
     //   * the added timestamp
     //   * the first fetch timestamp
     //   * whether the request is timeout
     fetching_headers: DashMap<H256, (u64, u64, bool)>,
-    // Fetch transactions.
-    //   The key is the transaction hash
-    //   The value is the fetched transaction and corresponding header
-    fetched_txs: DashMap<H256, (TransactionView, HeaderView)>,
     // The transactions are fetching, the value is:
     //   * the added timestamp
     //   * the first fetch timestamp
@@ -336,17 +324,13 @@ impl Peers {
     #[cfg(test)]
     pub fn new(
         last_headers: RwLock<Vec<HeaderView>>,
-        fetched_headers: DashMap<H256, HeaderView>,
         fetching_headers: DashMap<H256, (u64, u64, bool)>,
-        fetched_txs: DashMap<H256, (TransactionView, HeaderView)>,
         fetching_txs: DashMap<H256, (u64, u64, bool)>,
     ) -> Self {
         Self {
             inner: Default::default(),
             last_headers,
-            fetched_headers,
             fetching_headers,
-            fetched_txs,
             fetching_txs,
             matched_blocks: Default::default(),
         }
@@ -355,14 +339,8 @@ impl Peers {
     pub(crate) fn last_headers(&self) -> &RwLock<Vec<HeaderView>> {
         &self.last_headers
     }
-    pub(crate) fn fetched_headers(&self) -> &DashMap<H256, HeaderView> {
-        &self.fetched_headers
-    }
     pub(crate) fn fetching_headers(&self) -> &DashMap<H256, (u64, u64, bool)> {
         &self.fetching_headers
-    }
-    pub(crate) fn fetched_txs(&self) -> &DashMap<H256, (TransactionView, HeaderView)> {
-        &self.fetched_txs
     }
     pub(crate) fn fetching_txs(&self) -> &DashMap<H256, (u64, u64, bool)> {
         &self.fetching_txs
@@ -451,18 +429,16 @@ impl Peers {
             })
     }
 
-    pub(crate) fn add_header(&self, header: HeaderView) {
-        let block_hash = header.hash().unpack();
-        if self.fetching_headers.remove(&block_hash).is_some() {
-            self.fetched_headers.insert(block_hash, header);
-        }
+    pub(crate) fn add_header(&self, block_hash: &H256) -> bool {
+        self.fetching_headers.remove(block_hash).is_some()
     }
 
-    pub(crate) fn add_transaction(&self, tx: TransactionView, header: HeaderView) {
-        let tx_hash = tx.hash().unpack();
-        if self.fetching_txs.remove(&tx_hash).is_some() {
-            self.add_header(header.clone());
-            self.fetched_txs.insert(tx_hash, (tx, header));
+    pub(crate) fn add_transaction(&self, tx_hash: &H256, block_hash: &H256) -> bool {
+        if self.fetching_txs.remove(tx_hash).is_some() {
+            self.add_header(block_hash);
+            true
+        } else {
+            false
         }
     }
 

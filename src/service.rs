@@ -90,20 +90,6 @@ pub trait ChainRpc {
     /// Returns: FetchStatus<TransactionWithHeader>
     #[rpc(name = "fetch_transaction")]
     fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>>;
-
-    /// Remove fetched headers. (if `block_hashes` is None remove all headers)
-    ///
-    /// Returns:
-    ///   * The removed block hashes
-    #[rpc(name = "remove_headers")]
-    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
-
-    /// Remove fetched transactions. (if `tx_hashes` is None remove all transactions)
-    ///
-    /// Returns:
-    ///   * The removed transaction hashes
-    #[rpc(name = "remove_transactions")]
-    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
 }
 
 #[rpc(server)]
@@ -996,12 +982,6 @@ impl ChainRpc for ChainRpcImpl {
             .swc
             .storage()
             .get_transaction_with_header(&tx_hash.pack())
-            .or_else(|| {
-                self.swc.fetched_txs().get(&tx_hash).map(|pair| {
-                    let (tx_view, header_view) = pair.value();
-                    (tx_view.data(), header_view.data())
-                })
-            })
             .map(|(tx, header)| TransactionWithHeader {
                 transaction: tx.into_view().into(),
                 header: header.into_view().into(),
@@ -1054,38 +1034,6 @@ impl ChainRpc for ChainRpcImpl {
             self.swc.fetching_txs().insert(tx_hash, (now, 0, false));
         }
         Ok(FetchStatus::Added { timestamp: now })
-    }
-
-    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
-        let mut removed_block_hashes = Vec::new();
-        self.swc.fetched_headers().retain(|k, _v| {
-            let keep = if let Some(hashes) = block_hashes.as_ref() {
-                !hashes.contains(k)
-            } else {
-                false
-            };
-            if !keep {
-                removed_block_hashes.push(k.clone());
-            }
-            keep
-        });
-        Ok(removed_block_hashes)
-    }
-
-    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
-        let mut removed_tx_hashes = Vec::new();
-        self.swc.fetched_txs().retain(|k, _v| {
-            let keep = if let Some(hashes) = tx_hashes.as_ref() {
-                !hashes.contains(k)
-            } else {
-                false
-            };
-            if !keep {
-                removed_tx_hashes.push(k.clone());
-            }
-            keep
-        });
-        Ok(removed_tx_hashes)
     }
 }
 

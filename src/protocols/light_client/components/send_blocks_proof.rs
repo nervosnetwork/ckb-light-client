@@ -150,7 +150,9 @@ impl<'a> SendBlocksProofProcess<'a> {
         }
 
         for header in headers {
-            self.protocol.peers().add_header(header);
+            if self.protocol.peers().add_header(&header.hash().unpack()) {
+                self.protocol.storage().add_fetched_header(&header.data());
+            }
         }
         self.protocol
             .peers()
