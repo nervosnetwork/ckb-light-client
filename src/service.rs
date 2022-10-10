@@ -87,20 +87,6 @@ pub trait ChainRpc {
     /// Returns: FetchStatus<TransactionWithHeader>
     #[rpc(name = "fetch_transaction")]
     fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>>;
-
-    /// Remove fetched headers. (if `block_hashes` is None remove all headers)
-    ///
-    /// Returns:
-    ///   * The removed block hashes
-    #[rpc(name = "remove_headers")]
-    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
-
-    /// Remove fetched transactions. (if `tx_hashes` is None remove all transactions)
-    ///
-    /// Returns:
-    ///   * The removed transaction hashes
-    #[rpc(name = "remove_transactions")]
-    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>>;
 }
 
 #[rpc(server)]
@@ -989,7 +975,6 @@ impl ChainRpc for ChainRpcImpl {
             .swc
             .storage()
             .get_transaction_with_header(&tx_hash.pack())
-            .or_else(|| self.swc.storage().get_fetched_tx(&tx_hash.pack()))
             .map(|(tx, header)| TransactionWithHeader {
                 transaction: tx.into_view().into(),
                 header: header.into_view().into(),
@@ -1042,30 +1027,6 @@ impl ChainRpc for ChainRpcImpl {
             self.swc.fetching_txs().insert(tx_hash, (now, 0, false));
         }
         Ok(FetchStatus::Added { timestamp: now })
-    }
-
-    fn remove_headers(&self, block_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
-        Ok(self
-            .swc
-            .storage()
-            .remove_fetched_headers(
-                block_hashes.map(|hashes| hashes.into_iter().map(|hash| hash.pack()).collect()),
-            )
-            .into_iter()
-            .map(|hash| hash.unpack())
-            .collect())
-    }
-
-    fn remove_transactions(&self, tx_hashes: Option<Vec<H256>>) -> Result<Vec<H256>> {
-        Ok(self
-            .swc
-            .storage()
-            .remove_fetched_txs(
-                tx_hashes.map(|hashes| hashes.into_iter().map(|hash| hash.pack()).collect()),
-            )
-            .into_iter()
-            .map(|hash| hash.unpack())
-            .collect())
     }
 }
 

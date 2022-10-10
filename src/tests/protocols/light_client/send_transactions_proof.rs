@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
@@ -159,15 +158,12 @@ async fn test_send_txs_proof_ok() {
 
     assert!(nc.banned_peers().borrow().is_empty());
     assert!(nc.sent_messages().borrow().is_empty());
-    assert_eq!(
-        chain
+    for tx_hash in tx_hashes {
+        assert!(chain
             .client_storage()
-            .get_fetched_txs()
-            .iter()
-            .map(|(tx, _)| tx.calc_tx_hash())
-            .collect::<HashSet<_>>(),
-        tx_hashes.into_iter().collect()
-    );
+            .get_transaction_with_header(&tx_hash)
+            .is_some());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -307,7 +303,12 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
 
     assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
     assert!(nc.sent_messages().borrow().is_empty());
-    assert!(chain.client_storage().get_fetched_txs().is_empty());
+    for tx_hash in tx_hashes {
+        assert!(chain
+            .client_storage()
+            .get_transaction_with_header(&tx_hash)
+            .is_none());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -455,7 +456,12 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
 
     assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
     assert!(nc.sent_messages().borrow().is_empty());
-    assert!(chain.client_storage().get_fetched_txs().is_empty());
+    for tx_hash in tx_hashes {
+        assert!(chain
+            .client_storage()
+            .get_transaction_with_header(&tx_hash)
+            .is_none());
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -602,9 +602,7 @@ fn rpc() {
     assert_eq!(transaction.hash, pre_tx0.hash().unpack());
     assert_eq!(header.hash, pre_block.header().hash().unpack());
 
-    assert_eq!(storage.get_fetched_headers().len(), 3);
     assert_eq!(peers.fetching_headers().len(), 2);
-    assert_eq!(storage.get_fetched_txs().len(), 3);
     assert_eq!(peers.fetching_txs().len(), 2);
 
     // test fetch_header rpc
@@ -647,37 +645,7 @@ fn rpc() {
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
     assert_eq!(rv, FetchStatus::Fetching { first_sent: 5566 });
 
-    assert_eq!(storage.get_fetched_headers().len(), 3);
     assert_eq!(peers.fetching_headers().len(), 3);
-    assert_eq!(storage.get_fetched_txs().len(), 3);
-    assert_eq!(peers.fetching_txs().len(), 3);
-
-    // test remove_headers rpc
-    assert_eq!(
-        rpc.remove_headers(Some(vec![fetched_headers[1].clone()]))
-            .unwrap(),
-        vec![fetched_headers[1].clone()]
-    );
-    let mut block_hashes = rpc.remove_headers(None).unwrap();
-    block_hashes.sort();
-    let mut expected_block_hashes = vec![fetched_headers[0].clone(), fetched_headers[2].clone()];
-    expected_block_hashes.sort();
-    assert_eq!(block_hashes, expected_block_hashes,);
-    // test remove_txs rpc
-    assert_eq!(
-        rpc.remove_transactions(Some(vec![fetched_txs[1].clone()]))
-            .unwrap(),
-        vec![fetched_txs[1].clone()]
-    );
-    let mut tx_hashes = rpc.remove_transactions(None).unwrap();
-    tx_hashes.sort();
-    let mut expected_tx_hashes = vec![fetched_txs[0].clone(), fetched_txs[2].clone()];
-    expected_tx_hashes.sort();
-    assert_eq!(tx_hashes, expected_tx_hashes);
-
-    assert_eq!(storage.get_fetched_headers().len(), 0);
-    assert_eq!(peers.fetching_headers().len(), 3);
-    assert_eq!(storage.get_fetched_txs().len(), 0);
     assert_eq!(peers.fetching_txs().len(), 3);
 
     // test rollback_filtered_transactions

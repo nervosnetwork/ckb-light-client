@@ -1,8 +1,4 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
-    sync::Arc,
-};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
@@ -26,8 +22,6 @@ const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";
-const FETCHED_HEADERS_KEY: &str = "FETCHED_HEADERS";
-const FETCHED_TXS_KEY: &str = "FETCHED_TXS";
 
 #[derive(Clone)]
 pub struct Storage {
@@ -303,113 +297,39 @@ impl Storage {
             .next()
     }
 
-    pub fn remove_fetched_headers(&self, block_hashes: Option<Vec<Byte32>>) -> Vec<Byte32> {
-        let key_prefix = Key::Meta(FETCHED_HEADERS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
-        let block_hashes: Option<HashSet<Byte32>> =
-            block_hashes.map(|hashes| hashes.into_iter().collect());
-        let (keys, hashes): (Vec<Vec<u8>>, Vec<Byte32>) = self
-            .db
-            .iterator(mode)
-            .take_while(|(key, _value)| key.starts_with(&key_prefix))
-            .map(|(key, _value)| key)
-            .filter_map(|key| {
-                let hash = packed::Byte32Reader::from_slice_should_be_ok(&key[key_prefix.len()..])
-                    .to_entity();
-                if let Some(hashes) = block_hashes.as_ref() {
-                    if !hashes.contains(&hash) {
-                        return None;
-                    }
-                }
-                Some((key.to_vec(), hash))
-            })
-            .unzip();
-        let mut batch = self.batch();
-        for key in &keys {
-            batch.delete(key).expect("batch delete should be ok");
-        }
-        batch.commit().expect("batch commit should be ok");
-        hashes
-    }
     pub fn add_fetched_header(&self, header: &Header) {
-        let mut key = Key::Meta(FETCHED_HEADERS_KEY).into_vec();
-        key.extend(header.calc_header_hash().as_slice());
-        self.db
-            .put(key, header.as_slice())
-            .expect("db put fetched header should be ok");
-    }
-    pub fn get_fetched_header(&self, block_hash: &Byte32) -> Option<Header> {
-        let mut key = Key::Meta(FETCHED_HEADERS_KEY).into_vec();
-        key.extend(block_hash.as_slice());
-        self.db
-            .get_pinned(&key)
-            .expect("db get fetched header should be ok")
-            .map(|data| packed::HeaderReader::from_slice_should_be_ok(&data).to_entity())
-    }
-    #[cfg(test)]
-    pub fn get_fetched_headers(&self) -> Vec<Header> {
-        let key_prefix = Key::Meta(FETCHED_HEADERS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
-        self.db
-            .iterator(mode)
-            .take_while(|(key, _value)| key.starts_with(&key_prefix))
-            .map(|(_key, value)| packed::HeaderReader::from_slice_should_be_ok(&value).to_entity())
-            .collect()
-    }
-
-    pub fn remove_fetched_txs(&self, tx_hashes: Option<Vec<Byte32>>) -> Vec<Byte32> {
-        let key_prefix = Key::Meta(FETCHED_TXS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
-        let tx_hashes: Option<HashSet<Byte32>> =
-            tx_hashes.map(|hashes| hashes.into_iter().collect());
-        let (keys, hashes): (Vec<Vec<u8>>, Vec<Byte32>) = self
-            .db
-            .iterator(mode)
-            .take_while(|(key, _value)| key.starts_with(&key_prefix))
-            .map(|(key, _value)| key)
-            .filter_map(|key| {
-                let hash = packed::Byte32Reader::from_slice_should_be_ok(&key[key_prefix.len()..])
-                    .to_entity();
-                if let Some(hashes) = tx_hashes.as_ref() {
-                    if !hashes.contains(&hash) {
-                        return None;
-                    }
-                }
-                Some((key.to_vec(), hash))
-            })
-            .unzip();
         let mut batch = self.batch();
-        for key in &keys {
-            batch.delete(key).expect("batch delete should be ok");
-        }
+        let block_hash = header.calc_header_hash();
+        batch
+            .put(Key::BlockHash(&block_hash).into_vec(), header.as_slice())
+            .expect("batch put should be ok");
+        batch
+            .put(
+                Key::BlockNumber(header.raw().number().unpack()).into_vec(),
+                block_hash.as_slice(),
+            )
+            .expect("batch put should be ok");
         batch.commit().expect("batch commit should be ok");
-        hashes
     }
     pub fn add_fetched_tx(&self, tx: &Transaction, header: &Header) {
-        let mut key = Key::Meta(FETCHED_TXS_KEY).into_vec();
-        key.extend(tx.calc_tx_hash().as_slice());
-        let mut value = header.as_slice().to_vec();
-        value.extend(tx.as_slice());
-        self.db
-            .put(key, value)
-            .expect("db put fetched transaction should be ok");
-    }
-    pub fn get_fetched_tx(&self, tx_hash: &Byte32) -> Option<(Transaction, Header)> {
-        let mut key = Key::Meta(FETCHED_TXS_KEY).into_vec();
-        key.extend(tx_hash.as_slice());
-        self.db
-            .get_pinned(&key)
-            .expect("db get fetched tx should be ok")
-            .map(|value| parse_fetched_tx(&value))
-    }
-    pub fn get_fetched_txs(&self) -> Vec<(Transaction, Header)> {
-        let key_prefix = Key::Meta(FETCHED_TXS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
-        self.db
-            .iterator(mode)
-            .take_while(|(key, _value)| key.starts_with(&key_prefix))
-            .map(|(_key, value)| parse_fetched_tx(&value))
-            .collect()
+        let mut batch = self.batch();
+        let block_hash = header.calc_header_hash();
+        let block_number: u64 = header.raw().number().unpack();
+        batch
+            .put(Key::BlockHash(&block_hash).into_vec(), header.as_slice())
+            .expect("batch put should be ok");
+        batch
+            .put(
+                Key::BlockNumber(block_number).into_vec(),
+                block_hash.as_slice(),
+            )
+            .expect("batch put should be ok");
+        let tx_hash = tx.calc_tx_hash();
+        let tx_index = u32::max_value();
+        let key = Key::TxHash(&tx_hash).into_vec();
+        let value = Value::Transaction(block_number, tx_index as TxIndex, tx);
+        batch.put_kv(key, value).expect("batch put should be ok");
+        batch.commit().expect("batch commit should be ok");
     }
 
     pub fn get_tip_header(&self) -> Header {
@@ -791,29 +711,15 @@ impl StorageWithChainData {
 
 impl HeaderProvider for StorageWithChainData {
     fn get_header(&self, hash: &packed::Byte32) -> Option<HeaderView> {
-        self.storage
-            .get_header(hash)
-            .or_else(|| {
-                self.peers
-                    .last_headers()
-                    .read()
-                    .expect("poisoned")
-                    .iter()
-                    .find(|header| header.hash().eq(hash))
-                    .cloned()
-            })
-            .or_else(|| {
-                self.storage
-                    .get_fetched_header(hash)
-                    .map(|header| header.into_view())
-            })
-            .or_else(|| {
-                self.storage
-                    .get_fetched_txs()
-                    .into_iter()
-                    .find(|(_tx, header)| &header.calc_header_hash() == hash)
-                    .map(|(_tx, header)| header.into_view())
-            })
+        self.storage.get_header(hash).or_else(|| {
+            self.peers
+                .last_headers()
+                .read()
+                .expect("poisoned")
+                .iter()
+                .find(|header| header.hash().eq(hash))
+                .cloned()
+        })
     }
 }
 
@@ -1015,17 +921,6 @@ fn parse_matched_blocks(data: &[u8]) -> (u64, Vec<(Byte32, bool)>) {
         })
         .collect::<Vec<_>>();
     (blocks_count, matched_blocks)
-}
-
-fn parse_fetched_tx(data: &[u8]) -> (Transaction, Header) {
-    let header =
-        packed::HeaderReader::from_slice_should_be_ok(&data[0..packed::HeaderReader::TOTAL_SIZE])
-            .to_entity();
-    let tx = packed::TransactionReader::from_slice_should_be_ok(
-        &data[packed::HeaderReader::TOTAL_SIZE..],
-    )
-    .to_entity();
-    (tx, header)
 }
 
 // a helper fn extracts script fields raw data
