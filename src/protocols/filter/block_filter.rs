@@ -67,16 +67,11 @@ impl PendingGetBlockFiltersPeer {
     }
 
     pub fn min_filtered_block_number(&self) -> BlockNumber {
-        self.storage
-            .get_filter_scripts()
-            .values()
-            .min()
-            .cloned()
-            .unwrap_or_default()
+        self.storage.get_min_filtered_block_number()
     }
 
-    pub fn update_block_number(&self, block_number: BlockNumber) {
-        self.storage.update_block_number(block_number);
+    pub fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
+        self.storage.update_min_filtered_block_number(block_number);
         self.last_ask_time.write().unwrap().replace(Instant::now());
     }
 }
@@ -214,17 +209,18 @@ impl CKBProtocolHandler for FilterProtocol {
                     );
 
                     let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
-                    if let Some((start_number, blocks_count, blocks)) =
+                    if let Some((db_start_number, blocks_count, db_blocks)) =
                         self.pending_peer.storage.get_earliest_matched_blocks()
                     {
                         if matched_blocks.is_empty() {
                             debug!(
                                 "recover matched blocks from storage, start_number={}, blocks_count={}, matched_count: {}",
-                                start_number, blocks_count,
+                                db_start_number, blocks_count,
                                 matched_blocks.len(),
                             );
                             // recover matched blocks from storage
-                            self.peers.add_matched_blocks(&mut matched_blocks, blocks);
+                            self.peers
+                                .add_matched_blocks(&mut matched_blocks, db_blocks);
                             let tip_header = self.pending_peer.storage.get_tip_header();
                             prove_or_download_matched_blocks(
                                 Arc::clone(&self.peers),
@@ -233,6 +229,13 @@ impl CKBProtocolHandler for FilterProtocol {
                                 nc.as_ref(),
                                 INIT_BLOCKS_IN_TRANSIT_PER_PEER,
                             );
+                            if prove_state_number >= start_number {
+                                debug!(
+                                    "send get block filters to {}, start_number={}",
+                                    peer, start_number
+                                );
+                                self.send_get_block_filters(Arc::clone(&nc), *peer, start_number);
+                            }
                         }
                     } else if self.pending_peer.should_ask() && prove_state_number >= start_number {
                         debug!(

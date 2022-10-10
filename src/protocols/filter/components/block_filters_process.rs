@@ -60,6 +60,19 @@ impl<'a> BlockFiltersProcess<'a> {
                 start_number,
                 min_filtered_block_number
             );
+            // Get matched blocks finished, update filter scripts block number
+            if self
+                .filter
+                .pending_peer
+                .storage
+                .get_earliest_matched_blocks()
+                .is_none()
+            {
+                self.filter
+                    .pending_peer
+                    .storage
+                    .update_block_number(min_filtered_block_number);
+            }
         } else {
             let filters_count = block_filters.filters().len();
             let blocks_count = block_filters.block_hashes().len();
@@ -131,7 +144,7 @@ impl<'a> BlockFiltersProcess<'a> {
                 }
             }
             let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
-            pending_peer.update_block_number(filtered_block_number);
+            pending_peer.update_min_filtered_block_number(filtered_block_number);
             // send next batch GetBlockFilters message to a random best peer
             let best_peers: Vec<_> = self.filter.peers.get_best_proved_peers(&tip_header);
             let next_peer = best_peers

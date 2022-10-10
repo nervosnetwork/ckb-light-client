@@ -96,8 +96,8 @@ impl CKBProtocolHandler for SyncProtocol {
                         assert!(db_blocks.contains(&block.header().calc_header_hash()));
                         self.storage.filter_block(block);
                     }
-                    let filtered_block_number = start_number - 1 + blocks_count;
-                    self.storage.update_block_number(filtered_block_number);
+                    self.storage
+                        .update_block_number(start_number + blocks_count - 1);
 
                     // send more GetBlocksProof/GetBlocks requests
                     if let Some((_start_number, _blocks_count, db_blocks)) =
