@@ -149,11 +149,12 @@ async fn test_block_filter_invalid_filters_count() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_min_filtered_block_number(min_filtered_block_number);
+    chain
+        .client_storage()
+        .update_filter_scripts(vec![(Script::default(), 0)].into_iter().collect());
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -258,11 +259,9 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
     let min_filtered_block_number = 3;
     let proved_number = min_filtered_block_number + 1;
     let start_number = min_filtered_block_number + 1;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_min_filtered_block_number(min_filtered_block_number);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -332,11 +331,9 @@ async fn test_block_filter_ok_with_blocks_matched() {
         .code_hash(H256(rand::random()).pack())
         .args(Bytes::from(vec![1, 2, 3]).pack())
         .build();
-    chain.client_storage().update_filter_scripts(
-        vec![(script.clone(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_min_filtered_block_number(min_filtered_block_number);
 
     let header = HeaderBuilder::default()
         .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
@@ -432,11 +429,13 @@ async fn test_block_filter_notify_ask_filters() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_min_filtered_block_number(min_filtered_block_number);
+    // for should_ask() return true
+    chain
+        .client_storage()
+        .update_filter_scripts(vec![(Script::default(), 0)].into_iter().collect());
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -532,7 +531,7 @@ async fn test_block_filter_notify_not_reach_ask() {
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
-    protocol.pending_peer.last_ask_time = Arc::new(RwLock::new(Some(Instant::now())));
+    protocol.last_ask_time = Arc::new(RwLock::new(Some(Instant::now())));
 
     protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
 
@@ -545,11 +544,13 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_min_filtered_block_number(min_filtered_block_number);
+    // for should_ask() return true
+    chain
+        .client_storage()
+        .update_filter_scripts(vec![(Script::default(), 0)].into_iter().collect());
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -583,11 +584,16 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     let chain = MockChain::new_with_dummy_pow("test-block-filter");
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
+    let min_filtered_block_number = 3;
+    chain
+        .client_storage()
+        .update_min_filtered_block_number(min_filtered_block_number);
+
     let peer_index = PeerIndex::new(3);
     let tip_header = VerifiableHeader::new(
         HeaderBuilder::default()
             .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-            .number(3u64.pack())
+            .number((min_filtered_block_number + 2).pack())
             .build(),
         Default::default(),
         None,
@@ -620,21 +626,35 @@ async fn test_block_filter_notify_recover_matched_blocks() {
 
     protocol.notify(nc.context(), GET_BLOCK_FILTERS_TOKEN).await;
 
-    let content = packed::GetBlocksProof::new_builder()
-        .block_hashes(vec![unproved_block_hash].pack())
-        .last_hash(tip_hash.clone())
-        .build();
-    let get_blocks_proof_message = packed::LightClientMessage::new_builder()
-        .set(content.clone())
-        .build()
-        .as_bytes();
-    let content = packed::GetBlocks::new_builder()
-        .block_hashes(vec![proved_block_hash].pack())
-        .build();
-    let get_blocks_message = packed::SyncMessage::new_builder()
-        .set(content.clone())
-        .build()
-        .as_bytes();
+    let get_blocks_proof_message = {
+        let content = packed::GetBlocksProof::new_builder()
+            .block_hashes(vec![unproved_block_hash].pack())
+            .last_hash(tip_hash.clone())
+            .build();
+        packed::LightClientMessage::new_builder()
+            .set(content.clone())
+            .build()
+            .as_bytes()
+    };
+    let get_blocks_message = {
+        let content = packed::GetBlocks::new_builder()
+            .block_hashes(vec![proved_block_hash].pack())
+            .build();
+        packed::SyncMessage::new_builder()
+            .set(content.clone())
+            .build()
+            .as_bytes()
+    };
+    let get_block_filters_message = {
+        let start_number: u64 = min_filtered_block_number + 1;
+        let content = packed::GetBlockFilters::new_builder()
+            .start_number(start_number.pack())
+            .build();
+        packed::BlockFilterMessage::new_builder()
+            .set(content)
+            .build()
+            .as_bytes()
+    };
     assert_eq!(
         nc.sent_messages().borrow().clone(),
         vec![
@@ -647,7 +667,12 @@ async fn test_block_filter_notify_recover_matched_blocks() {
                 SupportProtocols::Sync.protocol_id(),
                 peer_index,
                 get_blocks_message,
-            )
+            ),
+            (
+                SupportProtocols::Filter.protocol_id(),
+                peer_index,
+                get_block_filters_message,
+            ),
         ]
     );
 }

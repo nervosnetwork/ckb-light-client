@@ -22,6 +22,7 @@ const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";
+const MIN_FILTERED_BLOCK_NUMBER: &str = "MIN_FILTERED_NUMBER";
 
 #[derive(Clone)]
 pub struct Storage {
@@ -98,6 +99,7 @@ impl Storage {
                 .expect("batch put should be ok");
             batch.commit().expect("batch commit should be ok");
             self.update_last_state(&U256::zero(), &block.header());
+            self.update_min_filtered_block_number(0);
         }
     }
 
@@ -334,6 +336,22 @@ impl Storage {
 
     pub fn get_tip_header(&self) -> Header {
         self.get_last_state().1
+    }
+
+    pub fn get_min_filtered_block_number(&self) -> BlockNumber {
+        let key = Key::Meta(MIN_FILTERED_BLOCK_NUMBER).into_vec();
+        self.db
+            .get_pinned(&key)
+            .expect("db get min filtered block number should be ok")
+            .map(|data| u64::from_le_bytes(data.as_ref().try_into().unwrap()))
+            .unwrap_or_default()
+    }
+    pub fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
+        let key = Key::Meta(MIN_FILTERED_BLOCK_NUMBER).into_vec();
+        let value = block_number.to_le_bytes();
+        self.db
+            .put(key, &value)
+            .expect("db put min filtered block number should be ok");
     }
 
     pub fn update_block_number(&self, block_number: BlockNumber) {
