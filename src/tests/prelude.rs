@@ -240,15 +240,19 @@ pub(crate) trait RunningChainExt: ChainExt {
         let positions = block_nums
             .iter()
             .map(|num| leaf_index_to_pos(*num))
-            .collect();
-        self.shared()
-            .snapshot()
-            .chain_root_mmr(last_num - 1)
-            .gen_proof(positions)
-            .expect("generate proof")
-            .proof_items()
-            .to_owned()
-            .pack()
+            .collect::<Vec<_>>();
+        if positions.is_empty() {
+            Default::default()
+        } else {
+            self.shared()
+                .snapshot()
+                .chain_root_mmr(last_num - 1)
+                .gen_proof(positions)
+                .expect("generate proof")
+                .proof_items()
+                .to_owned()
+                .pack()
+        }
     }
 }
 

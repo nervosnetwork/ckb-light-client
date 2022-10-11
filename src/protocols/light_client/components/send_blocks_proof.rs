@@ -94,6 +94,19 @@ impl<'a> SendBlocksProofProcess<'a> {
             }
         }
 
+        // If all blocks are missing.
+        if self.message.headers().is_empty() {
+            if !self.message.proof().is_empty() {
+                error!(
+                    "peer {} send a proof when all blocks are missing",
+                    self.peer
+                );
+                return StatusCode::UnexpectedResponse.into();
+            } else {
+                return Status::ok();
+            }
+        }
+
         // Check PoW for blocks
         return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
