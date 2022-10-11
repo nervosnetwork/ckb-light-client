@@ -98,6 +98,19 @@ impl<'a> SendTransactionsProofProcess<'a> {
             }
         }
 
+        // If all transactions are missing.
+        if self.message.filtered_blocks().is_empty() {
+            if !self.message.proof().is_empty() {
+                error!(
+                    "peer {} send a proof when all transactions are missing",
+                    self.peer
+                );
+                return StatusCode::UnexpectedResponse.into();
+            } else {
+                return Status::ok();
+            }
+        }
+
         // Check PoW for blocks
         return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 

@@ -516,7 +516,7 @@ async fn test_send_txs_proof_is_empty() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
+    assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
 }
 

@@ -419,6 +419,39 @@ async fn valid_proof_without_any_proof_items() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn empty_proof_since_all_blocks_are_missing() {
+    let last_block_number = 20;
+    let block_numbers = vec![];
+    let missing_block_hashes = vec![h256!("0x1").pack(), h256!("0x2").pack()];
+    let param = TestParameter {
+        last_block_number,
+        block_numbers: block_numbers.clone(),
+        proved_block_numbers: block_numbers.clone(),
+        returned_headers: block_numbers,
+        missing_block_hashes: missing_block_hashes.clone(),
+        returned_missing_block_hashes: missing_block_hashes,
+    };
+    test_send_blocks_proof(param).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nonempty_proof_since_all_blocks_are_missing() {
+    let last_block_number = 20;
+    let block_numbers = vec![];
+    let returned_headers = vec![9];
+    let missing_block_hashes = vec![h256!("0x1").pack(), h256!("0x2").pack()];
+    let param = TestParameter {
+        last_block_number,
+        block_numbers: block_numbers.clone(),
+        proved_block_numbers: block_numbers.clone(),
+        returned_headers,
+        missing_block_hashes: missing_block_hashes.clone(),
+        returned_missing_block_hashes: missing_block_hashes,
+    };
+    test_send_blocks_proof(param).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn valid_proof_with_missing_block_hashes() {
     let last_block_number = 20;
     let block_numbers = vec![3, 5, 8, 11, 16, 18];
@@ -675,17 +708,22 @@ async fn test_send_blocks_proof(param: TestParameter) {
             && param.missing_block_hashes == param.returned_missing_block_hashes
         {
             assert!(nc.not_banned(peer_index));
-            assert_eq!(nc.sent_messages().borrow().len(), 1);
 
-            let data = &nc.sent_messages().borrow()[0].2;
-            let message = packed::SyncMessageReader::new_unchecked(&data);
-            let content =
-                if let packed::SyncMessageUnionReader::GetBlocks(content) = message.to_enum() {
-                    content
-                } else {
-                    panic!("unexpected message");
-                };
-            assert_eq!(content.block_hashes().as_slice(), block_hashes.as_slice());
+            if param.block_numbers.is_empty() {
+                assert!(nc.sent_messages().borrow().is_empty());
+            } else {
+                assert_eq!(nc.sent_messages().borrow().len(), 1);
+
+                let data = &nc.sent_messages().borrow()[0].2;
+                let message = packed::SyncMessageReader::new_unchecked(&data);
+                let content =
+                    if let packed::SyncMessageUnionReader::GetBlocks(content) = message.to_enum() {
+                        content
+                    } else {
+                        panic!("unexpected message");
+                    };
+                assert_eq!(content.block_hashes().as_slice(), block_hashes.as_slice());
+            }
 
             let peer_state = protocol
                 .get_peer_state(&peer_index)
