@@ -119,6 +119,11 @@ fn rpc() {
             block_number: 0,
         },
         storage::ScriptStatus {
+            script: type_script1.clone(),
+            script_type: storage::ScriptType::Type,
+            block_number: 0,
+        },
+        storage::ScriptStatus {
             script: lock_script3,
             script_type: storage::ScriptType::Lock,
             block_number: 0,
@@ -127,19 +132,26 @@ fn rpc() {
 
     // test get_scripts rpc
     let scripts = rpc.get_scripts().unwrap();
-    assert_eq!(scripts.len(), 2);
+    assert_eq!(scripts.len(), 3);
 
     // test set_scripts rpc
-    rpc.set_scripts(vec![ScriptStatus {
-        script: lock_script1.clone().into(),
-        script_type: ScriptType::Lock,
-        block_number: 0.into(),
-    }])
+    rpc.set_scripts(vec![
+        ScriptStatus {
+            script: lock_script1.clone().into(),
+            script_type: ScriptType::Lock,
+            block_number: 0.into(),
+        },
+        ScriptStatus {
+            script: type_script1.clone().into(),
+            script_type: ScriptType::Type,
+            block_number: 0.into(),
+        },
+    ])
     .unwrap();
     let scripts = rpc.get_scripts().unwrap();
     assert_eq!(
         scripts.len(),
-        1,
+        2,
         "set_scripts should override the old scripts and delete the lock_script3"
     );
 
@@ -226,6 +238,25 @@ fn rpc() {
         total_blocks as usize + 1,
         cells_page_1.objects.len() + cells_page_2.objects.len(),
         "total size should be cellbase cells count + 1 (last block live cell)"
+    );
+
+    let cells_page_1 = rpc
+        .get_cells(
+            SearchKey {
+                script: type_script1.clone().into(),
+                script_type: ScriptType::Type,
+                ..Default::default()
+            },
+            Order::Asc,
+            150.into(),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        1,
+        cells_page_1.objects.len(),
+        "total size should be 1 (last block live cell)"
     );
 
     let cells_page_1 = rpc
@@ -343,6 +374,37 @@ fn rpc() {
         .unwrap();
 
     assert_eq!(total_blocks as usize * 3 - 1, txs_page_1.objects.len() + txs_page_2.objects.len(), "total size should be cellbase tx count + total_block * 2 - 1 (genesis block only has one tx)");
+
+    let txs_page_1 = rpc
+        .get_transactions(
+            SearchKey {
+                script: type_script1.clone().into(),
+                script_type: ScriptType::Type,
+                ..Default::default()
+            },
+            Order::Asc,
+            500.into(),
+            None,
+        )
+        .unwrap();
+    let txs_page_2 = rpc
+        .get_transactions(
+            SearchKey {
+                script: type_script1.clone().into(),
+                script_type: ScriptType::Type,
+                ..Default::default()
+            },
+            Order::Asc,
+            500.into(),
+            Some(txs_page_1.last_cursor),
+        )
+        .unwrap();
+
+    assert_eq!(
+        total_blocks as usize * 2 - 1,
+        txs_page_1.objects.len() + txs_page_2.objects.len(),
+        "total size should be total_block * 2 - 1 (genesis block only has one tx)"
+    );
 
     let desc_txs_page_1 = rpc
         .get_transactions(
@@ -478,6 +540,39 @@ fn rpc() {
         txs_page_2.objects.last().unwrap().tx_hash(),
     );
 
+    let txs_page_1 = rpc
+        .get_transactions(
+            SearchKey {
+                script: type_script1.clone().into(),
+                script_type: ScriptType::Type,
+                group_by_transaction: Some(true),
+                ..Default::default()
+            },
+            Order::Asc,
+            300.into(),
+            None,
+        )
+        .unwrap();
+    let txs_page_2 = rpc
+        .get_transactions(
+            SearchKey {
+                script: type_script1.clone().into(),
+                script_type: ScriptType::Type,
+                group_by_transaction: Some(true),
+                ..Default::default()
+            },
+            Order::Asc,
+            300.into(),
+            Some(txs_page_1.last_cursor),
+        )
+        .unwrap();
+
+    assert_eq!(
+        total_blocks as usize,
+        txs_page_1.objects.len() + txs_page_2.objects.len(),
+        "total size should be total_block"
+    );
+
     let filter_txs_page_1 = rpc
         .get_transactions(
             SearchKey {
@@ -531,6 +626,16 @@ fn rpc() {
         capacity.value(),
         "cellbases + last block live cell"
     );
+
+    let capacity = rpc
+        .get_cells_capacity(SearchKey {
+            script: type_script1.clone().into(),
+            script_type: ScriptType::Type,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(1000 * 100000000, capacity.value(), "last block live cell");
 
     let capacity = rpc
         .get_cells_capacity(SearchKey {
@@ -656,11 +761,18 @@ fn rpc() {
 
     // test rollback_filtered_transactions
     // rollback 2 blocks
-    storage.update_filter_scripts(vec![storage::ScriptStatus {
-        script: lock_script1.clone(),
-        script_type: storage::ScriptType::Lock,
-        block_number: total_blocks,
-    }]);
+    storage.update_filter_scripts(vec![
+        storage::ScriptStatus {
+            script: lock_script1.clone(),
+            script_type: storage::ScriptType::Lock,
+            block_number: total_blocks,
+        },
+        storage::ScriptStatus {
+            script: type_script1.clone(),
+            script_type: storage::ScriptType::Type,
+            block_number: total_blocks,
+        },
+    ]);
     storage.rollback_to_block((total_blocks - 2).into());
 
     let scripts = storage.get_filter_scripts();
@@ -703,6 +815,25 @@ fn rpc() {
             cells_page_1.objects.len() + cells_page_2.objects.len(),
             "total size should be cellbase cells count + 1 (last block live cell) - 2 (rollbacked blocks cells)"
         );
+
+    let cells_page_1 = rpc
+        .get_cells(
+            SearchKey {
+                script: type_script1.clone().into(),
+                script_type: ScriptType::Type,
+                ..Default::default()
+            },
+            Order::Asc,
+            150.into(),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        1,
+        cells_page_1.objects.len(),
+        "total size should be 1 (last block live cell)"
+    );
 
     // test get_transactions rpc after rollback
     let txs_page_1 = rpc

@@ -68,6 +68,7 @@ Set some scripts to filter
 #### Parameters
 
     script - Script
+    script_type - Enum "lock" or "type"
     block_number - Filter start number
 
 #### Returns
@@ -77,7 +78,7 @@ Set some scripts to filter
 #### Examples
 
 ```
-curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}, "block_number": "0x0"}]], "id": 1}'
+curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}, "script_type": "lock", "block_number": "0x0"}]], "id": 1}'
 ```
 
 ### `get_scripts`
@@ -91,6 +92,7 @@ Get filter scripts status
 #### Returns
 
     script - Script
+    script_type - Enum "lock" or "type"
     block_number - Filtered block number
 
 #### Examples

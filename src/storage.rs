@@ -464,6 +464,41 @@ impl Storage {
                                         Value::Transaction(block_number, tx_index as TxIndex, &tx);
                                     batch.put_kv(key, value).expect("batch put should be ok");
                                 }
+                                if let Some(script) = previous_output.type_().to_opt() {
+                                    if scripts.contains(&(script.clone(), ScriptType::Type)) {
+                                        filter_matched = true;
+                                        // delete utxo
+                                        let key = Key::CellTypeScript(
+                                            &script,
+                                            generated_by_block_number,
+                                            generated_by_tx_index,
+                                            previous_output_index as OutputIndex,
+                                        )
+                                        .into_vec();
+                                        batch.delete(key).expect("batch delete should be ok");
+                                        // insert tx history
+                                        let key = Key::TxTypeScript(
+                                            &script,
+                                            block_number,
+                                            tx_index as TxIndex,
+                                            input_index as CellIndex,
+                                            CellType::Input,
+                                        )
+                                        .into_vec();
+                                        let tx_hash = tx.calc_tx_hash();
+                                        batch
+                                            .put(key, tx_hash.as_slice())
+                                            .expect("batch put should be ok");
+                                        // insert tx
+                                        let key = Key::TxHash(&tx_hash).into_vec();
+                                        let value = Value::Transaction(
+                                            block_number,
+                                            tx_index as TxIndex,
+                                            &tx,
+                                        );
+                                        batch.put_kv(key, value).expect("batch put should be ok");
+                                    }
+                                }
                             }
                         }
                     });
@@ -504,6 +539,40 @@ impl Storage {
                             let key = Key::TxHash(&tx_hash).into_vec();
                             let value = Value::Transaction(block_number, tx_index as TxIndex, &tx);
                             batch.put_kv(key, value).expect("batch put should be ok");
+                        }
+                        if let Some(script) = output.type_().to_opt() {
+                            if scripts.contains(&(script.clone(), ScriptType::Type)) {
+                                filter_matched = true;
+                                let tx_hash = tx.calc_tx_hash();
+                                // insert utxo
+                                let key = Key::CellTypeScript(
+                                    &script,
+                                    block_number,
+                                    tx_index as TxIndex,
+                                    output_index as OutputIndex,
+                                )
+                                .into_vec();
+                                batch
+                                    .put(key, tx_hash.as_slice())
+                                    .expect("batch put should be ok");
+                                // insert tx history
+                                let key = Key::TxTypeScript(
+                                    &script,
+                                    block_number,
+                                    tx_index as TxIndex,
+                                    output_index as CellIndex,
+                                    CellType::Output,
+                                )
+                                .into_vec();
+                                batch
+                                    .put(key, tx_hash.as_slice())
+                                    .expect("batch put should be ok");
+                                // insert tx
+                                let key = Key::TxHash(&tx_hash).into_vec();
+                                let value =
+                                    Value::Transaction(block_number, tx_index as TxIndex, &tx);
+                                batch.put_kv(key, value).expect("batch put should be ok");
+                            }
                         }
                     });
             });
@@ -582,41 +651,73 @@ impl Storage {
                                 _previous_tx,
                             )) = self.get_transaction(&input.previous_output().tx_hash())
                             {
-                                let key = Key::CellLockScript(
-                                    &script,
-                                    generated_by_block_number,
-                                    generated_by_tx_index,
-                                    input.previous_output().index().unpack(),
-                                );
+                                let key = match ss.script_type {
+                                    ScriptType::Lock => Key::CellLockScript(
+                                        &script,
+                                        generated_by_block_number,
+                                        generated_by_tx_index,
+                                        input.previous_output().index().unpack(),
+                                    ),
+                                    ScriptType::Type => Key::CellTypeScript(
+                                        &script,
+                                        generated_by_block_number,
+                                        generated_by_tx_index,
+                                        input.previous_output().index().unpack(),
+                                    ),
+                                };
                                 batch
                                     .put_kv(key, input.previous_output().tx_hash().as_slice())
                                     .expect("batch put should be ok");
                             };
                             // delete tx history
-                            let key = Key::TxLockScript(
-                                &script,
-                                block_number,
-                                tx_index,
-                                cell_index,
-                                CellType::Input,
-                            )
+                            let key = match ss.script_type {
+                                ScriptType::Lock => Key::TxLockScript(
+                                    &script,
+                                    block_number,
+                                    tx_index,
+                                    cell_index,
+                                    CellType::Input,
+                                ),
+                                ScriptType::Type => Key::TxTypeScript(
+                                    &script,
+                                    block_number,
+                                    tx_index,
+                                    cell_index,
+                                    CellType::Input,
+                                ),
+                            }
                             .into_vec();
                             batch.delete(key).expect("batch delete should be ok");
                         } else {
                             // delete utxo
-                            let key =
-                                Key::CellLockScript(&script, block_number, tx_index, cell_index)
-                                    .into_vec();
+                            let key = match ss.script_type {
+                                ScriptType::Lock => {
+                                    Key::CellLockScript(&script, block_number, tx_index, cell_index)
+                                }
+                                ScriptType::Type => {
+                                    Key::CellTypeScript(&script, block_number, tx_index, cell_index)
+                                }
+                            }
+                            .into_vec();
                             batch.delete(key).expect("batch delete should be ok");
 
                             // delete tx history
-                            let key = Key::TxLockScript(
-                                &script,
-                                block_number,
-                                tx_index,
-                                cell_index,
-                                CellType::Output,
-                            )
+                            let key = match ss.script_type {
+                                ScriptType::Lock => Key::TxLockScript(
+                                    &script,
+                                    block_number,
+                                    tx_index,
+                                    cell_index,
+                                    CellType::Output,
+                                ),
+                                ScriptType::Type => Key::TxTypeScript(
+                                    &script,
+                                    block_number,
+                                    tx_index,
+                                    cell_index,
+                                    CellType::Output,
+                                ),
+                            }
                             .into_vec();
                             batch.delete(key).expect("batch delete should be ok");
                         };
