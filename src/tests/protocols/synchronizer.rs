@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
@@ -10,6 +9,7 @@ use ckb_types::{
 
 use crate::{
     protocols::Peers,
+    storage::{ScriptStatus, ScriptType},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -21,16 +21,19 @@ async fn test_sync_add_block() {
     let chain = MockChain::new_with_dummy_pow("test-sync");
     let nc = MockNetworkContext::new(SupportProtocols::Sync);
 
-    let mut scripts = HashMap::new();
-    scripts.insert(Script::default(), 1);
+    let scripts = vec![ScriptStatus {
+        script: Script::default(),
+        script_type: ScriptType::Lock,
+        block_number: 1,
+    }];
     chain.client_storage().update_filter_scripts(scripts);
 
     let min_filtered_block_number = chain
         .client_storage()
         .get_filter_scripts()
-        .values()
+        .into_iter()
+        .map(|ss| ss.block_number)
         .min()
-        .cloned()
         .unwrap_or_default();
     let start_number = min_filtered_block_number + 1;
     let blocks_count = 1;
@@ -74,9 +77,9 @@ async fn test_sync_add_block() {
     let storage_filtered_block_number = chain
         .client_storage()
         .get_filter_scripts()
-        .values()
+        .into_iter()
+        .map(|ss| ss.block_number)
         .min()
-        .cloned()
         .unwrap_or_default();
     let filtered_block_number = start_number - 1 + blocks_count;
     assert_eq!(storage_filtered_block_number, filtered_block_number);

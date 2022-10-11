@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use ckb_jsonrpc_types::{Block, Script, Transaction};
 use ckb_types::packed;
 
 use crate::{
-    storage::StorageWithChainData,
+    storage::{ScriptStatus, ScriptType, StorageWithChainData},
     tests::{prelude::*, utils::MockChain},
     verify::verify_tx,
 };
@@ -17,8 +15,11 @@ fn verify_valid_transaction() {
 
     // https://pudge.explorer.nervos.org/address/ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0l2z2v9305wm7rs5gqrpsf507ey8wj3tggtl4sj
     let script: packed::Script = serde_json::from_str::<Script>(r#"{"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8","hash_type": "type","args": "0xff5094c2c5f476fc38510018609a3fd921dd28ad"}"#).unwrap().into();
-    let mut scripts = HashMap::new();
-    scripts.insert(script, 0);
+    let scripts = vec![ScriptStatus {
+        script,
+        script_type: ScriptType::Lock,
+        block_number: 0,
+    }];
     storage.update_filter_scripts(scripts);
 
     // https://pudge.explorer.nervos.org/block/261

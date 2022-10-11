@@ -1,7 +1,4 @@
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::{Arc, RwLock};
 
 use ckb_types::{
     bytes::Bytes,
@@ -20,9 +17,9 @@ use crate::{
     protocols::Peers,
     service::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
-        ScriptStatus, SearchKey, SearchKeyFilter, TransactionWithHeader,
+        ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, TransactionWithHeader,
     },
-    storage::{Storage, StorageWithChainData},
+    storage::{self, Storage, StorageWithChainData},
 };
 
 fn new_storage(prefix: &str) -> Storage {
@@ -115,10 +112,18 @@ fn rpc() {
         .build();
 
     storage.init_genesis_block(block0.data());
-    storage.update_filter_scripts(HashMap::from([
-        (lock_script1.clone(), 0),
-        (lock_script3, 0),
-    ]));
+    storage.update_filter_scripts(vec![
+        storage::ScriptStatus {
+            script: lock_script1.clone(),
+            script_type: storage::ScriptType::Lock,
+            block_number: 0,
+        },
+        storage::ScriptStatus {
+            script: lock_script3,
+            script_type: storage::ScriptType::Lock,
+            block_number: 0,
+        },
+    ]);
 
     // test get_scripts rpc
     let scripts = rpc.get_scripts().unwrap();
@@ -127,6 +132,7 @@ fn rpc() {
     // test set_scripts rpc
     rpc.set_scripts(vec![ScriptStatus {
         script: lock_script1.clone().into(),
+        script_type: ScriptType::Lock,
         block_number: 0.into(),
     }])
     .unwrap();
@@ -650,13 +656,17 @@ fn rpc() {
 
     // test rollback_filtered_transactions
     // rollback 2 blocks
-    storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), total_blocks)]));
+    storage.update_filter_scripts(vec![storage::ScriptStatus {
+        script: lock_script1.clone(),
+        script_type: storage::ScriptType::Lock,
+        block_number: total_blocks,
+    }]);
     storage.rollback_to_block((total_blocks - 2).into());
 
     let scripts = storage.get_filter_scripts();
     assert_eq!(
         total_blocks - 2,
-        *scripts.values().max().unwrap(),
+        scripts.into_iter().map(|s| s.block_number).max().unwrap(),
         "rollback should update script filter block number"
     );
 
@@ -776,7 +786,11 @@ fn get_cells_capacity_bug() {
         )
         .build();
     storage.init_genesis_block(block0.data());
-    storage.update_filter_scripts(HashMap::from([(lock_script1.clone(), 0)]));
+    storage.update_filter_scripts(vec![storage::ScriptStatus {
+        script: lock_script1.clone(),
+        script_type: storage::ScriptType::Lock,
+        block_number: 0,
+    }]);
 
     let lock_script2 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
@@ -899,10 +913,18 @@ fn get_cells_after_rollback_bug() {
         )
         .build();
     storage.init_genesis_block(block0.data());
-    storage.update_filter_scripts(HashMap::from([
-        (lock_script1.clone(), 0),
-        (lock_script2.clone(), 0),
-    ]));
+    storage.update_filter_scripts(vec![
+        storage::ScriptStatus {
+            script: lock_script1.clone(),
+            script_type: storage::ScriptType::Lock,
+            block_number: 0,
+        },
+        storage::ScriptStatus {
+            script: lock_script2.clone(),
+            script_type: storage::ScriptType::Lock,
+            block_number: 0,
+        },
+    ]);
 
     let tx10 = TransactionBuilder::default()
         .output(

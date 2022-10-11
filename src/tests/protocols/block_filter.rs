@@ -13,6 +13,7 @@ use ckb_types::{
     H256, U256,
 };
 
+use crate::storage::{ScriptStatus, ScriptType};
 use crate::{
     protocols::{
         LastState, Peers, ProveRequest, ProveState, BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN,
@@ -47,11 +48,13 @@ async fn test_block_filter_ignore_start_number() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: min_filtered_block_number,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -98,11 +101,13 @@ async fn test_block_filter_empty_filters() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: min_filtered_block_number,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -154,7 +159,11 @@ async fn test_block_filter_invalid_filters_count() {
         .update_min_filtered_block_number(min_filtered_block_number);
     chain
         .client_storage()
-        .update_filter_scripts(vec![(Script::default(), 0)].into_iter().collect());
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -206,11 +215,13 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
     let min_filtered_block_number = 3;
     let proved_number = min_filtered_block_number;
     let start_number = min_filtered_block_number + 1;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: min_filtered_block_number,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -435,7 +446,11 @@ async fn test_block_filter_notify_ask_filters() {
     // for should_ask() return true
     chain
         .client_storage()
-        .update_filter_scripts(vec![(Script::default(), 0)].into_iter().collect());
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -504,11 +519,13 @@ async fn test_block_filter_notify_not_reach_ask() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain.client_storage().update_filter_scripts(
-        vec![(Script::default(), min_filtered_block_number)]
-            .into_iter()
-            .collect(),
-    );
+    chain
+        .client_storage()
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: min_filtered_block_number,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -550,7 +567,11 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
     // for should_ask() return true
     chain
         .client_storage()
-        .update_filter_scripts(vec![(Script::default(), 0)].into_iter().collect());
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
