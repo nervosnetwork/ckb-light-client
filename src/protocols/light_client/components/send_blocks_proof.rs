@@ -77,21 +77,19 @@ impl<'a> SendBlocksProofProcess<'a> {
             .collect();
 
         // Check if the response is match the request.
-        {
-            let received_block_hashes = headers
-                .iter()
-                .map(|header| header.hash())
-                .collect::<Vec<_>>();
-            let missing_block_hashes = self
-                .message
-                .missing_block_hashes()
-                .to_entity()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
-                error!("peer {} send an unknown proof", self.peer);
-                return StatusCode::UnexpectedResponse.into();
-            }
+        let received_block_hashes = headers
+            .iter()
+            .map(|header| header.hash())
+            .collect::<Vec<_>>();
+        let missing_block_hashes = self
+            .message
+            .missing_block_hashes()
+            .to_entity()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
+            error!("peer {} send an unknown proof", self.peer);
+            return StatusCode::UnexpectedResponse.into();
         }
 
         // If all blocks are missing.
@@ -187,6 +185,12 @@ impl<'a> SendBlocksProofProcess<'a> {
                 self.protocol.storage().add_fetched_header(&header.data());
             }
         }
+        self.protocol.peers().mark_fetching_headers_missing(
+            &missing_block_hashes
+                .into_iter()
+                .map(|hash| hash.unpack())
+                .collect::<Vec<_>>(),
+        );
         Status::ok()
     }
 }

@@ -81,21 +81,19 @@ impl<'a> SendTransactionsProofProcess<'a> {
             .collect();
 
         // Check if the response is match the request.
-        {
-            let received_tx_hashes = filtered_blocks
-                .iter()
-                .flat_map(|block| block.transactions().into_iter().map(|tx| tx.calc_tx_hash()))
-                .collect::<Vec<_>>();
-            let missing_tx_hashes = self
-                .message
-                .missing_tx_hashes()
-                .to_entity()
-                .into_iter()
-                .collect::<Vec<_>>();
-            if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
-                error!("peer {} send an unknown proof", self.peer);
-                return StatusCode::UnexpectedResponse.into();
-            }
+        let received_tx_hashes = filtered_blocks
+            .iter()
+            .flat_map(|block| block.transactions().into_iter().map(|tx| tx.calc_tx_hash()))
+            .collect::<Vec<_>>();
+        let missing_tx_hashes = self
+            .message
+            .missing_tx_hashes()
+            .to_entity()
+            .into_iter()
+            .collect::<Vec<_>>();
+        if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
+            error!("peer {} send an unknown proof", self.peer);
+            return StatusCode::UnexpectedResponse.into();
         }
 
         // If all transactions are missing.
@@ -165,6 +163,12 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 }
             }
         }
+        self.protocol.peers().mark_fetching_txs_missing(
+            &missing_tx_hashes
+                .into_iter()
+                .map(|hash| hash.unpack())
+                .collect::<Vec<_>>(),
+        );
         Status::ok()
     }
 }

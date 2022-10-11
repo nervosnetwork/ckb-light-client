@@ -9,12 +9,11 @@ use ckb_types::{
     prelude::*,
     utilities::{merkle_mountain_range::VerifiableHeader, CBMT},
 };
-use dashmap::DashMap;
 
 use crate::{
     protocols::{
-        light_client::constant::FETCH_HEADER_TX_TOKEN, LastState, Peers, ProveRequest, ProveState,
-        StatusCode,
+        light_client::constant::FETCH_HEADER_TX_TOKEN, FetchInfo, LastState, Peers, ProveRequest,
+        ProveState, StatusCode,
     },
     tests::{
         prelude::*,
@@ -146,19 +145,22 @@ async fn test_send_txs_proof_ok() {
                 tx_hashes
                     .clone()
                     .into_iter()
-                    .chain(missing_tx_hashes.into_iter())
+                    .chain(missing_tx_hashes.clone().into_iter())
                     .collect::<Vec<_>>()
                     .pack(),
             )
             .build();
         peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
+        for tx_hash in &missing_tx_hashes {
+            peers
+                .fetching_txs()
+                .insert(tx_hash.unpack(), FetchInfo::new(1111, 0, false, false));
+        }
         peers
     };
 
     for tx_hash in &tx_hashes {
-        peers
-            .fetching_txs()
-            .insert(tx_hash.unpack(), (111, 0, false));
+        peers.add_fetch_tx(tx_hash.unpack(), 111)
     }
 
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
@@ -173,6 +175,13 @@ async fn test_send_txs_proof_ok() {
             .client_storage()
             .get_transaction_with_header(&tx_hash)
             .is_some());
+    }
+    for tx_hash in missing_tx_hashes {
+        assert!(peers
+            .fetching_txs()
+            .get(&tx_hash.unpack())
+            .unwrap()
+            .missing());
     }
 }
 
@@ -301,9 +310,7 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
     };
 
     for tx_hash in &tx_hashes {
-        peers
-            .fetching_txs()
-            .insert(tx_hash.unpack(), (111, 0, false));
+        peers.add_fetch_tx(tx_hash.unpack(), 111);
     }
 
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
@@ -454,9 +461,7 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
     };
 
     for tx_hash in &tx_hashes {
-        peers
-            .fetching_txs()
-            .insert(tx_hash.unpack(), (111, 0, false));
+        peers.add_fetch_tx(tx_hash.unpack(), 111);
     }
 
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
@@ -527,23 +532,19 @@ async fn test_send_headers_txs_request() {
     let peer_index = PeerIndex::new(3);
 
     let peers = {
-        let fetching_headers = {
-            let map = DashMap::new();
-            map.insert(h256!("0xaa22"), (111, 3344, false));
-            map.insert(h256!("0xaa33"), (111, 0, false));
-            map
-        };
-        let fetching_txs = {
-            let map = DashMap::new();
-            map.insert(h256!("0xbb22"), (111, 5566, false));
-            map.insert(h256!("0xbb33"), (111, 0, false));
-            map
-        };
-        let peers = Arc::new(Peers::new(
-            Default::default(),
-            fetching_headers,
-            fetching_txs,
-        ));
+        let peers = Arc::new(Peers::new(Default::default()));
+        peers
+            .fetching_headers()
+            .insert(h256!("0xaa22"), FetchInfo::new(111, 3344, false, false));
+        peers
+            .fetching_headers()
+            .insert(h256!("0xaa33"), FetchInfo::new(111, 0, false, false));
+        peers
+            .fetching_txs()
+            .insert(h256!("0xbb22"), FetchInfo::new(111, 5566, false, false));
+        peers
+            .fetching_txs()
+            .insert(h256!("0xbb33"), FetchInfo::new(111, 0, false, false));
 
         peers.add_peer(peer_index);
 
@@ -567,8 +568,22 @@ async fn test_send_headers_txs_request() {
     assert!(nc.not_banned(peer_index));
     assert_eq!(nc.sent_messages().borrow().len(), 2);
 
-    assert!(peers.fetching_headers().get(&h256!("0xaa33")).unwrap().1 > 0);
-    assert!(peers.fetching_txs().get(&h256!("0xbb33")).unwrap().1 > 0);
+    assert!(
+        peers
+            .fetching_headers()
+            .get(&h256!("0xaa33"))
+            .unwrap()
+            .first_sent()
+            > 0
+    );
+    assert!(
+        peers
+            .fetching_txs()
+            .get(&h256!("0xbb33"))
+            .unwrap()
+            .first_sent()
+            > 0
+    );
     let peer_state = peers.get_state(&peer_index).unwrap();
     assert!(peer_state.get_blocks_proof_request().is_some());
     assert!(peer_state.get_txs_proof_request().is_some());

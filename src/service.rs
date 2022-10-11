@@ -100,11 +100,12 @@ pub trait NetRpc {
 
 #[derive(Deserialize, Serialize, Eq, PartialEq, Debug)]
 #[serde(tag = "status")]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum FetchStatus<T> {
     Added { timestamp: u64 },
     Fetching { first_sent: u64 },
     Fetched { data: T },
+    NotFound,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -1020,21 +1021,18 @@ impl ChainRpc for ChainRpcImpl {
             return Ok(FetchStatus::Fetched { data: value });
         }
         let now = unix_time_as_millis();
-        if let Some(item) = self.swc.fetching_headers().get(&block_hash) {
-            let (added_ts, first_sent, _timeout) = item.value();
-            if *first_sent > 0 {
-                return Ok(FetchStatus::Fetching {
-                    first_sent: *first_sent,
-                });
+        if let Some((added_ts, first_sent, missing)) = self.swc.get_header_fetch_info(&block_hash) {
+            if missing {
+                return Ok(FetchStatus::NotFound);
+            } else if first_sent > 0 {
+                return Ok(FetchStatus::Fetching { first_sent });
             } else {
                 return Ok(FetchStatus::Added {
-                    timestamp: *added_ts,
+                    timestamp: added_ts,
                 });
             }
         } else {
-            self.swc
-                .fetching_headers()
-                .insert(block_hash, (now, 0, false));
+            self.swc.add_fetch_header(block_hash, now);
         }
         Ok(FetchStatus::Added { timestamp: now })
     }
@@ -1044,19 +1042,18 @@ impl ChainRpc for ChainRpcImpl {
             return Ok(FetchStatus::Fetched { data: value });
         }
         let now = unix_time_as_millis();
-        if let Some(item) = self.swc.fetching_txs().get(&tx_hash) {
-            let (added_ts, first_sent, _timeout) = item.value();
-            if *first_sent > 0 {
-                return Ok(FetchStatus::Fetching {
-                    first_sent: *first_sent,
-                });
+        if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(&tx_hash) {
+            if missing {
+                return Ok(FetchStatus::NotFound);
+            } else if first_sent > 0 {
+                return Ok(FetchStatus::Fetching { first_sent });
             } else {
                 return Ok(FetchStatus::Added {
-                    timestamp: *added_ts,
+                    timestamp: added_ts,
                 });
             }
         } else {
-            self.swc.fetching_txs().insert(tx_hash, (now, 0, false));
+            self.swc.add_fetch_tx(tx_hash, now);
         }
         Ok(FetchStatus::Added { timestamp: now })
     }

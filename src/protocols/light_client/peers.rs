@@ -15,15 +15,9 @@ pub struct Peers {
     // verified last N block headers
     last_headers: RwLock<Vec<HeaderView>>,
     // The headers are fetching, the value is:
-    //   * the added timestamp
-    //   * the first fetch timestamp
-    //   * whether the request is timeout
-    fetching_headers: DashMap<H256, (u64, u64, bool)>,
+    fetching_headers: DashMap<H256, FetchInfo>,
     // The transactions are fetching, the value is:
-    //   * the added timestamp
-    //   * the first fetch timestamp
-    //   * whether the request is timeout
-    fetching_txs: DashMap<H256, (u64, u64, bool)>,
+    fetching_txs: DashMap<H256, FetchInfo>,
 
     // The matched block filters to download, the key is the block hash, the value is:
     //   * if the block is proved
@@ -36,6 +30,17 @@ pub struct Peer {
     // The peer is just discovered when it's `None`.
     state: PeerState,
     update_timestamp: u64,
+}
+
+pub struct FetchInfo {
+    // the added timestamp
+    added_ts: u64,
+    // the first fetch timestamp
+    first_sent: u64,
+    // whether the request is timeout
+    timeout: bool,
+    // whether the data to fetch is not on chain
+    missing: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +90,34 @@ pub(crate) struct BlocksRequest {
 pub(crate) struct TransactionsProofRequest {
     content: packed::GetTransactionsProof,
     when_sent: u64,
+}
+
+impl FetchInfo {
+    #[cfg(test)]
+    pub fn new(added_ts: u64, first_sent: u64, timeout: bool, missing: bool) -> FetchInfo {
+        FetchInfo {
+            added_ts,
+            first_sent,
+            timeout,
+            missing,
+        }
+    }
+    #[cfg(test)]
+    pub fn first_sent(&self) -> u64 {
+        self.first_sent
+    }
+    #[cfg(test)]
+    pub fn missing(&self) -> bool {
+        self.missing
+    }
+    fn new_add(added_ts: u64) -> FetchInfo {
+        FetchInfo {
+            added_ts,
+            first_sent: 0,
+            timeout: false,
+            missing: false,
+        }
+    }
 }
 
 impl AsRef<VerifiableHeader> for LastState {
@@ -344,16 +377,12 @@ impl Peer {
 impl Peers {
     // only used in unit tests now
     #[cfg(test)]
-    pub fn new(
-        last_headers: RwLock<Vec<HeaderView>>,
-        fetching_headers: DashMap<H256, (u64, u64, bool)>,
-        fetching_txs: DashMap<H256, (u64, u64, bool)>,
-    ) -> Self {
+    pub fn new(last_headers: RwLock<Vec<HeaderView>>) -> Self {
         Self {
             inner: Default::default(),
             last_headers,
-            fetching_headers,
-            fetching_txs,
+            fetching_headers: DashMap::new(),
+            fetching_txs: DashMap::new(),
             matched_blocks: Default::default(),
         }
     }
@@ -361,12 +390,98 @@ impl Peers {
     pub(crate) fn last_headers(&self) -> &RwLock<Vec<HeaderView>> {
         &self.last_headers
     }
-    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, (u64, u64, bool)> {
+
+    #[cfg(test)]
+    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, FetchInfo> {
         &self.fetching_headers
     }
-    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, (u64, u64, bool)> {
+    #[cfg(test)]
+    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, FetchInfo> {
         &self.fetching_txs
     }
+    pub(crate) fn has_fetching_info(&self) -> bool {
+        !self.fetching_headers.is_empty() || !self.fetching_txs.is_empty()
+    }
+    pub(crate) fn add_fetch_header(&self, block_hash: H256, timestamp: u64) {
+        self.fetching_headers
+            .insert(block_hash, FetchInfo::new_add(timestamp));
+    }
+    pub(crate) fn add_fetch_tx(&self, tx_hash: H256, timestamp: u64) {
+        self.fetching_txs
+            .insert(tx_hash, FetchInfo::new_add(timestamp));
+    }
+    pub(crate) fn get_header_fetch_info(&self, block_hash: &H256) -> Option<(u64, u64, bool)> {
+        self.fetching_headers.get(block_hash).map(|item| {
+            let info = item.value();
+            (info.added_ts, info.first_sent, info.missing)
+        })
+    }
+    pub(crate) fn get_tx_fetch_info(&self, tx_hash: &H256) -> Option<(u64, u64, bool)> {
+        self.fetching_txs.get(tx_hash).map(|item| {
+            let info = item.value();
+            (info.added_ts, info.first_sent, info.missing)
+        })
+    }
+    pub(crate) fn mark_fetching_headers_missing(&self, block_hashes: &[H256]) {
+        for block_hash in block_hashes {
+            if let Some(mut value) = self.fetching_headers.get_mut(block_hash) {
+                value.missing = true;
+            }
+        }
+    }
+    pub(crate) fn mark_fetching_txs_missing(&self, tx_hashes: &[H256]) {
+        for tx_hash in tx_hashes {
+            if let Some(mut value) = self.fetching_txs.get_mut(tx_hash) {
+                value.missing = true;
+            }
+        }
+    }
+    // mark all fetching hashes (headers/txs) as timeout
+    pub(crate) fn mark_fetching_headers_timeout(&self, peer: PeerIndex) {
+        if let Some(peer_state) = self.get_state(&peer) {
+            if let Some(request) = peer_state.get_blocks_proof_request() {
+                for block_hash in request.block_hashes() {
+                    if let Some(mut pair) = self.fetching_headers.get_mut(&block_hash) {
+                        pair.value_mut().timeout = true;
+                    }
+                }
+            }
+        }
+    }
+    pub(crate) fn mark_fetching_txs_timeout(&self, peer: PeerIndex) {
+        if let Some(peer_state) = self.get_state(&peer) {
+            if let Some(request) = peer_state.get_txs_proof_request() {
+                for tx_hash in request.tx_hashes() {
+                    if let Some(mut pair) = self.fetching_txs.get_mut(&tx_hash) {
+                        pair.value_mut().timeout = true;
+                    }
+                }
+            }
+        }
+    }
+    pub(crate) fn update_fetching_headers_first_sent(
+        &self,
+        block_hashes: &[H256],
+        first_sent: u64,
+    ) {
+        for block_hash in block_hashes {
+            if let Some(mut value) = self.fetching_headers.get_mut(block_hash) {
+                if value.first_sent == 0 {
+                    value.first_sent = first_sent;
+                }
+            }
+        }
+    }
+    pub(crate) fn update_fetching_txs_first_sent(&self, tx_hashes: &[H256], first_sent: u64) {
+        for tx_hash in tx_hashes {
+            if let Some(mut value) = self.fetching_txs.get_mut(tx_hash) {
+                if value.first_sent == 0 {
+                    value.first_sent = first_sent;
+                }
+            }
+        }
+    }
+
     pub(crate) fn matched_blocks(&self) -> &RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
         &self.matched_blocks
     }
@@ -469,8 +584,8 @@ impl Peers {
         self.fetching_headers
             .iter()
             .filter(|pair| {
-                let (_, first_sent, timeout) = pair.value();
-                *first_sent == 0 || *timeout
+                let info = pair.value();
+                info.first_sent == 0 || info.timeout
             })
             .map(|pair| pair.key().clone())
             .collect()
@@ -480,35 +595,11 @@ impl Peers {
         self.fetching_txs
             .iter()
             .filter(|pair| {
-                let (_, first_sent, timeout) = pair.value();
-                *first_sent == 0 || *timeout
+                let info = pair.value();
+                info.first_sent == 0 || info.timeout
             })
             .map(|pair| pair.key().clone())
             .collect()
-    }
-
-    // mark all fetching hashes (headers/txs) as timeout
-    pub(crate) fn mark_fetching_headers_timeout(&self, peer: PeerIndex) {
-        if let Some(peer_state) = self.get_state(&peer) {
-            if let Some(request) = peer_state.get_blocks_proof_request() {
-                for block_hash in request.block_hashes() {
-                    if let Some(mut pair) = self.fetching_headers.get_mut(&block_hash) {
-                        pair.value_mut().2 = true;
-                    }
-                }
-            }
-        }
-    }
-    pub(crate) fn mark_fetching_txs_timeout(&self, peer: PeerIndex) {
-        if let Some(peer_state) = self.get_state(&peer) {
-            if let Some(request) = peer_state.get_txs_proof_request() {
-                for tx_hash in request.tx_hashes() {
-                    if let Some(mut pair) = self.fetching_txs.get_mut(&tx_hash) {
-                        pair.value_mut().2 = true;
-                    }
-                }
-            }
-        }
     }
 
     pub(crate) fn add_matched_blocks(
