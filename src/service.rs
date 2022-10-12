@@ -110,7 +110,46 @@ pub enum FetchStatus<T> {
 #[derive(Deserialize, Serialize)]
 pub struct ScriptStatus {
     pub script: Script,
+    pub script_type: ScriptType,
     pub block_number: BlockNumber,
+}
+
+impl From<storage::ScriptType> for ScriptType {
+    fn from(st: storage::ScriptType) -> Self {
+        match st {
+            storage::ScriptType::Lock => Self::Lock,
+            storage::ScriptType::Type => Self::Type,
+        }
+    }
+}
+
+impl From<ScriptType> for storage::ScriptType {
+    fn from(st: ScriptType) -> Self {
+        match st {
+            ScriptType::Lock => Self::Lock,
+            ScriptType::Type => Self::Type,
+        }
+    }
+}
+
+impl From<ScriptStatus> for storage::ScriptStatus {
+    fn from(ss: ScriptStatus) -> Self {
+        Self {
+            script: ss.script.into(),
+            script_type: ss.script_type.into(),
+            block_number: ss.block_number.into(),
+        }
+    }
+}
+
+impl From<storage::ScriptStatus> for ScriptStatus {
+    fn from(ss: storage::ScriptStatus) -> Self {
+        Self {
+            script: ss.script.into(),
+            script_type: ss.script_type.into(),
+            block_number: ss.block_number.into(),
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize)]
@@ -173,7 +212,7 @@ pub struct SearchKeyFilter {
     pub(crate) block_range: Option<[BlockNumber; 2]>,
 }
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScriptType {
     Lock,
@@ -270,15 +309,7 @@ pub struct NetRpcImpl {
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
-        let scripts = scripts
-            .into_iter()
-            .map(|script_status| {
-                (
-                    script_status.script.into(),
-                    script_status.block_number.into(),
-                )
-            })
-            .collect();
+        let scripts = scripts.into_iter().map(Into::into).collect();
 
         self.storage.update_filter_scripts(scripts);
         Ok(())
@@ -286,13 +317,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
 
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
         let scripts = self.storage.get_filter_scripts();
-        Ok(scripts
-            .into_iter()
-            .map(|(script, block_number)| ScriptStatus {
-                script: script.into(),
-                block_number: block_number.into(),
-            })
-            .collect())
+        Ok(scripts.into_iter().map(Into::into).collect())
     }
 
     fn get_cells(
