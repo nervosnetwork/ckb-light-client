@@ -460,25 +460,23 @@ impl Peers {
             }
         }
     }
-    pub(crate) fn update_fetching_headers_first_sent(
-        &self,
-        block_hashes: &[Byte32],
-        first_sent: u64,
-    ) {
+    pub(crate) fn fetching_idle_headers(&self, block_hashes: &[Byte32], now: u64) {
         for block_hash in block_hashes {
             if let Some(mut value) = self.fetching_headers.get_mut(block_hash) {
                 if value.first_sent == 0 {
-                    value.first_sent = first_sent;
+                    value.first_sent = now;
                 }
+                value.timeout = false;
             }
         }
     }
-    pub(crate) fn update_fetching_txs_first_sent(&self, tx_hashes: &[Byte32], first_sent: u64) {
+    pub(crate) fn fetching_idle_txs(&self, tx_hashes: &[Byte32], now: u64) {
         for tx_hash in tx_hashes {
             if let Some(mut value) = self.fetching_txs.get_mut(tx_hash) {
                 if value.first_sent == 0 {
-                    value.first_sent = first_sent;
+                    value.first_sent = now;
                 }
+                value.timeout = false;
             }
         }
     }

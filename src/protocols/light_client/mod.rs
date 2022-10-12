@@ -487,8 +487,7 @@ impl LightClientProtocol {
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
                 }
-                self.peers
-                    .update_fetching_headers_first_sent(block_hashes, now);
+                self.peers.fetching_idle_headers(block_hashes, now);
             } else {
                 debug!("all valid peers are busy for fetching blocks proof (headers)");
                 break;
@@ -525,7 +524,7 @@ impl LightClientProtocol {
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
                 }
-                self.peers.update_fetching_txs_first_sent(tx_hashes, now);
+                self.peers.fetching_idle_txs(tx_hashes, now);
             } else {
                 debug!("all valid peers are busy for fetching transactions");
                 break;
