@@ -156,13 +156,10 @@ async fn test_block_filter_invalid_filters_count() {
     let min_filtered_block_number = 3;
     chain
         .client_storage()
-        .update_min_filtered_block_number(min_filtered_block_number);
-    chain
-        .client_storage()
         .update_filter_scripts(vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
-            block_number: 0,
+            block_number: min_filtered_block_number,
         }]);
 
     let peer_index = PeerIndex::new(3);
@@ -268,11 +265,15 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    let proved_number = min_filtered_block_number + 1;
+    let proved_number = min_filtered_block_number + 3;
     let start_number = min_filtered_block_number + 1;
     chain
         .client_storage()
-        .update_min_filtered_block_number(min_filtered_block_number);
+        .update_filter_scripts(vec![ScriptStatus {
+            script: Script::default(),
+            script_type: ScriptType::Lock,
+            block_number: min_filtered_block_number,
+        }]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -295,26 +296,30 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
+    let block_hashes = vec![H256(rand::random()).pack(), H256(rand::random()).pack()];
+    let blocks_count = block_hashes.len();
     let content = packed::BlockFilters::new_builder()
         .start_number(start_number.pack())
-        .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
+        .block_hashes(block_hashes.pack())
         .filters(vec![Bytes::from("abc").pack(), Bytes::from("def").pack()].pack())
         .build();
     let message = packed::BlockFilterMessage::new_builder()
         .set(content)
         .build();
 
-    let peer_index = PeerIndex::new(3);
     protocol
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
+    let filtered_block_number = start_number - 1 + blocks_count as u64;
     assert!(nc.not_banned(peer_index));
-
+    assert_eq!(
+        chain.client_storage().get_filter_scripts()[0].block_number,
+        filtered_block_number
+    );
     let message = {
-        let start_number: u64 = min_filtered_block_number + 1;
         let content = packed::GetBlockFilters::new_builder()
-            .start_number((start_number + 1).pack())
+            .start_number((filtered_block_number + 1).pack())
             .build();
         packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -440,16 +445,13 @@ async fn test_block_filter_notify_ask_filters() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain
-        .client_storage()
-        .update_min_filtered_block_number(min_filtered_block_number);
     // for should_ask() return true
     chain
         .client_storage()
         .update_filter_scripts(vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
-            block_number: 0,
+            block_number: min_filtered_block_number,
         }]);
 
     let peer_index = PeerIndex::new(3);
@@ -561,16 +563,13 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain
-        .client_storage()
-        .update_min_filtered_block_number(min_filtered_block_number);
     // for should_ask() return true
     chain
         .client_storage()
         .update_filter_scripts(vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
-            block_number: 0,
+            block_number: min_filtered_block_number,
         }]);
 
     let peer_index = PeerIndex::new(3);

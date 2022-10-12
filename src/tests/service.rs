@@ -1198,3 +1198,22 @@ fn get_cells_after_rollback_bug() {
         .unwrap();
     assert_eq!(3, txs.objects.len());
 }
+
+#[test]
+fn test_forget_update_min_filtred_number() {
+    let storage = new_storage("forget_update_min_filtred_block");
+    storage.update_min_filtered_block_number(66);
+    storage.update_filter_scripts(vec![
+        storage::ScriptStatus {
+            script: Script::default(),
+            script_type: storage::ScriptType::Lock,
+            block_number: 33,
+        },
+        storage::ScriptStatus {
+            script: Script::default(),
+            script_type: storage::ScriptType::Type,
+            block_number: 44,
+        },
+    ]);
+    assert_eq!(storage.get_min_filtered_block_number(), 33);
+}

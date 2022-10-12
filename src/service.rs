@@ -311,7 +311,6 @@ pub struct NetRpcImpl {
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
         let scripts = scripts.into_iter().map(Into::into).collect();
-
         self.storage.update_filter_scripts(scripts);
         Ok(())
     }
