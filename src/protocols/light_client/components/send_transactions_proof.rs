@@ -104,71 +104,66 @@ impl<'a> SendTransactionsProofProcess<'a> {
                     self.peer
                 );
                 return StatusCode::UnexpectedResponse.into();
-            } else {
-                return Status::ok();
             }
-        }
+        } else {
+            // Check PoW for blocks
+            return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
-        // Check PoW for blocks
-        return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
+            // Verify the proof
+            return_if_failed!(verify_mmr_proof(
+                self.protocol.mmr_activated_epoch(),
+                &last_header,
+                self.message.proof(),
+                headers.iter(),
+            ));
 
-        // Verify the proof
-        return_if_failed!(verify_mmr_proof(
-            self.protocol.mmr_activated_epoch(),
-            &last_header,
-            self.message.proof(),
-            headers.iter(),
-        ));
-
-        // verify filtered blocks (transactions)
-        for filtered_block in &filtered_blocks {
-            let witnesses_root = filtered_block.witnesses_root();
-            let proof = filtered_block.proof();
-            let indices: Vec<u32> = proof.indices().into_iter().map(|v| v.unpack()).collect();
-            let lemmas: Vec<packed::Byte32> = proof.lemmas().into_iter().collect();
-            let merkle_proof = MerkleProof::new(indices, lemmas);
-            match merkle_proof
-                .root(
-                    &filtered_block
-                        .transactions()
-                        .into_iter()
-                        .map(|tx| tx.calc_tx_hash())
-                        .collect::<Vec<_>>(),
-                )
-                .map(|raw_transactions_root| {
-                    filtered_block.header().raw().transactions_root()
-                        == merkle_root(&[raw_transactions_root, witnesses_root])
-                }) {
-                Some(true) => {}
-                _ => {
-                    let errmsg = format!(
+            // verify filtered blocks (transactions)
+            for filtered_block in &filtered_blocks {
+                let witnesses_root = filtered_block.witnesses_root();
+                let proof = filtered_block.proof();
+                let indices: Vec<u32> = proof.indices().into_iter().map(|v| v.unpack()).collect();
+                let lemmas: Vec<packed::Byte32> = proof.lemmas().into_iter().collect();
+                let merkle_proof = MerkleProof::new(indices, lemmas);
+                match merkle_proof
+                    .root(
+                        &filtered_block
+                            .transactions()
+                            .into_iter()
+                            .map(|tx| tx.calc_tx_hash())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map(|raw_transactions_root| {
+                        filtered_block.header().raw().transactions_root()
+                            == merkle_root(&[raw_transactions_root, witnesses_root])
+                    }) {
+                    Some(true) => {}
+                    _ => {
+                        let errmsg = format!(
                         "failed to verify the transactions merkle proof of filtered block {:#x}",
                         filtered_block.header().calc_header_hash()
                     );
-                    return StatusCode::InvalidProof.with_context(errmsg);
+                        return StatusCode::InvalidProof.with_context(errmsg);
+                    }
                 }
             }
-        }
-        debug!("verify SendBlocksProof ok");
+            debug!("verify SendBlocksProof ok");
 
-        for filtered_block in filtered_blocks {
-            let header = filtered_block.header().into_view();
-            for tx in filtered_block.transactions() {
-                if self
-                    .protocol
-                    .peers()
-                    .add_transaction(&tx.calc_tx_hash().unpack(), &header.hash().unpack())
-                {
-                    self.protocol.storage().add_fetched_tx(&tx, &header.data());
+            for filtered_block in filtered_blocks {
+                let header = filtered_block.header().into_view();
+                for tx in filtered_block.transactions() {
+                    if self
+                        .protocol
+                        .peers()
+                        .add_transaction(&tx.calc_tx_hash(), &header.hash())
+                    {
+                        self.protocol.storage().add_fetched_tx(&tx, &header.data());
+                    }
                 }
             }
         }
-        self.protocol.peers().mark_fetching_txs_missing(
-            &missing_tx_hashes
-                .into_iter()
-                .map(|hash| hash.unpack())
-                .collect::<Vec<_>>(),
-        );
+        self.protocol
+            .peers()
+            .mark_fetching_txs_missing(&missing_tx_hashes);
         Status::ok()
     }
 }

@@ -670,24 +670,30 @@ fn rpc() {
         .collect();
     // insert fetched headers
     let peers = Arc::new(Peers::new(RwLock::new(vec![extra_header.clone()])));
-    peers
-        .fetching_headers()
-        .insert(h256!("0xaa22"), FetchInfo::new(1111, 3344, false, false));
-    peers
-        .fetching_headers()
-        .insert(h256!("0xaa33"), FetchInfo::new(1111, 0, false, false));
-    peers
-        .fetching_headers()
-        .insert(h256!("0xaa404"), FetchInfo::new(1111, 0, false, true));
-    peers
-        .fetching_txs()
-        .insert(h256!("0xbb22"), FetchInfo::new(1111, 5566, false, false));
-    peers
-        .fetching_txs()
-        .insert(h256!("0xbb33"), FetchInfo::new(1111, 0, false, false));
-    peers
-        .fetching_txs()
-        .insert(h256!("0xbb404"), FetchInfo::new(1111, 0, false, true));
+    peers.fetching_headers().insert(
+        h256!("0xaa22").pack(),
+        FetchInfo::new(1111, 3344, false, false),
+    );
+    peers.fetching_headers().insert(
+        h256!("0xaa33").pack(),
+        FetchInfo::new(1111, 0, false, false),
+    );
+    peers.fetching_headers().insert(
+        h256!("0xaa404").pack(),
+        FetchInfo::new(1111, 0, false, true),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb22").pack(),
+        FetchInfo::new(1111, 5566, false, false),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb33").pack(),
+        FetchInfo::new(1111, 0, false, false),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb404").pack(),
+        FetchInfo::new(1111, 0, false, true),
+    );
 
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
 

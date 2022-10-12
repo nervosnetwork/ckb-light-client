@@ -469,10 +469,9 @@ impl LightClientProtocol {
                     .map(|peer_state| peer_state.get_blocks_proof_request().is_none())
                     .unwrap_or(false)
             }) {
-                let hashes: Vec<_> = block_hashes.iter().map(|hash| hash.pack()).collect();
                 debug!("send block proof request to peer: {}", peer);
                 let content = packed::GetBlocksProof::new_builder()
-                    .block_hashes(hashes.pack())
+                    .block_hashes(block_hashes.to_vec().pack())
                     .last_hash(last_hash.clone())
                     .build();
                 let message = packed::LightClientMessage::new_builder()
@@ -509,7 +508,7 @@ impl LightClientProtocol {
             }) {
                 debug!("send transaction proof request to peer: {}", peer);
                 let content = packed::GetTransactionsProof::new_builder()
-                    .tx_hashes(tx_hashes.iter().map(|hash| hash.pack()).pack())
+                    .tx_hashes(tx_hashes.to_vec().pack())
                     .last_hash(last_hash.clone())
                     .build();
                 let message = packed::LightClientMessage::new_builder()

@@ -1,6 +1,7 @@
 use ckb_network::PeerIndex;
 use ckb_types::{
-    core::HeaderView, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader, H256,
+    core::HeaderView, packed, packed::Byte32, prelude::*,
+    utilities::merkle_mountain_range::VerifiableHeader, H256,
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
@@ -15,9 +16,9 @@ pub struct Peers {
     // verified last N block headers
     last_headers: RwLock<Vec<HeaderView>>,
     // The headers are fetching, the value is:
-    fetching_headers: DashMap<H256, FetchInfo>,
+    fetching_headers: DashMap<Byte32, FetchInfo>,
     // The transactions are fetching, the value is:
-    fetching_txs: DashMap<H256, FetchInfo>,
+    fetching_txs: DashMap<Byte32, FetchInfo>,
 
     // The matched block filters to download, the key is the block hash, the value is:
     //   * if the block is proved
@@ -220,7 +221,7 @@ impl BlocksProofRequest {
         Self { content, when_sent }
     }
 
-    pub(crate) fn last_hash(&self) -> packed::Byte32 {
+    pub(crate) fn last_hash(&self) -> Byte32 {
         self.content.last_hash()
     }
 
@@ -234,8 +235,8 @@ impl BlocksProofRequest {
 
     pub(crate) fn check_block_hashes(
         &self,
-        received_block_hashes: &[packed::Byte32],
-        missing_block_hashes: &[packed::Byte32],
+        received_block_hashes: &[Byte32],
+        missing_block_hashes: &[Byte32],
     ) -> bool {
         if self.content.block_hashes().len()
             == received_block_hashes.len() + missing_block_hashes.len()
@@ -255,7 +256,7 @@ impl BlocksProofRequest {
 }
 
 impl BlocksRequest {
-    fn new(hashes: Vec<packed::Byte32>, when_sent: u64) -> Self {
+    fn new(hashes: Vec<Byte32>, when_sent: u64) -> Self {
         let hashes = hashes
             .into_iter()
             .map(|hash| (hash.unpack(), false))
@@ -273,7 +274,7 @@ impl TransactionsProofRequest {
         Self { content, when_sent }
     }
 
-    pub(crate) fn last_hash(&self) -> packed::Byte32 {
+    pub(crate) fn last_hash(&self) -> Byte32 {
         self.content.last_hash()
     }
 
@@ -287,8 +288,8 @@ impl TransactionsProofRequest {
 
     pub(crate) fn check_tx_hashes(
         &self,
-        received_tx_hashes: &[packed::Byte32],
-        missing_tx_hashes: &[packed::Byte32],
+        received_tx_hashes: &[Byte32],
+        missing_tx_hashes: &[Byte32],
     ) -> bool {
         if self.content.tx_hashes().len() == received_tx_hashes.len() + missing_tx_hashes.len() {
             let tx_hashes = received_tx_hashes
@@ -350,7 +351,7 @@ impl PeerState {
         self.txs_proof_request = request;
     }
 
-    fn add_block(&mut self, block_hash: &packed::Byte32) {
+    fn add_block(&mut self, block_hash: &Byte32) {
         let finished = if let Some(request) = self.blocks_request.as_mut() {
             if let Some(received) = request.hashes.get_mut(&block_hash.unpack()) {
                 *received = true;
@@ -392,44 +393,44 @@ impl Peers {
     }
 
     #[cfg(test)]
-    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, FetchInfo> {
+    pub(crate) fn fetching_headers(&self) -> &DashMap<Byte32, FetchInfo> {
         &self.fetching_headers
     }
     #[cfg(test)]
-    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, FetchInfo> {
+    pub(crate) fn fetching_txs(&self) -> &DashMap<Byte32, FetchInfo> {
         &self.fetching_txs
     }
     pub(crate) fn has_fetching_info(&self) -> bool {
         !self.fetching_headers.is_empty() || !self.fetching_txs.is_empty()
     }
-    pub(crate) fn add_fetch_header(&self, block_hash: H256, timestamp: u64) {
+    pub(crate) fn add_fetch_header(&self, block_hash: Byte32, timestamp: u64) {
         self.fetching_headers
             .insert(block_hash, FetchInfo::new_add(timestamp));
     }
-    pub(crate) fn add_fetch_tx(&self, tx_hash: H256, timestamp: u64) {
+    pub(crate) fn add_fetch_tx(&self, tx_hash: Byte32, timestamp: u64) {
         self.fetching_txs
             .insert(tx_hash, FetchInfo::new_add(timestamp));
     }
-    pub(crate) fn get_header_fetch_info(&self, block_hash: &H256) -> Option<(u64, u64, bool)> {
+    pub(crate) fn get_header_fetch_info(&self, block_hash: &Byte32) -> Option<(u64, u64, bool)> {
         self.fetching_headers.get(block_hash).map(|item| {
             let info = item.value();
             (info.added_ts, info.first_sent, info.missing)
         })
     }
-    pub(crate) fn get_tx_fetch_info(&self, tx_hash: &H256) -> Option<(u64, u64, bool)> {
+    pub(crate) fn get_tx_fetch_info(&self, tx_hash: &Byte32) -> Option<(u64, u64, bool)> {
         self.fetching_txs.get(tx_hash).map(|item| {
             let info = item.value();
             (info.added_ts, info.first_sent, info.missing)
         })
     }
-    pub(crate) fn mark_fetching_headers_missing(&self, block_hashes: &[H256]) {
+    pub(crate) fn mark_fetching_headers_missing(&self, block_hashes: &[Byte32]) {
         for block_hash in block_hashes {
             if let Some(mut value) = self.fetching_headers.get_mut(block_hash) {
                 value.missing = true;
             }
         }
     }
-    pub(crate) fn mark_fetching_txs_missing(&self, tx_hashes: &[H256]) {
+    pub(crate) fn mark_fetching_txs_missing(&self, tx_hashes: &[Byte32]) {
         for tx_hash in tx_hashes {
             if let Some(mut value) = self.fetching_txs.get_mut(tx_hash) {
                 value.missing = true;
@@ -441,7 +442,7 @@ impl Peers {
         if let Some(peer_state) = self.get_state(&peer) {
             if let Some(request) = peer_state.get_blocks_proof_request() {
                 for block_hash in request.block_hashes() {
-                    if let Some(mut pair) = self.fetching_headers.get_mut(&block_hash) {
+                    if let Some(mut pair) = self.fetching_headers.get_mut(&block_hash.pack()) {
                         pair.value_mut().timeout = true;
                     }
                 }
@@ -452,7 +453,7 @@ impl Peers {
         if let Some(peer_state) = self.get_state(&peer) {
             if let Some(request) = peer_state.get_txs_proof_request() {
                 for tx_hash in request.tx_hashes() {
-                    if let Some(mut pair) = self.fetching_txs.get_mut(&tx_hash) {
+                    if let Some(mut pair) = self.fetching_txs.get_mut(&tx_hash.pack()) {
                         pair.value_mut().timeout = true;
                     }
                 }
@@ -461,7 +462,7 @@ impl Peers {
     }
     pub(crate) fn update_fetching_headers_first_sent(
         &self,
-        block_hashes: &[H256],
+        block_hashes: &[Byte32],
         first_sent: u64,
     ) {
         for block_hash in block_hashes {
@@ -472,7 +473,7 @@ impl Peers {
             }
         }
     }
-    pub(crate) fn update_fetching_txs_first_sent(&self, tx_hashes: &[H256], first_sent: u64) {
+    pub(crate) fn update_fetching_txs_first_sent(&self, tx_hashes: &[Byte32], first_sent: u64) {
         for tx_hash in tx_hashes {
             if let Some(mut value) = self.fetching_txs.get_mut(tx_hash) {
                 if value.first_sent == 0 {
@@ -566,11 +567,11 @@ impl Peers {
             })
     }
 
-    pub(crate) fn add_header(&self, block_hash: &H256) -> bool {
+    pub(crate) fn add_header(&self, block_hash: &Byte32) -> bool {
         self.fetching_headers.remove(block_hash).is_some()
     }
 
-    pub(crate) fn add_transaction(&self, tx_hash: &H256, block_hash: &H256) -> bool {
+    pub(crate) fn add_transaction(&self, tx_hash: &Byte32, block_hash: &Byte32) -> bool {
         if self.fetching_txs.remove(tx_hash).is_some() {
             self.add_header(block_hash);
             true
@@ -580,7 +581,7 @@ impl Peers {
     }
 
     // The headers to fetch are which the request never send or the request is timeout
-    pub(crate) fn get_headers_to_fetch(&self) -> Vec<H256> {
+    pub(crate) fn get_headers_to_fetch(&self) -> Vec<Byte32> {
         self.fetching_headers
             .iter()
             .filter(|pair| {
@@ -591,7 +592,7 @@ impl Peers {
             .collect()
     }
     // The txs to fetch are which the request never send or the request is timeout
-    pub(crate) fn get_txs_to_fetch(&self) -> Vec<H256> {
+    pub(crate) fn get_txs_to_fetch(&self) -> Vec<Byte32> {
         self.fetching_txs
             .iter()
             .filter(|pair| {
@@ -605,7 +606,7 @@ impl Peers {
     pub(crate) fn add_matched_blocks(
         &self,
         matched_blocks: &mut HashMap<H256, (bool, Option<packed::Block>)>,
-        block_hashes: Vec<(packed::Byte32, bool)>,
+        block_hashes: Vec<(Byte32, bool)>,
     ) {
         for (block_hash, proved) in block_hashes {
             matched_blocks.insert(block_hash.unpack(), (proved, None));
@@ -615,7 +616,7 @@ impl Peers {
     pub(crate) fn mark_matched_blocks_proved(
         &self,
         matched_blocks: &mut HashMap<H256, (bool, Option<packed::Block>)>,
-        block_hashes: &[packed::Byte32],
+        block_hashes: &[Byte32],
     ) {
         for block_hash in block_hashes {
             if let Some(mut value) = matched_blocks.get_mut(&block_hash.unpack()) {
@@ -629,7 +630,7 @@ impl Peers {
         &self,
         matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
         limit: usize,
-    ) -> Vec<packed::Byte32> {
+    ) -> Vec<Byte32> {
         let mut proof_requested_hashes = HashSet::new();
         for pair in self.inner.iter() {
             let peer_state = &pair.value().state;
@@ -656,7 +657,7 @@ impl Peers {
         &self,
         matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
         limit: usize,
-    ) -> Vec<packed::Byte32> {
+    ) -> Vec<Byte32> {
         let mut block_requested_hashes = HashSet::new();
         for pair in self.inner.iter() {
             let peer_state = &pair.value().state;
@@ -716,11 +717,7 @@ impl Peers {
             );
         }
     }
-    pub(crate) fn update_blocks_request(
-        &self,
-        index: PeerIndex,
-        hashes: Option<Vec<packed::Byte32>>,
-    ) {
+    pub(crate) fn update_blocks_request(&self, index: PeerIndex, hashes: Option<Vec<Byte32>>) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.state.update_blocks_request(
                 hashes.map(|hashes| BlocksRequest::new(hashes, unix_time_as_millis())),

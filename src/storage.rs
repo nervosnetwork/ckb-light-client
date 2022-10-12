@@ -862,17 +862,17 @@ impl StorageWithChainData {
 
     /// return (added_ts, first_sent, missing)
     pub(crate) fn get_header_fetch_info(&self, block_hash: &H256) -> Option<(u64, u64, bool)> {
-        self.peers.get_header_fetch_info(block_hash)
+        self.peers.get_header_fetch_info(&block_hash.pack())
     }
     /// return (added_ts, first_sent, missing)
     pub(crate) fn get_tx_fetch_info(&self, tx_hash: &H256) -> Option<(u64, u64, bool)> {
-        self.peers.get_tx_fetch_info(tx_hash)
+        self.peers.get_tx_fetch_info(&tx_hash.pack())
     }
     pub(crate) fn add_fetch_header(&self, header_hash: H256, timestamp: u64) {
-        self.peers.add_fetch_header(header_hash, timestamp);
+        self.peers.add_fetch_header(header_hash.pack(), timestamp);
     }
     pub(crate) fn add_fetch_tx(&self, tx_hash: H256, timestamp: u64) {
-        self.peers.add_fetch_tx(tx_hash, timestamp);
+        self.peers.add_fetch_tx(tx_hash.pack(), timestamp);
     }
 }
 

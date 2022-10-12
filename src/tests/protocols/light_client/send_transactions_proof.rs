@@ -154,13 +154,13 @@ async fn test_send_txs_proof_ok() {
         for tx_hash in &missing_tx_hashes {
             peers
                 .fetching_txs()
-                .insert(tx_hash.unpack(), FetchInfo::new(1111, 0, false, false));
+                .insert(tx_hash.clone(), FetchInfo::new(1111, 0, false, false));
         }
         peers
     };
 
     for tx_hash in &tx_hashes {
-        peers.add_fetch_tx(tx_hash.unpack(), 111)
+        peers.add_fetch_tx(tx_hash.clone(), 111)
     }
 
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
@@ -177,11 +177,7 @@ async fn test_send_txs_proof_ok() {
             .is_some());
     }
     for tx_hash in missing_tx_hashes {
-        assert!(peers
-            .fetching_txs()
-            .get(&tx_hash.unpack())
-            .unwrap()
-            .missing());
+        assert!(peers.fetching_txs().get(&tx_hash).unwrap().missing());
     }
 }
 
@@ -310,7 +306,7 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
     };
 
     for tx_hash in &tx_hashes {
-        peers.add_fetch_tx(tx_hash.unpack(), 111);
+        peers.add_fetch_tx(tx_hash.clone(), 111);
     }
 
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
@@ -461,7 +457,7 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
     };
 
     for tx_hash in &tx_hashes {
-        peers.add_fetch_tx(tx_hash.unpack(), 111);
+        peers.add_fetch_tx(tx_hash.clone(), 111);
     }
 
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
@@ -533,18 +529,20 @@ async fn test_send_headers_txs_request() {
 
     let peers = {
         let peers = Arc::new(Peers::new(Default::default()));
+        peers.fetching_headers().insert(
+            h256!("0xaa22").pack(),
+            FetchInfo::new(111, 3344, false, false),
+        );
         peers
             .fetching_headers()
-            .insert(h256!("0xaa22"), FetchInfo::new(111, 3344, false, false));
-        peers
-            .fetching_headers()
-            .insert(h256!("0xaa33"), FetchInfo::new(111, 0, false, false));
-        peers
-            .fetching_txs()
-            .insert(h256!("0xbb22"), FetchInfo::new(111, 5566, false, false));
+            .insert(h256!("0xaa33").pack(), FetchInfo::new(111, 0, false, false));
+        peers.fetching_txs().insert(
+            h256!("0xbb22").pack(),
+            FetchInfo::new(111, 5566, false, false),
+        );
         peers
             .fetching_txs()
-            .insert(h256!("0xbb33"), FetchInfo::new(111, 0, false, false));
+            .insert(h256!("0xbb33").pack(), FetchInfo::new(111, 0, false, false));
 
         peers.add_peer(peer_index);
 
@@ -571,7 +569,7 @@ async fn test_send_headers_txs_request() {
     assert!(
         peers
             .fetching_headers()
-            .get(&h256!("0xaa33"))
+            .get(&h256!("0xaa33").pack())
             .unwrap()
             .first_sent()
             > 0
@@ -579,7 +577,7 @@ async fn test_send_headers_txs_request() {
     assert!(
         peers
             .fetching_txs()
-            .get(&h256!("0xbb33"))
+            .get(&h256!("0xbb33").pack())
             .unwrap()
             .first_sent()
             > 0

@@ -100,97 +100,95 @@ impl<'a> SendBlocksProofProcess<'a> {
                     self.peer
                 );
                 return StatusCode::UnexpectedResponse.into();
-            } else {
-                return Status::ok();
             }
-        }
+        } else {
+            // Check PoW for blocks
+            return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
-        // Check PoW for blocks
-        return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
+            // Verify the proof
+            return_if_failed!(verify_mmr_proof(
+                self.protocol.mmr_activated_epoch(),
+                &last_header,
+                self.message.proof(),
+                headers.iter(),
+            ));
 
-        // Verify the proof
-        return_if_failed!(verify_mmr_proof(
-            self.protocol.mmr_activated_epoch(),
-            &last_header,
-            self.message.proof(),
-            headers.iter(),
-        ));
-
-        // Get blocks
-        {
-            let block_hashes: Vec<packed::Byte32> =
-                headers.iter().map(|header| header.hash()).collect();
+            // Get blocks
             {
-                let mut matched_blocks = self
-                    .protocol
-                    .peers()
-                    .matched_blocks()
-                    .write()
-                    .expect("poisoned");
-                self.protocol
-                    .peers
-                    .mark_matched_blocks_proved(&mut matched_blocks, &block_hashes);
-            }
-
-            let best_peers: Vec<_> = self
-                .protocol
-                .peers
-                .get_best_proved_peers(&last_header.header().data())
-                .into_iter()
-                .filter_map(|peer| {
+                let block_hashes: Vec<packed::Byte32> =
+                    headers.iter().map(|header| header.hash()).collect();
+                {
+                    let mut matched_blocks = self
+                        .protocol
+                        .peers()
+                        .matched_blocks()
+                        .write()
+                        .expect("poisoned");
                     self.protocol
                         .peers
-                        .get_state(&peer)
-                        .map(|state| (peer, state))
-                })
-                .collect();
+                        .mark_matched_blocks_proved(&mut matched_blocks, &block_hashes);
+                }
 
-            if let Some((peer, _)) = best_peers
-                .iter()
-                .filter(|(_peer, peer_state)| peer_state.get_blocks_request().is_none())
-                .collect::<Vec<_>>()
-                .choose(&mut rand::thread_rng())
-            {
-                self.protocol
+                let best_peers: Vec<_> = self
+                    .protocol
                     .peers
-                    .update_blocks_request(*peer, Some(block_hashes.clone()));
-                debug!(
-                    "send get blocks request to peer: {}, matched_count: {}",
-                    peer,
-                    block_hashes.len()
-                );
-                for hashes in block_hashes.chunks(self.protocol.init_blocks_in_transit_per_peer()) {
-                    let content = packed::GetBlocks::new_builder()
-                        .block_hashes(hashes.to_vec().pack())
-                        .build();
-                    let message = packed::SyncMessage::new_builder()
-                        .set(content)
-                        .build()
-                        .as_bytes();
-                    if let Err(err) =
-                        self.nc
-                            .send_message(SupportProtocols::Sync.protocol_id(), *peer, message)
+                    .get_best_proved_peers(&last_header.header().data())
+                    .into_iter()
+                    .filter_map(|peer| {
+                        self.protocol
+                            .peers
+                            .get_state(&peer)
+                            .map(|state| (peer, state))
+                    })
+                    .collect();
+
+                if let Some((peer, _)) = best_peers
+                    .iter()
+                    .filter(|(_peer, peer_state)| peer_state.get_blocks_request().is_none())
+                    .collect::<Vec<_>>()
+                    .choose(&mut rand::thread_rng())
+                {
+                    self.protocol
+                        .peers
+                        .update_blocks_request(*peer, Some(block_hashes.clone()));
+                    debug!(
+                        "send get blocks request to peer: {}, matched_count: {}",
+                        peer,
+                        block_hashes.len()
+                    );
+                    for hashes in
+                        block_hashes.chunks(self.protocol.init_blocks_in_transit_per_peer())
                     {
-                        let error_message =
-                            format!("nc.send_message SyncMessage, error: {:?}", err);
-                        error!("{}", error_message);
-                        return StatusCode::Network.with_context(error_message);
+                        let content = packed::GetBlocks::new_builder()
+                            .block_hashes(hashes.to_vec().pack())
+                            .build();
+                        let message = packed::SyncMessage::new_builder()
+                            .set(content)
+                            .build()
+                            .as_bytes();
+                        if let Err(err) = self.nc.send_message(
+                            SupportProtocols::Sync.protocol_id(),
+                            *peer,
+                            message,
+                        ) {
+                            let error_message =
+                                format!("nc.send_message SyncMessage, error: {:?}", err);
+                            error!("{}", error_message);
+                            return StatusCode::Network.with_context(error_message);
+                        }
                     }
                 }
             }
-        }
 
-        for header in headers {
-            if self.protocol.peers().add_header(&header.hash().unpack()) {
-                self.protocol.storage().add_fetched_header(&header.data());
+            for header in headers {
+                if self.protocol.peers().add_header(&header.hash()) {
+                    self.protocol.storage().add_fetched_header(&header.data());
+                }
             }
         }
-        self.protocol.peers().mark_fetching_headers_missing(
-            &missing_block_hashes
-                .into_iter()
-                .map(|hash| hash.unpack())
-                .collect::<Vec<_>>(),
-        );
+        self.protocol
+            .peers()
+            .mark_fetching_headers_missing(&missing_block_hashes);
         Status::ok()
     }
 }
