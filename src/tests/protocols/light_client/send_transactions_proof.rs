@@ -3,7 +3,6 @@ use std::sync::Arc;
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_store::ChainStore;
 use ckb_types::{
-    core::TransactionBuilder,
     h256,
     packed::{self},
     prelude::*,
@@ -33,33 +32,14 @@ async fn test_send_txs_proof_ok() {
     let tx_hashes: Vec<_> = [13, 15, 17]
         .into_iter()
         .map(|prev_num| {
-            let prev_block = chain
-                .shared()
-                .snapshot()
-                .get_block_by_number(prev_num)
-                .unwrap();
-            let input = {
-                let prev_tx = prev_block.transactions().get(0).unwrap().clone();
-                let previous_tx_hash = prev_tx.hash();
-                packed::CellInput::new(packed::OutPoint::new(previous_tx_hash, 0), 0)
-            };
-            let header_dep = prev_block.hash();
-            let output = packed::CellOutput::new_builder()
-                .capacity(0xf4610900.pack())
-                .build();
-            let tx = TransactionBuilder::default()
-                .cell_dep(chain.always_success_cell_dep())
-                .header_dep(header_dep)
-                .input(input)
-                .output(output)
-                .output_data(Default::default())
-                .build();
-            chain
-                .tx_pool()
-                .submit_local_tx(tx.clone())
-                .unwrap()
-                .unwrap();
-            chain.mine_blocks(2);
+            let tx = chain.get_cellbase_as_input(prev_num);
+            chain.mine_block(|block| {
+                let ids = vec![tx.proposal_short_id()];
+                block.as_advanced_builder().proposals(ids).build()
+            });
+            chain.mine_blocks(1);
+            chain.mine_block(|block| block.as_advanced_builder().transaction(tx.clone()).build());
+            chain.mine_blocks(1);
             tx.hash()
         })
         .collect();
@@ -191,33 +171,14 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
     let tx_hashes: Vec<_> = [13, 15, 17]
         .into_iter()
         .map(|prev_num| {
-            let prev_block = chain
-                .shared()
-                .snapshot()
-                .get_block_by_number(prev_num)
-                .unwrap();
-            let input = {
-                let prev_tx = prev_block.transactions().get(0).unwrap().clone();
-                let previous_tx_hash = prev_tx.hash();
-                packed::CellInput::new(packed::OutPoint::new(previous_tx_hash, 0), 0)
-            };
-            let header_dep = prev_block.hash();
-            let output = packed::CellOutput::new_builder()
-                .capacity(0xf4610900.pack())
-                .build();
-            let tx = TransactionBuilder::default()
-                .cell_dep(chain.always_success_cell_dep())
-                .header_dep(header_dep)
-                .input(input)
-                .output(output)
-                .output_data(Default::default())
-                .build();
-            chain
-                .tx_pool()
-                .submit_local_tx(tx.clone())
-                .unwrap()
-                .unwrap();
-            chain.mine_blocks(2);
+            let tx = chain.get_cellbase_as_input(prev_num);
+            chain.mine_block(|block| {
+                let ids = vec![tx.proposal_short_id()];
+                block.as_advanced_builder().proposals(ids).build()
+            });
+            chain.mine_blocks(1);
+            chain.mine_block(|block| block.as_advanced_builder().transaction(tx.clone()).build());
+            chain.mine_blocks(1);
             tx.hash()
         })
         .collect();
@@ -334,33 +295,14 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
     let tx_hashes: Vec<_> = [13, 15, 17]
         .into_iter()
         .map(|prev_num| {
-            let prev_block = chain
-                .shared()
-                .snapshot()
-                .get_block_by_number(prev_num)
-                .unwrap();
-            let input = {
-                let prev_tx = prev_block.transactions().get(0).unwrap().clone();
-                let previous_tx_hash = prev_tx.hash();
-                packed::CellInput::new(packed::OutPoint::new(previous_tx_hash, 0), 0)
-            };
-            let header_dep = prev_block.hash();
-            let output = packed::CellOutput::new_builder()
-                .capacity(0xf4610900.pack())
-                .build();
-            let tx = TransactionBuilder::default()
-                .cell_dep(chain.always_success_cell_dep())
-                .header_dep(header_dep)
-                .input(input)
-                .output(output)
-                .output_data(Default::default())
-                .build();
-            chain
-                .tx_pool()
-                .submit_local_tx(tx.clone())
-                .unwrap()
-                .unwrap();
-            chain.mine_blocks(2);
+            let tx = chain.get_cellbase_as_input(prev_num);
+            chain.mine_block(|block| {
+                let ids = vec![tx.proposal_short_id()];
+                block.as_advanced_builder().proposals(ids).build()
+            });
+            chain.mine_blocks(1);
+            chain.mine_block(|block| block.as_advanced_builder().transaction(tx.clone()).build());
+            chain.mine_blocks(1);
             tx.hash()
         })
         .collect();

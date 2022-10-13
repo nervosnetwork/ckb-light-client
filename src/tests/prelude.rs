@@ -7,7 +7,7 @@ use ckb_shared::{Shared, Snapshot};
 use ckb_store::ChainStore;
 use ckb_tx_pool::TxPoolController;
 use ckb_types::{
-    core::{BlockExt, BlockNumber, BlockView, HeaderView},
+    core::{BlockExt, BlockNumber, BlockView, Capacity, HeaderView, TransactionView},
     packed,
     prelude::*,
     utilities::{compact_to_difficulty, merkle_mountain_range::VerifiableHeader},
@@ -19,7 +19,7 @@ use crate::{
         FilterProtocol, LastState, LightClientProtocol, Peers, ProveRequest, SyncProtocol,
     },
     storage::Storage,
-    tests::ALWAYS_SUCCESS_BIN,
+    tests::{ALWAYS_SUCCESS_BIN, ALWAYS_SUCCESS_SCRIPT},
 };
 
 macro_rules! epoch {
@@ -154,6 +154,27 @@ pub(crate) trait RunningChainExt: ChainExt {
         for _ in 0..blocks_count {
             let _ = self.mine_block(|block| block.as_advanced_builder().build());
         }
+    }
+
+    fn get_cellbase_as_input(&self, block_number: BlockNumber) -> TransactionView {
+        let snapshot = self.shared().snapshot();
+        let block = snapshot.get_block_by_number(block_number).unwrap();
+        let cellbase = block.transaction(0).unwrap();
+        let input = packed::CellInput::new(packed::OutPoint::new(cellbase.hash(), 0), 0);
+        let input_capacity: Capacity = cellbase.output(0).unwrap().capacity().unpack();
+        let output_capacity = input_capacity.safe_sub(1000u32).unwrap();
+        let header_dep = block.hash();
+        let output = packed::CellOutput::new_builder()
+            .capacity(output_capacity.pack())
+            .lock(ALWAYS_SUCCESS_SCRIPT.to_owned())
+            .build();
+        TransactionView::new_advanced_builder()
+            .cell_dep(self.always_success_cell_dep())
+            .header_dep(header_dep)
+            .input(input)
+            .output(output)
+            .output_data(Default::default())
+            .build()
     }
 
     fn build_prove_request(
