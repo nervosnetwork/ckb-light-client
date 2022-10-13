@@ -111,7 +111,7 @@ impl RunConfig {
             Error::runtime(errmsg)
         })?;
 
-        let service = Service::new("127.0.0.1:9000");
+        let service = Service::new(&self.run_env.rpc.listen_address);
         let rpc_server = service.start(network_controller, storage, peers, pending_txs, consensus);
 
         let exit_handler_clone = exit_handler.clone();
