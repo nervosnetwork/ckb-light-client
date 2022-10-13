@@ -3,14 +3,17 @@ use std::sync::Arc;
 use ckb_app_config::{BlockAssemblerConfig, NetworkConfig};
 use ckb_chain::chain::{ChainController, ChainService};
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
-use ckb_jsonrpc_types::ScriptHashType;
+use ckb_jsonrpc_types::JsonBytes;
 use ckb_launcher::SharedBuilder;
 use ckb_network::{DefaultExitHandler, Flags, NetworkController, NetworkService, NetworkState};
 use ckb_resource::Resource;
 use ckb_shared::Shared;
-use ckb_types::h256;
+use ckb_types::{core, prelude::*};
 
-use crate::{storage::Storage, tests::prelude::*};
+use crate::{
+    storage::Storage,
+    tests::{prelude::*, ALWAYS_SUCCESS_SCRIPT},
+};
 
 /// Mock a chain without starting services.
 pub(crate) struct MockChain {
@@ -83,9 +86,11 @@ impl MockChain {
 
         let config = BlockAssemblerConfig {
             // always success
-            code_hash: h256!("0xd483925160e4232b2cb29f012e8380b7b612d71cf4e79991476b6bcf610735f6"),
-            args: Default::default(),
-            hash_type: ScriptHashType::Data,
+            code_hash: ALWAYS_SUCCESS_SCRIPT.code_hash().unpack(),
+            args: JsonBytes::from_bytes(ALWAYS_SUCCESS_SCRIPT.args().raw_data()),
+            hash_type: core::ScriptHashType::try_from(ALWAYS_SUCCESS_SCRIPT.hash_type())
+                .unwrap()
+                .into(),
             message: Default::default(),
             use_binary_version_as_message_prefix: true,
             binary_version: "LightClient".to_string(),
