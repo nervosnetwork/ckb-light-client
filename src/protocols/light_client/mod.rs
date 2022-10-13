@@ -28,6 +28,8 @@ mod sampling;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+pub(crate) use self::peers::FetchInfo;
 
 use prelude::*;
 
@@ -442,7 +444,7 @@ impl LightClientProtocol {
     }
 
     fn fetch_headers_txs(&mut self, nc: &dyn CKBProtocolContext) {
-        if self.peers.fetching_headers().is_empty() && self.peers.fetching_txs().is_empty() {
+        if !self.peers.has_fetching_info() {
             trace!("no fetching headers/transactions needed");
             return;
         }
@@ -467,10 +469,9 @@ impl LightClientProtocol {
                     .map(|peer_state| peer_state.get_blocks_proof_request().is_none())
                     .unwrap_or(false)
             }) {
-                let hashes: Vec<_> = block_hashes.iter().map(|hash| hash.pack()).collect();
                 debug!("send block proof request to peer: {}", peer);
                 let content = packed::GetBlocksProof::new_builder()
-                    .block_hashes(hashes.pack())
+                    .block_hashes(block_hashes.to_vec().pack())
                     .last_hash(last_hash.clone())
                     .build();
                 let message = packed::LightClientMessage::new_builder()
@@ -486,11 +487,7 @@ impl LightClientProtocol {
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
                 }
-                for block_hash in block_hashes {
-                    if let Some(mut value) = self.peers.fetching_headers().get_mut(block_hash) {
-                        value.1 = now;
-                    }
-                }
+                self.peers.fetching_idle_headers(block_hashes, now);
             } else {
                 debug!("all valid peers are busy for fetching blocks proof (headers)");
                 break;
@@ -510,7 +507,7 @@ impl LightClientProtocol {
             }) {
                 debug!("send transaction proof request to peer: {}", peer);
                 let content = packed::GetTransactionsProof::new_builder()
-                    .tx_hashes(tx_hashes.iter().map(|hash| hash.pack()).pack())
+                    .tx_hashes(tx_hashes.to_vec().pack())
                     .last_hash(last_hash.clone())
                     .build();
                 let message = packed::LightClientMessage::new_builder()
@@ -527,11 +524,7 @@ impl LightClientProtocol {
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
                 }
-                for tx_hash in tx_hashes {
-                    if let Some(mut value) = self.peers.fetching_txs().get_mut(tx_hash) {
-                        value.1 = now;
-                    }
-                }
+                self.peers.fetching_idle_txs(tx_hashes, now);
             } else {
                 debug!("all valid peers are busy for fetching transactions");
                 break;

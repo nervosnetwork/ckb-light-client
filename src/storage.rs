@@ -12,7 +12,6 @@ use ckb_types::{
     H256, U256,
 };
 
-use dashmap::DashMap;
 use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 
 use crate::error::Result;
@@ -861,11 +860,19 @@ impl StorageWithChainData {
         &self.storage
     }
 
-    pub(crate) fn fetching_headers(&self) -> &DashMap<H256, (u64, u64, bool)> {
-        self.peers.fetching_headers()
+    /// return (added_ts, first_sent, missing)
+    pub(crate) fn get_header_fetch_info(&self, block_hash: &H256) -> Option<(u64, u64, bool)> {
+        self.peers.get_header_fetch_info(&block_hash.pack())
     }
-    pub(crate) fn fetching_txs(&self) -> &DashMap<H256, (u64, u64, bool)> {
-        self.peers.fetching_txs()
+    /// return (added_ts, first_sent, missing)
+    pub(crate) fn get_tx_fetch_info(&self, tx_hash: &H256) -> Option<(u64, u64, bool)> {
+        self.peers.get_tx_fetch_info(&tx_hash.pack())
+    }
+    pub(crate) fn add_fetch_header(&self, header_hash: H256, timestamp: u64) {
+        self.peers.add_fetch_header(header_hash.pack(), timestamp);
+    }
+    pub(crate) fn add_fetch_tx(&self, tx_hash: H256, timestamp: u64) {
+        self.peers.add_fetch_tx(tx_hash.pack(), timestamp);
     }
 }
 

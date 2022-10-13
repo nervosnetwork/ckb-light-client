@@ -11,10 +11,9 @@ use ckb_types::{
     prelude::*,
     H256,
 };
-use dashmap::DashMap;
 
 use crate::{
-    protocols::Peers,
+    protocols::{FetchInfo, Peers},
     service::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
         ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, TransactionWithHeader,
@@ -659,12 +658,6 @@ fn rpc() {
             header.calc_header_hash().unpack()
         })
         .collect();
-    let fetching_headers = {
-        let map = DashMap::new();
-        map.insert(h256!("0xaa22"), (1111, 3344, false));
-        map.insert(h256!("0xaa33"), (1111, 0, false));
-        map
-    };
     let fetched_txs: Vec<H256> = [h256!("0xbb11"), h256!("0xbb77"), h256!("0xbb88")]
         .into_iter()
         .map(|header_dep| {
@@ -675,18 +668,32 @@ fn rpc() {
             tx.hash().unpack()
         })
         .collect();
-    let fetching_txs = {
-        let map = DashMap::new();
-        map.insert(h256!("0xbb22"), (1111, 5566, false));
-        map.insert(h256!("0xbb33"), (1111, 0, false));
-        map
-    };
     // insert fetched headers
-    let peers = Arc::new(Peers::new(
-        RwLock::new(vec![extra_header.clone()]),
-        fetching_headers,
-        fetching_txs,
-    ));
+    let peers = Arc::new(Peers::new(RwLock::new(vec![extra_header.clone()])));
+    peers.fetching_headers().insert(
+        h256!("0xaa22").pack(),
+        FetchInfo::new(1111, 3344, false, false),
+    );
+    peers.fetching_headers().insert(
+        h256!("0xaa33").pack(),
+        FetchInfo::new(1111, 0, false, false),
+    );
+    peers.fetching_headers().insert(
+        h256!("0xaa404").pack(),
+        FetchInfo::new(1111, 0, false, true),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb22").pack(),
+        FetchInfo::new(1111, 5566, false, false),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb33").pack(),
+        FetchInfo::new(1111, 0, false, false),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb404").pack(),
+        FetchInfo::new(1111, 0, false, true),
+    );
 
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
 
@@ -713,8 +720,8 @@ fn rpc() {
     assert_eq!(transaction.hash, pre_tx0.hash().unpack());
     assert_eq!(header.hash, pre_block.header().hash().unpack());
 
-    assert_eq!(peers.fetching_headers().len(), 2);
-    assert_eq!(peers.fetching_txs().len(), 2);
+    assert_eq!(peers.fetching_headers().len(), 3);
+    assert_eq!(peers.fetching_txs().len(), 3);
 
     // test fetch_header rpc
     let rv = rpc.fetch_header(fetched_headers[0].clone()).unwrap();
@@ -730,10 +737,12 @@ fn rpc() {
     );
     let rv = rpc.fetch_header(h256!("0xabcdef")).unwrap();
     assert!(matches!(rv, FetchStatus::Added { .. }));
-    let rv = rpc.fetch_header(h256!("0xaa33")).unwrap();
-    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
     let rv = rpc.fetch_header(h256!("0xaa22")).unwrap();
     assert_eq!(rv, FetchStatus::Fetching { first_sent: 3344 });
+    let rv = rpc.fetch_header(h256!("0xaa33")).unwrap();
+    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
+    let rv = rpc.fetch_header(h256!("0xaa404")).unwrap();
+    assert_eq!(rv, FetchStatus::NotFound);
 
     // test fetch_transaction rpc
     let rv = rpc.fetch_transaction(fetched_txs[0].clone()).unwrap();
@@ -751,13 +760,15 @@ fn rpc() {
     );
     let rv = rpc.fetch_transaction(h256!("0xabcdef")).unwrap();
     assert!(matches!(rv, FetchStatus::Added { .. }));
-    let rv = rpc.fetch_transaction(h256!("0xbb33")).unwrap();
-    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
     assert_eq!(rv, FetchStatus::Fetching { first_sent: 5566 });
+    let rv = rpc.fetch_transaction(h256!("0xbb33")).unwrap();
+    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
+    let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
+    assert_eq!(rv, FetchStatus::NotFound);
 
-    assert_eq!(peers.fetching_headers().len(), 3);
-    assert_eq!(peers.fetching_txs().len(), 3);
+    assert_eq!(peers.fetching_headers().len(), 4);
+    assert_eq!(peers.fetching_txs().len(), 4);
 
     // test rollback_filtered_transactions
     // rollback 2 blocks
