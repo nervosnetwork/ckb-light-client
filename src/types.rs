@@ -9,12 +9,19 @@ pub(crate) struct RunEnv {
     pub(crate) chain: String,
     pub(crate) store: StoreConfig,
     pub(crate) network: NetworkConfig,
+    pub(crate) rpc: RpcConfig,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct StoreConfig {
     pub(crate) path: PathBuf,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RpcConfig {
+    pub(crate) listen_address: String,
 }
 
 impl FromStr for RunEnv {
