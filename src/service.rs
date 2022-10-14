@@ -102,8 +102,8 @@ pub trait NetRpc {
 #[serde(tag = "status")]
 #[serde(rename_all = "snake_case")]
 pub enum FetchStatus<T> {
-    Added { timestamp: u64 },
-    Fetching { first_sent: u64 },
+    Added { timestamp: Uint64 },
+    Fetching { first_sent: Uint64 },
     Fetched { data: T },
     NotFound,
 }
@@ -1025,16 +1025,20 @@ impl ChainRpc for ChainRpcImpl {
             if missing {
                 return Ok(FetchStatus::NotFound);
             } else if first_sent > 0 {
-                return Ok(FetchStatus::Fetching { first_sent });
+                return Ok(FetchStatus::Fetching {
+                    first_sent: first_sent.into(),
+                });
             } else {
                 return Ok(FetchStatus::Added {
-                    timestamp: added_ts,
+                    timestamp: added_ts.into(),
                 });
             }
         } else {
             self.swc.add_fetch_header(block_hash, now);
         }
-        Ok(FetchStatus::Added { timestamp: now })
+        Ok(FetchStatus::Added {
+            timestamp: now.into(),
+        })
     }
 
     fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>> {
@@ -1046,16 +1050,20 @@ impl ChainRpc for ChainRpcImpl {
             if missing {
                 return Ok(FetchStatus::NotFound);
             } else if first_sent > 0 {
-                return Ok(FetchStatus::Fetching { first_sent });
+                return Ok(FetchStatus::Fetching {
+                    first_sent: first_sent.into(),
+                });
             } else {
                 return Ok(FetchStatus::Added {
-                    timestamp: added_ts,
+                    timestamp: added_ts.into(),
                 });
             }
         } else {
             self.swc.add_fetch_tx(tx_hash, now);
         }
-        Ok(FetchStatus::Added { timestamp: now })
+        Ok(FetchStatus::Added {
+            timestamp: now.into(),
+        })
     }
 }
 
