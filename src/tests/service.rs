@@ -738,9 +738,19 @@ fn rpc() {
     let rv = rpc.fetch_header(h256!("0xabcdef")).unwrap();
     assert!(matches!(rv, FetchStatus::Added { .. }));
     let rv = rpc.fetch_header(h256!("0xaa22")).unwrap();
-    assert_eq!(rv, FetchStatus::Fetching { first_sent: 3344 });
+    assert_eq!(
+        rv,
+        FetchStatus::Fetching {
+            first_sent: 3344.into()
+        }
+    );
     let rv = rpc.fetch_header(h256!("0xaa33")).unwrap();
-    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
+    assert_eq!(
+        rv,
+        FetchStatus::Added {
+            timestamp: 1111.into()
+        }
+    );
     let rv = rpc.fetch_header(h256!("0xaa404")).unwrap();
     assert_eq!(rv, FetchStatus::NotFound);
 
@@ -761,9 +771,19 @@ fn rpc() {
     let rv = rpc.fetch_transaction(h256!("0xabcdef")).unwrap();
     assert!(matches!(rv, FetchStatus::Added { .. }));
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
-    assert_eq!(rv, FetchStatus::Fetching { first_sent: 5566 });
+    assert_eq!(
+        rv,
+        FetchStatus::Fetching {
+            first_sent: 5566.into()
+        }
+    );
     let rv = rpc.fetch_transaction(h256!("0xbb33")).unwrap();
-    assert_eq!(rv, FetchStatus::Added { timestamp: 1111 });
+    assert_eq!(
+        rv,
+        FetchStatus::Added {
+            timestamp: 1111.into()
+        }
+    );
     let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
     assert_eq!(rv, FetchStatus::NotFound);
 
