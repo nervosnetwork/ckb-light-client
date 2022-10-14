@@ -195,7 +195,15 @@ impl Storage {
                 batch.delete(key).expect("batch delete should be ok");
             });
 
+        let mut min_block_number = None;
         for ss in scripts {
+            if min_block_number
+                .as_ref()
+                .map(|n| *n > ss.block_number)
+                .unwrap_or(true)
+            {
+                min_block_number = Some(ss.block_number);
+            }
             let key = [
                 key_prefix.as_ref(),
                 ss.script.as_slice(),
@@ -210,6 +218,10 @@ impl Storage {
                 .expect("batch put should be ok");
         }
         batch.commit().expect("batch commit should be ok");
+
+        if let Some(min_number) = min_block_number {
+            self.update_min_filtered_block_number(min_number);
+        }
 
         if should_filter_genesis_block {
             let block = self.get_genesis_block();

@@ -52,7 +52,7 @@ impl<'a> BlockFiltersProcess<'a> {
         let block_filters = self.message.to_entity();
         let start_number: BlockNumber = block_filters.start_number().unpack();
 
-        let min_filtered_block_number = self.filter.min_filtered_block_number();
+        let min_filtered_block_number = self.filter.storage.get_min_filtered_block_number();
         if min_filtered_block_number + 1 != start_number {
             info!(
                 "ignoring, the start_number of block_filters message {} is not continuous with min_filtered_block_number: {}",
@@ -99,13 +99,15 @@ impl<'a> BlockFiltersProcess<'a> {
             );
             let actual_blocks_count = blocks_count.min(limit);
             let tip_header = self.filter.storage.get_tip_header();
+            let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
+
+            let mut matched_blocks = self
+                .filter
+                .peers
+                .matched_blocks()
+                .write()
+                .expect("poisoned");
             if possible_match_blocks_len != 0 {
-                let mut matched_blocks = self
-                    .filter
-                    .peers
-                    .matched_blocks()
-                    .write()
-                    .expect("poisoned");
                 let blocks = possible_match_blocks
                     .iter()
                     .map(|block_hash| (block_hash.clone(), block_hash == &prove_state_block_hash))
@@ -131,8 +133,12 @@ impl<'a> BlockFiltersProcess<'a> {
                         );
                     }
                 }
+            } else if matched_blocks.is_empty() {
+                self.filter
+                    .storage
+                    .update_block_number(filtered_block_number)
             }
-            let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
+
             self.filter
                 .update_min_filtered_block_number(filtered_block_number);
             // send next batch GetBlockFilters message to a random best peer
