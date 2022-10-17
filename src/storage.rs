@@ -323,9 +323,9 @@ impl Storage {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn get_earliest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+    fn get_matched_blocks(&self, direction: Direction) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+        let mode = IteratorMode::From(key_prefix.as_ref(), direction);
         self.db
             .iterator(mode)
             .take_while(|(key, _value)| key.starts_with(&key_prefix))
@@ -337,6 +337,14 @@ impl Storage {
                 (start_number, blocks_count, blocks)
             })
             .next()
+    }
+    #[allow(clippy::type_complexity)]
+    pub fn get_earliest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+        self.get_matched_blocks(Direction::Forward)
+    }
+    #[allow(clippy::type_complexity)]
+    pub fn get_latest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+        self.get_matched_blocks(Direction::Reverse)
     }
 
     pub fn add_fetched_header(&self, header: &Header) {
@@ -747,6 +755,14 @@ impl Storage {
                 }
             }
         }
+
+        // we should also sync block filters again
+        batch
+            .put(
+                Key::Meta(MIN_FILTERED_BLOCK_NUMBER).into_vec(),
+                to_number.to_le_bytes(),
+            )
+            .expect("batch put should be ok");
 
         batch.commit().expect("batch commit should be ok");
     }
