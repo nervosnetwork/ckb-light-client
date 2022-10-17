@@ -1,3 +1,4 @@
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 
 use ckb_chain::chain::ChainController;
@@ -175,6 +176,42 @@ pub(crate) trait RunningChainExt: ChainExt {
             .output(output)
             .output_data(Default::default())
             .build()
+    }
+
+    fn rollback_to(
+        &self,
+        target_number: BlockNumber,
+        detached_proposal_ids: HashSet<packed::ProposalShortId>,
+    ) {
+        let snapshot = self.shared().snapshot();
+
+        let chain_tip_number = snapshot.tip_number();
+
+        let mut detached_blocks = VecDeque::default();
+        for num in (target_number + 1)..=chain_tip_number {
+            let detached_block = snapshot.get_block_by_number(num).unwrap();
+            detached_blocks.push_back(detached_block);
+        }
+
+        let target_hash = snapshot.get_header_by_number(target_number).unwrap().hash();
+        self.controller().truncate(target_hash).unwrap();
+        self.tx_pool()
+            .update_tx_pool_for_reorg(
+                detached_blocks,
+                VecDeque::default(),
+                detached_proposal_ids,
+                Arc::clone(&self.shared().snapshot()),
+            )
+            .unwrap();
+
+        while self.shared().snapshot().tip_number() != target_number {}
+        while self
+            .tx_pool()
+            .get_tx_pool_info()
+            .expect("get tx pool info")
+            .tip_number
+            != self.shared().snapshot().tip_number()
+        {}
     }
 
     fn build_prove_request(

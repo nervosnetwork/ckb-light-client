@@ -315,13 +315,13 @@ impl LightClientProtocol {
                                 last_headers
                                     .get(&number)
                                     .map(|hash| {
-                                        if reorg_header.hash().eq(hash) {
-                                            None
-                                        } else {
+                                        if &reorg_header.hash() == hash {
                                             Some(number)
+                                        } else {
+                                            None
                                         }
                                     })
-                                    .unwrap_or(Some(number))
+                                    .unwrap_or_default()
                             });
                         if let Some(to_number) = fork_number {
                             let mut matched_blocks =
@@ -330,9 +330,8 @@ impl LightClientProtocol {
                             while let Some((start_number, _, _)) =
                                 self.storage.get_latest_matched_blocks()
                             {
-                                if start_number >= to_number {
-                                    self.storage.remove_matched_blocks(start_number);
-                                } else {
+                                self.storage.remove_matched_blocks(start_number);
+                                if start_number < to_number {
                                     start_number_opt = Some(start_number);
                                     break;
                                 }
