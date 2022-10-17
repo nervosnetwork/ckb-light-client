@@ -9,7 +9,7 @@ use ckb_types::{
     h256,
     packed::{CellInput, CellOutputBuilder, Header, OutPoint, Script, ScriptBuilder},
     prelude::*,
-    H256,
+    H256, U256,
 };
 
 use crate::{
@@ -613,7 +613,7 @@ fn rpc() {
     );
 
     // test get_cells_capacity rpc
-    let capacity = rpc
+    let cc = rpc
         .get_cells_capacity(SearchKey {
             script: lock_script1.clone().into(),
             ..Default::default()
@@ -622,11 +622,11 @@ fn rpc() {
 
     assert_eq!(
         1000 * 100000000 * (total_blocks + 1),
-        capacity.value(),
+        cc.capacity.value(),
         "cellbases + last block live cell"
     );
 
-    let capacity = rpc
+    let cc = rpc
         .get_cells_capacity(SearchKey {
             script: type_script1.clone().into(),
             script_type: ScriptType::Type,
@@ -634,16 +634,20 @@ fn rpc() {
         })
         .unwrap();
 
-    assert_eq!(1000 * 100000000, capacity.value(), "last block live cell");
+    assert_eq!(
+        1000 * 100000000,
+        cc.capacity.value(),
+        "last block live cell"
+    );
 
-    let capacity = rpc
+    let cc = rpc
         .get_cells_capacity(SearchKey {
             script: lock_script2.clone().into(),
             ..Default::default()
         })
         .unwrap();
 
-    assert_eq!(0, capacity.value(), "lock_script2 is not filtered");
+    assert_eq!(0, cc.capacity.value(), "lock_script2 is not filtered");
 
     // test get_header rpc
     let extra_header = HeaderBuilder::default()
@@ -893,7 +897,7 @@ fn rpc() {
     assert_eq!((total_blocks - 2) as usize * 3 - 1, txs_page_1.objects.len() + txs_page_2.objects.len(), "total size should be cellbase tx count + (total_block - 2) * 2 - 1 (genesis block only has one tx)");
 
     // test get_cells_capacity rpc after rollback
-    let capacity = rpc
+    let cc = rpc
         .get_cells_capacity(SearchKey {
             script: lock_script1.clone().into(),
             ..Default::default()
@@ -902,7 +906,7 @@ fn rpc() {
 
     assert_eq!(
         1000 * 100000000 * (total_blocks - 1),
-        capacity.value(),
+        cc.capacity.value(),
         "cellbases + last block live cell - 2 (rollbacked blocks cells)"
     );
 }
@@ -1017,15 +1021,17 @@ fn get_cells_capacity_bug() {
         )
         .build();
     storage.filter_block(block2.data());
+    storage.update_last_state(&U256::one(), &block2.header().data());
 
-    let capacity = rpc
+    let cc = rpc
         .get_cells_capacity(SearchKey {
             script: lock_script1.clone().into(),
             ..Default::default()
         })
         .unwrap();
 
-    assert_eq!((222 + 3000) * 100000000, capacity.value());
+    assert_eq!((222 + 3000) * 100000000, cc.capacity.value());
+    assert_eq!(block2.header().number(), cc.block_number.value());
 }
 
 #[test]
@@ -1150,13 +1156,13 @@ fn get_cells_after_rollback_bug() {
 
     storage.rollback_to_block(2);
 
-    let capacity = rpc
+    let cc = rpc
         .get_cells_capacity(SearchKey {
             script: lock_script2.clone().into(),
             ..Default::default()
         })
         .unwrap();
-    assert_eq!(100 * 100000000, capacity.value());
+    assert_eq!(100 * 100000000, cc.capacity.value());
 
     let cells = rpc
         .get_cells(
@@ -1184,13 +1190,13 @@ fn get_cells_after_rollback_bug() {
         .unwrap();
     assert_eq!(1, txs.objects.len());
 
-    let capacity = rpc
+    let cc = rpc
         .get_cells_capacity(SearchKey {
             script: lock_script1.clone().into(),
             ..Default::default()
         })
         .unwrap();
-    assert_eq!((1000 + 222 + 333) * 100000000, capacity.value());
+    assert_eq!((1000 + 222 + 333) * 100000000, cc.capacity.value());
 
     let cells = rpc
         .get_cells(

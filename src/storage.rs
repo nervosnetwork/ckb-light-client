@@ -17,7 +17,7 @@ use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 use crate::error::Result;
 use crate::protocols::Peers;
 
-const LAST_STATE_KEY: &str = "LAST_STATE";
+pub const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";

@@ -24,7 +24,9 @@ use std::{
 
 use crate::{
     protocols::{Peers, PendingTxs},
-    storage::{self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithChainData},
+    storage::{
+        self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithChainData, LAST_STATE_KEY,
+    },
     verify::verify_tx,
 };
 
@@ -56,7 +58,7 @@ pub trait BlockFilterRpc {
     ) -> Result<Pagination<Tx>>;
 
     #[rpc(name = "get_cells_capacity")]
-    fn get_cells_capacity(&self, search_key: SearchKey) -> Result<Capacity>;
+    fn get_cells_capacity(&self, search_key: SearchKey) -> Result<CellsCapacity>;
 }
 
 #[rpc(server)]
@@ -234,6 +236,13 @@ pub struct Cell {
     pub(crate) out_point: OutPoint,
     block_number: BlockNumber,
     tx_index: Uint32,
+}
+
+#[derive(Serialize)]
+pub struct CellsCapacity {
+    pub capacity: Capacity,
+    pub block_hash: H256,
+    pub block_number: BlockNumber,
 }
 
 #[derive(Serialize)]
@@ -705,7 +714,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         }
     }
 
-    fn get_cells_capacity(&self, search_key: SearchKey) -> Result<Capacity> {
+    fn get_cells_capacity(&self, search_key: SearchKey) -> Result<CellsCapacity> {
         let (prefix, from_key, direction, skip) = build_query_options(
             &search_key,
             KeyPrefix::CellLockScript,
@@ -805,7 +814,17 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             })
             .sum();
 
-        Ok(capacity.into())
+        let key = Key::Meta(LAST_STATE_KEY).into_vec();
+        let tip_header = snapshot
+            .get(&key)
+            .expect("snapshot get last state should be ok")
+            .map(|data| packed::HeaderReader::from_slice_should_be_ok(&data[32..]).to_entity())
+            .expect("tip header should be inited");
+        Ok(CellsCapacity {
+            capacity: capacity.into(),
+            block_hash: tip_header.calc_header_hash().unpack(),
+            block_number: tip_header.raw().number().unpack(),
+        })
     }
 }
 
