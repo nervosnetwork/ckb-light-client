@@ -315,17 +315,31 @@ impl LightClientProtocol {
                                 last_headers
                                     .get(&number)
                                     .map(|hash| {
-                                        if reorg_header.hash().eq(hash) {
-                                            None
-                                        } else {
+                                        if &reorg_header.hash() == hash {
                                             Some(number)
+                                        } else {
+                                            None
                                         }
                                     })
-                                    .unwrap_or(Some(number))
+                                    .unwrap_or_default()
                             });
                         if let Some(to_number) = fork_number {
-                            trace!("rollback to block#{}", to_number);
-                            self.storage.rollback_to_block(to_number);
+                            let mut matched_blocks =
+                                self.peers.matched_blocks().write().expect("poisoned");
+                            let mut start_number_opt = None;
+                            while let Some((start_number, _, _)) =
+                                self.storage.get_latest_matched_blocks()
+                            {
+                                self.storage.remove_matched_blocks(start_number);
+                                if start_number < to_number {
+                                    start_number_opt = Some(start_number);
+                                    break;
+                                }
+                            }
+                            let rollback_to = start_number_opt.unwrap_or(to_number);
+                            debug!("rollback to block#{}", rollback_to);
+                            self.storage.rollback_to_block(rollback_to);
+                            matched_blocks.clear();
                         }
                     }
                 }

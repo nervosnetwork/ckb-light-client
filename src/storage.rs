@@ -277,24 +277,8 @@ impl Storage {
     }
 
     /// when all blocks downloaded and inserted into storage call this function.
-    ///
-    /// # Panics
-    ///  when given start_number is not the smallest in storage
     pub fn remove_matched_blocks(&self, start_number: u64) {
-        let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
-        let earliest_start_number = self
-            .db
-            .iterator(mode)
-            .take_while(|(key, _value)| key.starts_with(&key_prefix))
-            .map(|(key, _)| {
-                u64::from_be_bytes(key[key_prefix.len()..].try_into().expect("start_number"))
-            })
-            .next()
-            .expect("storage matched blocks exists");
-        assert_eq!(start_number, earliest_start_number);
-
-        let mut key = key_prefix.clone();
+        let mut key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         key.extend(start_number.to_be_bytes());
         self.db.delete(&key).expect("delete matched blocks");
     }
@@ -323,9 +307,17 @@ impl Storage {
     }
 
     #[allow(clippy::type_complexity)]
-    pub fn get_earliest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+    fn get_matched_blocks(&self, direction: Direction) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+        let iter_from = match direction {
+            Direction::Forward => key_prefix.clone(),
+            Direction::Reverse => {
+                let mut key = key_prefix.clone();
+                key.extend(u64::max_value().to_be_bytes());
+                key
+            }
+        };
+        let mode = IteratorMode::From(iter_from.as_ref(), direction);
         self.db
             .iterator(mode)
             .take_while(|(key, _value)| key.starts_with(&key_prefix))
@@ -337,6 +329,14 @@ impl Storage {
                 (start_number, blocks_count, blocks)
             })
             .next()
+    }
+    #[allow(clippy::type_complexity)]
+    pub fn get_earliest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+        self.get_matched_blocks(Direction::Forward)
+    }
+    #[allow(clippy::type_complexity)]
+    pub fn get_latest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+        self.get_matched_blocks(Direction::Reverse)
     }
 
     pub fn add_fetched_header(&self, header: &Header) {
@@ -746,6 +746,16 @@ impl Storage {
                     batch.put(key, value).expect("batch put should be ok");
                 }
             }
+        }
+
+        // we should also sync block filters again
+        if self.get_min_filtered_block_number() > to_number {
+            batch
+                .put(
+                    Key::Meta(MIN_FILTERED_BLOCK_NUMBER).into_vec(),
+                    to_number.to_le_bytes(),
+                )
+                .expect("batch put should be ok");
         }
 
         batch.commit().expect("batch commit should be ok");
