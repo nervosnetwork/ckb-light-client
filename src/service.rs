@@ -1042,6 +1042,8 @@ impl ChainRpc for ChainRpcImpl {
         let now = unix_time_as_millis();
         if let Some((added_ts, first_sent, missing)) = self.swc.get_header_fetch_info(&block_hash) {
             if missing {
+                // re-fetch the header
+                self.swc.add_fetch_header(block_hash, now);
                 return Ok(FetchStatus::NotFound);
             } else if first_sent > 0 {
                 return Ok(FetchStatus::Fetching {
@@ -1067,6 +1069,8 @@ impl ChainRpc for ChainRpcImpl {
         let now = unix_time_as_millis();
         if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(&tx_hash) {
             if missing {
+                // re-fetch the transaction
+                self.swc.add_fetch_tx(tx_hash, now);
                 return Ok(FetchStatus::NotFound);
             } else if first_sent > 0 {
                 return Ok(FetchStatus::Fetching {

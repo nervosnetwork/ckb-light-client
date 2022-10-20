@@ -194,7 +194,7 @@ curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"js
 
 ### `fetch_header`
 
-Fetch a header from remote node.
+Fetch a header from remote node. If return status is `not_found` will re-sent fetching request immediately.
 
 #### Parameters
 
@@ -209,7 +209,7 @@ Fetch a header from remote node.
 
 ### `fetch_transaction`
 
-Fetch a transaction from remote node.
+Fetch a transaction from remote node. If return status is `not_found` will re-sent fetching request immediately.
 
 #### Parameters
 
