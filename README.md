@@ -1,31 +1,26 @@
-# [Experimental] CKB Light Client
+# CKB light client reference implementation
 
 [![License]](#license)
 [![GitHub Actions]](https://github.com/nervosnetwork/ckb-light-client/actions)
 [![Codecov]](https://codecov.io/gh/nervosnetwork/ckb-light-client)
 
-A CKB light client based on [FlyClient].
+A CKB light client based on [RFC 44] and [RFC 45].
 
 [License]: https://img.shields.io/badge/License-MIT-blue.svg
 [GitHub Actions]: https://github.com/nervosnetwork/ckb-light-client/workflows/CI/badge.svg
 [Codecov]: https://img.shields.io/codecov/c/gh/nervosnetwork/ckb-light-client/develop
 
-## References
-
-- [FlyClient: Super-Light Clients for Cryptocurrencies]
-- [Merkle Mountain Ranges]
-
 ## How to connect testnet
 
-1. Build a full node with [this branch](https://github.com/nervosnetwork/ckb/tree/light-client-rebase)
+1. Build a full node with latest [ckb develop branch](https://github.com/nervosnetwork/ckb/tree/develop), this is an optional step, you may use the public testnet bootnodes instead.
 
 ```
 git clone https://github.com/nervosnetwork/ckb.git
-git checkout light-client-rebase
+git checkout develop
 make prod
 ```
 
-2. Run a testnet with light client protocols
+Run a testnet with light client protocols
 
 init ckb in a new folder:
 ```
@@ -37,7 +32,12 @@ modify ckb.toml, add a line `block_filter_enable = true` to the section of `[sto
 ckb run
 ```
 
-3. Build a light client with [this branch](https://github.com/nervosnetwork/ckb-light-client/tree/develop)
+Get full node peer id
+```
+curl http://localhost:8114/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"local_node_info", "params": [], "id": 1}'
+```
+
+2. Build a light client with [this branch](https://github.com/nervosnetwork/ckb-light-client/tree/develop)
 
 ```
 git clone https://github.com/nervosnetwork/ckb-light-client.git
@@ -45,14 +45,9 @@ git checkout develop
 cargo build --release
 ```
 
-4. Run light client
+3. Run light client
 
-get full node peer id
-```
-curl http://localhost:8114/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"local_node_info", "params": [], "id": 1}'
-```
-
-copy `config.toml` to new folder and modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
+Copy `config.toml` to a new folder, if you want to connect to the full node you just build in step 1, modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
 
 start light client
 ```
@@ -238,8 +233,6 @@ To facilitate code migration, the rpc is same as ckb-indexer, please refer to ck
 
 Licensed under [MIT License].
 
-[FlyClient]: https://eprint.iacr.org/2019/226.pdf
-[FlyClient: Super-Light Clients for Cryptocurrencies]: https://eprint.iacr.org/2019/226.pdf
-[Merkle Mountain Ranges]: https://github.com/opentimestamps/opentimestamps-server/blob/master/doc/merkle-mountain-range.md
-
+[RFC 44]: https://github.com/nervosnetwork/rfcs/pull/370
+[RFC 45]: https://github.com/nervosnetwork/rfcs/pull/375
 [MIT License]: LICENSE
