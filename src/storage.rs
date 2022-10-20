@@ -222,6 +222,7 @@ impl Storage {
         if let Some(min_number) = min_block_number {
             self.update_min_filtered_block_number(min_number);
         }
+        self.clear_matched_blocks();
 
         if should_filter_genesis_block {
             let block = self.get_genesis_block();
@@ -281,6 +282,20 @@ impl Storage {
         let mut key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         key.extend(start_number.to_be_bytes());
         self.db.delete(&key).expect("delete matched blocks");
+    }
+
+    fn clear_matched_blocks(&self) {
+        let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
+        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+        let mut batch = self.batch();
+        for (key, _) in self
+            .db
+            .iterator(mode)
+            .take_while(|(key, _value)| key.starts_with(&key_prefix))
+        {
+            batch.delete(key).expect("batch delete should be ok");
+        }
+        batch.commit().expect("batch commit should be ok");
     }
 
     /// the matched blocks must not empty

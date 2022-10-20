@@ -302,6 +302,7 @@ pub struct TransactionWithHeader {
 
 pub struct BlockFilterRpcImpl {
     pub(crate) storage: Storage,
+    pub(crate) peers: Arc<Peers>,
 }
 
 pub struct TransactionRpcImpl {
@@ -321,8 +322,10 @@ pub struct NetRpcImpl {
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
+        let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
         let scripts = scripts.into_iter().map(Into::into).collect();
         self.storage.update_filter_scripts(scripts);
+        matched_blocks.clear();
         Ok(())
     }
 
@@ -1108,6 +1111,7 @@ impl Service {
         let mut io_handler = IoHandler::new();
         let block_filter_rpc_impl = BlockFilterRpcImpl {
             storage: storage.clone(),
+            peers: Arc::clone(&peers),
         };
         let swc = StorageWithChainData::new(storage, Arc::clone(&peers));
         let chain_rpc_impl = ChainRpcImpl { swc: swc.clone() };
