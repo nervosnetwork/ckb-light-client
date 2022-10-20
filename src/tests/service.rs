@@ -472,6 +472,36 @@ fn rpc() {
         "total size should be filtered blocks count * 3 (100~199 * 3)"
     );
 
+    // test get_cells with_data option
+    let cells_page_1 = rpc
+        .get_cells(
+            SearchKey {
+                script: lock_script1.clone().into(),
+                ..Default::default()
+            },
+            Order::Asc,
+            1.into(),
+            None,
+        )
+        .unwrap();
+
+    assert!(cells_page_1.objects.first().unwrap().output_data.is_some());
+
+    let cells_page_1 = rpc
+        .get_cells(
+            SearchKey {
+                script: lock_script1.clone().into(),
+                with_data: Some(false),
+                ..Default::default()
+            },
+            Order::Asc,
+            1.into(),
+            None,
+        )
+        .unwrap();
+
+    assert!(cells_page_1.objects.first().unwrap().output_data.is_none());
+
     // test get_transactions rpc group by tx hash
     let txs_page_1 = rpc
         .get_transactions(
