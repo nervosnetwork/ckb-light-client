@@ -472,7 +472,7 @@ impl LightClientProtocol {
 
         let now = unix_time_as_millis();
         let last_hash = tip_header.calc_header_hash();
-        for block_hashes in self
+        for block_hashes_all in self
             .peers
             .get_headers_to_fetch()
             .chunks(GET_BLOCKS_PROOF_LIMIT)
@@ -484,24 +484,38 @@ impl LightClientProtocol {
                     .unwrap_or(false)
             }) {
                 debug!("send block proof request to peer: {}", peer);
-                let content = packed::GetBlocksProof::new_builder()
-                    .block_hashes(block_hashes.to_vec().pack())
-                    .last_hash(last_hash.clone())
-                    .build();
-                let message = packed::LightClientMessage::new_builder()
-                    .set(content.clone())
-                    .build()
-                    .as_bytes();
-
-                self.peers.update_blocks_proof_request(*peer, Some(content));
-                if let Err(err) =
-                    nc.send_message(SupportProtocols::LightClient.protocol_id(), *peer, message)
-                {
-                    let error_message =
-                        format!("nc.send_message LightClientMessage, error: {:?}", err);
-                    error!("{}", error_message);
+                let mut block_hashes = Vec::with_capacity(block_hashes_all.len());
+                for block_hash in block_hashes_all {
+                    if block_hash == &last_hash {
+                        debug!("remove tip hash from block proof request {:#x}", last_hash);
+                        if self.peers().add_header(&last_hash) {
+                            debug!("fetching tip header, immediately add tip header to storage");
+                            self.storage().add_fetched_header(&tip_header);
+                        }
+                    } else {
+                        block_hashes.push(block_hash.clone());
+                    }
                 }
-                self.peers.fetching_idle_headers(block_hashes, now);
+                if !block_hashes.is_empty() {
+                    let content = packed::GetBlocksProof::new_builder()
+                        .block_hashes(block_hashes.clone().pack())
+                        .last_hash(last_hash.clone())
+                        .build();
+                    let message = packed::LightClientMessage::new_builder()
+                        .set(content.clone())
+                        .build()
+                        .as_bytes();
+
+                    self.peers.update_blocks_proof_request(*peer, Some(content));
+                    if let Err(err) =
+                        nc.send_message(SupportProtocols::LightClient.protocol_id(), *peer, message)
+                    {
+                        let error_message =
+                            format!("nc.send_message LightClientMessage, error: {:?}", err);
+                        error!("{}", error_message);
+                    }
+                    self.peers.fetching_idle_headers(&block_hashes, now);
+                }
             } else {
                 debug!("all valid peers are busy for fetching blocks proof (headers)");
                 break;
