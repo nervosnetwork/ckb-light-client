@@ -193,6 +193,7 @@ pub struct SearchKey {
     pub(crate) script: Script,
     pub(crate) script_type: ScriptType,
     pub(crate) filter: Option<SearchKeyFilter>,
+    pub(crate) with_data: Option<bool>,
     pub(crate) group_by_transaction: Option<bool>,
 }
 
@@ -202,6 +203,7 @@ impl Default for SearchKey {
             script: Script::default(),
             script_type: ScriptType::Lock,
             filter: None,
+            with_data: None,
             group_by_transaction: None,
         }
     }
@@ -232,7 +234,7 @@ pub enum Order {
 #[derive(Serialize)]
 pub struct Cell {
     output: CellOutput,
-    output_data: JsonBytes,
+    pub(crate) output_data: Option<JsonBytes>,
     pub(crate) out_point: OutPoint,
     block_number: BlockNumber,
     tx_index: Uint32,
@@ -343,6 +345,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             order,
             after_cursor,
         )?;
+        let with_data = search_key.with_data.unwrap_or(true);
         let filter_script_type = match search_key.script_type {
             ScriptType::Lock => ScriptType::Type,
             ScriptType::Type => ScriptType::Lock,
@@ -441,7 +444,11 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
 
                 Some(Cell {
                     output: output.into(),
-                    output_data: output_data.into(),
+                    output_data: if with_data {
+                        Some(output_data.into())
+                    } else {
+                        None
+                    },
                     out_point: packed::OutPoint::new(tx_hash, output_index).into(),
                     block_number: block_number.into(),
                     tx_index: tx_index.into(),
@@ -949,13 +956,7 @@ fn build_filter_options(
     Option<[core::Capacity; 2]>,
     Option<[core::BlockNumber; 2]>,
 )> {
-    let SearchKey {
-        script: _,
-        script_type: _,
-        filter,
-        group_by_transaction: _,
-    } = search_key;
-    let filter = filter.unwrap_or_default();
+    let filter = search_key.filter.unwrap_or_default();
     let filter_script_prefix = if let Some(script) = filter.script {
         let script: packed::Script = script.into();
         if script.args().len() > MAX_PREFIX_SEARCH_SIZE {
