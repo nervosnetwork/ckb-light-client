@@ -1,4 +1,9 @@
-use std::{collections::HashSet, path::Path, sync::Arc};
+use std::sync::RwLock;
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::Arc,
+};
 
 use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
@@ -897,6 +902,9 @@ impl StorageWithChainData {
         &self.storage
     }
 
+    pub(crate) fn matched_blocks(&self) -> &RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
+        self.peers.matched_blocks()
+    }
     /// return (added_ts, first_sent, missing)
     pub(crate) fn get_header_fetch_info(&self, block_hash: &H256) -> Option<(u64, u64, bool)> {
         self.peers.get_header_fetch_info(&block_hash.pack())

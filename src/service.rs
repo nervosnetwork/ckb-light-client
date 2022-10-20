@@ -301,8 +301,7 @@ pub struct TransactionWithHeader {
 }
 
 pub struct BlockFilterRpcImpl {
-    pub(crate) storage: Storage,
-    pub(crate) peers: Arc<Peers>,
+    pub(crate) swc: StorageWithChainData,
 }
 
 pub struct TransactionRpcImpl {
@@ -322,15 +321,15 @@ pub struct NetRpcImpl {
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
-        let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
+        let mut matched_blocks = self.swc.matched_blocks().write().expect("poisoned");
         let scripts = scripts.into_iter().map(Into::into).collect();
-        self.storage.update_filter_scripts(scripts);
+        self.swc.storage().update_filter_scripts(scripts);
         matched_blocks.clear();
         Ok(())
     }
 
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
-        let scripts = self.storage.get_filter_scripts();
+        let scripts = self.swc.storage().get_filter_scripts();
         Ok(scripts.into_iter().map(Into::into).collect())
     }
 
@@ -360,7 +359,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             filter_block_range,
         ) = build_filter_options(search_key)?;
         let mode = IteratorMode::From(from_key.as_ref(), direction);
-        let snapshot = self.storage.db.snapshot();
+        let snapshot = self.swc.storage().db.snapshot();
         let iter = snapshot.iterator(mode).skip(skip);
 
         let mut last_key = Vec::new();
@@ -508,7 +507,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         };
 
         let mode = IteratorMode::From(from_key.as_ref(), direction);
-        let snapshot = self.storage.db.snapshot();
+        let snapshot = self.swc.storage().db.snapshot();
         let iter = snapshot.iterator(mode).skip(skip);
 
         if search_key.group_by_transaction.unwrap_or_default() {
@@ -743,7 +742,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             filter_block_range,
         ) = build_filter_options(search_key)?;
         let mode = IteratorMode::From(from_key.as_ref(), direction);
-        let snapshot = self.storage.db.snapshot();
+        let snapshot = self.swc.storage().db.snapshot();
         let iter = snapshot.iterator(mode).skip(skip);
 
         let capacity: u64 = iter
@@ -1109,11 +1108,8 @@ impl Service {
         consensus: Consensus,
     ) -> Server {
         let mut io_handler = IoHandler::new();
-        let block_filter_rpc_impl = BlockFilterRpcImpl {
-            storage: storage.clone(),
-            peers: Arc::clone(&peers),
-        };
         let swc = StorageWithChainData::new(storage, Arc::clone(&peers));
+        let block_filter_rpc_impl = BlockFilterRpcImpl { swc: swc.clone() };
         let chain_rpc_impl = ChainRpcImpl { swc: swc.clone() };
         let transaction_rpc_impl = TransactionRpcImpl {
             pending_txs,

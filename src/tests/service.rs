@@ -25,10 +25,11 @@ use crate::{
 #[test]
 fn rpc() {
     let storage = new_storage("rpc");
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-        peers: Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -844,10 +845,11 @@ fn rpc() {
         "rollback should update script filter block number"
     );
 
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-        peers: Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // test get_cells rpc after rollback
     let cells_page_1 = rpc
@@ -942,10 +944,11 @@ fn rpc() {
 #[test]
 fn get_cells_capacity_bug() {
     let storage = new_storage("get_cells_capacity_bug");
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-        peers: Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -1066,10 +1069,11 @@ fn get_cells_capacity_bug() {
 #[test]
 fn get_cells_after_rollback_bug() {
     let storage = new_storage("get_cells_after_rollback_bug");
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-        peers: Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -1259,10 +1263,8 @@ fn get_cells_after_rollback_bug() {
 fn test_set_scripts_clear_matched_blocks() {
     let storage = new_storage("set-scripts-clear-matched-blocks");
     let peers = Arc::new(Peers::new(RwLock::new(Vec::new())));
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-        peers: Arc::clone(&peers),
-    };
+    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
+    let rpc = BlockFilterRpcImpl { swc };
 
     storage.update_min_filtered_block_number(1234);
     storage.add_matched_blocks(2233, 200, vec![(H256(rand::random()).pack(), false)]);
