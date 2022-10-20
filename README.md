@@ -32,7 +32,7 @@ modify ckb.toml, add a line `block_filter_enable = true` to the section of `[sto
 ckb run
 ```
 
-get full node peer id
+Get full node peer id
 ```
 curl http://localhost:8114/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"local_node_info", "params": [], "id": 1}'
 ```
@@ -47,7 +47,7 @@ cargo build --release
 
 3. Run light client
 
-copy `config.toml` to a new folder, if you want to connect to the full node you just built in step 1, modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
+Copy `config.toml` to a new folder, if you want to connect to the full node you just build in step 1, modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
 
 start light client
 ```
