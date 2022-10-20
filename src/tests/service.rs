@@ -315,6 +315,28 @@ fn rpc() {
             SearchKey {
                 script: lock_script1.clone().into(),
                 filter: Some(SearchKeyFilter {
+                    script_len_range: Some([50.into(), 100.into()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            Order::Asc,
+            150.into(),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(
+        0,
+        filter_cells_page_1.objects.len(),
+        "script len range filter empty"
+    );
+
+    let filter_cells_page_1 = rpc
+        .get_cells(
+            SearchKey {
+                script: lock_script1.clone().into(),
+                filter: Some(SearchKeyFilter {
                     block_range: Some([100.into(), 200.into()]),
                     ..Default::default()
                 }),
@@ -648,6 +670,19 @@ fn rpc() {
         .unwrap();
 
     assert_eq!(0, cc.capacity.value(), "lock_script2 is not filtered");
+
+    let cc = rpc
+        .get_cells_capacity(SearchKey {
+            script: lock_script1.clone().into(),
+            filter: Some(SearchKeyFilter {
+                script_len_range: Some([50.into(), 100.into()]),
+                ..Default::default()
+            }),
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(0, cc.capacity.value(), "script len range filter empty");
 
     // test get_header rpc
     let extra_header = HeaderBuilder::default()
