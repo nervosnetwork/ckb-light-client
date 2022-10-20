@@ -212,6 +212,7 @@ impl Default for SearchKey {
 #[derive(Deserialize, Default)]
 pub struct SearchKeyFilter {
     pub(crate) script: Option<Script>,
+    pub(crate) script_len_range: Option<[Uint64; 2]>,
     pub(crate) output_data_len_range: Option<[Uint64; 2]>,
     pub(crate) output_capacity_range: Option<[Uint64; 2]>,
     pub(crate) block_range: Option<[BlockNumber; 2]>,
@@ -352,6 +353,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         };
         let (
             filter_prefix,
+            filter_script_len_range,
             filter_output_data_len_range,
             filter_output_capacity_range,
             filter_block_range,
@@ -415,6 +417,27 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                                     .as_slice()
                                     .starts_with(prefix)
                             {
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                if let Some([r0, r1]) = filter_script_len_range {
+                    match filter_script_type {
+                        ScriptType::Lock => {
+                            let script_len = extract_raw_data(&output.lock()).len();
+                            if script_len < r0 || script_len > r1 {
+                                return None;
+                            }
+                        }
+                        ScriptType::Type => {
+                            let script_len = output
+                                .type_()
+                                .to_opt()
+                                .map(|script| extract_raw_data(&script).len())
+                                .unwrap_or_default();
+                            if script_len < r0 || script_len > r1 {
                                 return None;
                             }
                         }
@@ -735,6 +758,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         };
         let (
             filter_prefix,
+            filter_script_len_range,
             filter_output_data_len_range,
             filter_output_capacity_range,
             filter_block_range,
@@ -792,6 +816,27 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                                     .as_slice()
                                     .starts_with(prefix)
                             {
+                                return None;
+                            }
+                        }
+                    }
+                }
+
+                if let Some([r0, r1]) = filter_script_len_range {
+                    match filter_script_type {
+                        ScriptType::Lock => {
+                            let script_len = extract_raw_data(&output.lock()).len();
+                            if script_len < r0 || script_len > r1 {
+                                return None;
+                            }
+                        }
+                        ScriptType::Type => {
+                            let script_len = output
+                                .type_()
+                                .to_opt()
+                                .map(|script| extract_raw_data(&script).len())
+                                .unwrap_or_default();
+                            if script_len < r0 || script_len > r1 {
                                 return None;
                             }
                         }
@@ -953,6 +998,7 @@ fn build_filter_options(
 ) -> Result<(
     Option<Vec<u8>>,
     Option<[usize; 2]>,
+    Option<[usize; 2]>,
     Option<[core::Capacity; 2]>,
     Option<[core::BlockNumber; 2]>,
 )> {
@@ -972,6 +1018,13 @@ fn build_filter_options(
         None
     };
 
+    let filter_script_len_range = filter.script_len_range.map(|[r0, r1]| {
+        [
+            Into::<u64>::into(r0) as usize,
+            Into::<u64>::into(r1) as usize,
+        ]
+    });
+
     let filter_output_data_len_range = filter.output_data_len_range.map(|[r0, r1]| {
         [
             Into::<u64>::into(r0) as usize,
@@ -988,6 +1041,7 @@ fn build_filter_options(
 
     Ok((
         filter_script_prefix,
+        filter_script_len_range,
         filter_output_data_len_range,
         filter_output_capacity_range,
         filter_block_range,
