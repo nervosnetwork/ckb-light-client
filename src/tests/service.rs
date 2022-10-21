@@ -18,20 +18,18 @@ use crate::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
         ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, TransactionWithHeader,
     },
-    storage::{self, Storage, StorageWithChainData},
+    storage::{self, StorageWithChainData},
+    tests::utils::new_storage,
 };
-
-fn new_storage(prefix: &str) -> Storage {
-    let tmp_dir = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
-    Storage::new(tmp_dir.path().to_str().unwrap())
-}
 
 #[test]
 fn rpc() {
     let storage = new_storage("rpc");
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -882,9 +880,11 @@ fn rpc() {
         "rollback should update script filter block number"
     );
 
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // test get_cells rpc after rollback
     let cells_page_1 = rpc
@@ -979,9 +979,11 @@ fn rpc() {
 #[test]
 fn get_cells_capacity_bug() {
     let storage = new_storage("get_cells_capacity_bug");
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -1102,9 +1104,11 @@ fn get_cells_capacity_bug() {
 #[test]
 fn get_cells_after_rollback_bug() {
     let storage = new_storage("get_cells_after_rollback_bug");
-    let rpc = BlockFilterRpcImpl {
-        storage: storage.clone(),
-    };
+    let swc = StorageWithChainData::new(
+        storage.clone(),
+        Arc::new(Peers::new(RwLock::new(Vec::new()))),
+    );
+    let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -1291,20 +1295,48 @@ fn get_cells_after_rollback_bug() {
 }
 
 #[test]
-fn test_forget_update_min_filtred_number() {
-    let storage = new_storage("forget_update_min_filtred_block");
-    storage.update_min_filtered_block_number(66);
-    storage.update_filter_scripts(vec![
-        storage::ScriptStatus {
-            script: Script::default(),
-            script_type: storage::ScriptType::Lock,
-            block_number: 33,
+fn test_set_scripts_clear_matched_blocks() {
+    let storage = new_storage("set-scripts-clear-matched-blocks");
+    let peers = Arc::new(Peers::new(RwLock::new(Vec::new())));
+    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
+    let rpc = BlockFilterRpcImpl { swc };
+
+    storage.update_min_filtered_block_number(1234);
+    storage.add_matched_blocks(2233, 200, vec![(H256(rand::random()).pack(), false)]);
+    storage.add_matched_blocks(4455, 200, vec![(H256(rand::random()).pack(), false)]);
+    {
+        let mut matched_blocks = peers.matched_blocks().write().unwrap();
+        peers.add_matched_blocks(
+            &mut matched_blocks,
+            vec![(H256(rand::random()).pack(), false)],
+        );
+    }
+    let block_number_a: u64 = 3;
+    let block_number_x: u64 = 4;
+    rpc.set_scripts(vec![
+        ScriptStatus {
+            script: Script::new_builder()
+                .args(Bytes::from("abc").pack())
+                .build()
+                .into(),
+            script_type: ScriptType::Lock,
+            block_number: block_number_a.into(),
         },
-        storage::ScriptStatus {
-            script: Script::default(),
-            script_type: storage::ScriptType::Type,
-            block_number: 44,
+        ScriptStatus {
+            script: Script::new_builder()
+                .args(Bytes::from("xyz").pack())
+                .build()
+                .into(),
+            script_type: ScriptType::Type,
+            block_number: block_number_x.into(),
         },
-    ]);
-    assert_eq!(storage.get_min_filtered_block_number(), 33);
+    ])
+    .unwrap();
+    assert_eq!(
+        storage.get_min_filtered_block_number(),
+        block_number_a.min(block_number_x)
+    );
+    assert!(storage.get_earliest_matched_blocks().is_none());
+    assert!(storage.get_latest_matched_blocks().is_none());
+    assert!(peers.matched_blocks().read().unwrap().is_empty());
 }
