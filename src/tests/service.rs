@@ -820,6 +820,8 @@ fn rpc() {
     );
     let rv = rpc.fetch_header(h256!("0xaa404")).unwrap();
     assert_eq!(rv, FetchStatus::NotFound);
+    let rv = rpc.fetch_header(h256!("0xaa404")).unwrap();
+    assert!(matches!(rv, FetchStatus::Added { .. }));
 
     // test fetch_transaction rpc
     let rv = rpc.fetch_transaction(fetched_txs[0].clone()).unwrap();
@@ -853,6 +855,8 @@ fn rpc() {
     );
     let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
     assert_eq!(rv, FetchStatus::NotFound);
+    let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
+    assert!(matches!(rv, FetchStatus::Added { .. }));
 
     assert_eq!(peers.fetching_headers().len(), 4);
     assert_eq!(peers.fetching_txs().len(), 4);

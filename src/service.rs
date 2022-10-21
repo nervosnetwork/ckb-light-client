@@ -1093,11 +1093,18 @@ impl ChainRpc for ChainRpcImpl {
 
     fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>> {
         if let Some(value) = self.get_header(block_hash.clone())? {
+            if self.swc.storage().get_header(&block_hash.pack()).is_none() {
+                self.swc
+                    .storage()
+                    .add_fetched_header(&value.inner.clone().into());
+            }
             return Ok(FetchStatus::Fetched { data: value });
         }
         let now = unix_time_as_millis();
         if let Some((added_ts, first_sent, missing)) = self.swc.get_header_fetch_info(&block_hash) {
             if missing {
+                // re-fetch the header
+                self.swc.add_fetch_header(block_hash, now);
                 return Ok(FetchStatus::NotFound);
             } else if first_sent > 0 {
                 return Ok(FetchStatus::Fetching {
@@ -1123,6 +1130,8 @@ impl ChainRpc for ChainRpcImpl {
         let now = unix_time_as_millis();
         if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(&tx_hash) {
             if missing {
+                // re-fetch the transaction
+                self.swc.add_fetch_tx(tx_hash, now);
                 return Ok(FetchStatus::NotFound);
             } else if first_sent > 0 {
                 return Ok(FetchStatus::Fetching {
