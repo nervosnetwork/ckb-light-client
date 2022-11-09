@@ -843,6 +843,206 @@ async fn valid_proof_with_reorg_blocks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn valid_proof_with_the_genesis_block() {
+    test_parent_chain_root_for_the_genesis_block(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_parent_chain_root_for_the_genesis_block() {
+    test_parent_chain_root_for_the_genesis_block(false).await;
+}
+
+async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_mmr_activated_epoch(0);
+    protocol.set_last_n_blocks(3);
+
+    let num = 1;
+    chain.mine_to(1);
+
+    let snapshot = chain.shared().snapshot();
+
+    let sampled_numbers = vec![];
+    let boundary_number = 0;
+
+    // Setup the test fixture.
+    {
+        let prove_request = chain.build_prove_request(
+            0,
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let headers = (0..num)
+                .into_iter()
+                .map(|n| {
+                    if !should_passed && n == 0 {
+                        let parent_chain_root = snapshot
+                            .chain_root_mmr(1)
+                            .get_root()
+                            .expect("has chain root");
+                        snapshot
+                            .get_verifiable_header_by_number(n)
+                            .expect("block stored")
+                            .as_builder()
+                            .parent_chain_root(parent_chain_root)
+                            .build()
+                    } else {
+                        snapshot
+                            .get_verifiable_header_by_number(n)
+                            .expect("block stored")
+                    }
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        if should_passed {
+            assert!(nc.not_banned(peer_index));
+
+            let prove_state = protocol
+                .get_peer_state(&peer_index)
+                .expect("has peer state")
+                .get_prove_state()
+                .expect("has prove state")
+                .to_owned();
+            let last_header: VerifiableHeader = last_header.into();
+            assert!(prove_state.is_same_as(&last_header));
+        } else {
+            assert!(nc.banned_since(peer_index, StatusCode::InvalidChainRoot));
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn invalid_parent_chain_root_for_non_genesis_blocks() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_mmr_activated_epoch(0);
+    protocol.set_last_n_blocks(3);
+
+    let num = 2;
+    chain.mine_to(num);
+
+    let snapshot = chain.shared().snapshot();
+
+    let sampled_numbers = vec![1];
+    let boundary_number = 0;
+
+    // Setup the test fixture.
+    {
+        let prove_request = chain.build_prove_request(
+            0,
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        protocol.peers().update_last_state(peer_index, last_state);
+        protocol
+            .peers()
+            .update_prove_request(peer_index, Some(prove_request));
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let headers = (0..num)
+                .into_iter()
+                .map(|n| {
+                    if n == 1 {
+                        snapshot
+                            .get_verifiable_header_by_number(n)
+                            .expect("block stored")
+                            .as_builder()
+                            .parent_chain_root(Default::default())
+                            .build()
+                    } else {
+                        snapshot
+                            .get_verifiable_header_by_number(n)
+                            .expect("block stored")
+                    }
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.banned_since(peer_index, StatusCode::InvalidChainRoot));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn invalid_proof() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);

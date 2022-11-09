@@ -337,8 +337,13 @@ impl SnapshotExt for Snapshot {
         num: BlockNumber,
     ) -> Option<packed::VerifiableHeader> {
         self.get_block_by_number(num).map(|block| {
-            let mmr = self.chain_root_mmr(num - 1);
-            let parent_chain_root = mmr.get_root().expect("has chain root");
+            let parent_chain_root = if num == 0 {
+                Default::default()
+            } else {
+                self.chain_root_mmr(num - 1)
+                    .get_root()
+                    .expect("has chain root")
+            };
             packed::VerifiableHeader::new_builder()
                 .header(block.data().header())
                 .uncles_hash(block.calc_uncles_hash())
