@@ -180,7 +180,7 @@ impl LightClientProtocol {
         nc.reply(peer, &message);
     }
 
-    fn get_block_samples(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
+    fn get_last_state_proof(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
         let peer_state = self
             .peers()
             .get_state(&peer)
@@ -209,7 +209,7 @@ impl LightClientProtocol {
             }
 
             if let Some(content) = self.build_prove_request_content(&peer_state, last_header) {
-                trace!("peer {}: send get block samples", peer);
+                trace!("peer {}: send get last state proof", peer);
                 let message = packed::LightClientMessage::new_builder()
                     .set(content.clone())
                     .build();
@@ -445,7 +445,7 @@ impl LightClientProtocol {
         for peer in self.peers().get_peers_which_require_updating(before) {
             // TODO Different messages should have different timeouts.
             self.get_last_state(nc, peer);
-            self.get_block_samples(nc, peer);
+            self.get_last_state_proof(nc, peer);
         }
     }
 
