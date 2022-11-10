@@ -47,6 +47,7 @@ pub struct LightClientProtocol {
     storage: Storage,
     peers: Arc<Peers>,
     consensus: Consensus,
+    mmr_activated_epoch: EpochNumber,
     last_n_blocks: BlockNumber,
     init_blocks_in_transit_per_peer: usize,
 }
@@ -356,10 +357,17 @@ impl LightClientProtocol {
 
 impl LightClientProtocol {
     pub(crate) fn new(storage: Storage, peers: Arc<Peers>, consensus: Consensus) -> Self {
+        // TODO remove this hard code when mmr is activated on testnet
+        let mmr_activated_epoch = if consensus.is_public_chain() {
+            EpochNumber::MAX
+        } else {
+            0
+        };
         Self {
             storage,
             peers,
             consensus,
+            mmr_activated_epoch,
             last_n_blocks: LAST_N_BLOCKS,
             init_blocks_in_transit_per_peer: INIT_BLOCKS_IN_TRANSIT_PER_PEER,
         }
@@ -383,13 +391,13 @@ impl LightClientProtocol {
         self.init_blocks_in_transit_per_peer = value;
     }
 
+    #[cfg(test)]
+    pub(crate) fn set_mmr_activated_epoch(&mut self, mmr_activated_epoch: EpochNumber) {
+        self.mmr_activated_epoch = mmr_activated_epoch;
+    }
+
     pub(crate) fn mmr_activated_epoch(&self) -> EpochNumber {
-        // TODO remove this hard code when mmr is activated on testnet
-        if self.consensus.is_public_chain() {
-            EpochNumber::MAX
-        } else {
-            0
-        }
+        self.mmr_activated_epoch
     }
 
     pub(crate) fn check_pow_for_headers<'a, T: Iterator<Item = &'a HeaderView>>(
