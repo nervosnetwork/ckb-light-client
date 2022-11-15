@@ -73,7 +73,9 @@ pub(crate) trait ChainExt {
     fn create_light_client_protocol(&self, peers: Arc<Peers>) -> LightClientProtocol {
         let storage = self.client_storage().to_owned();
         let consensus = self.consensus().to_owned();
-        LightClientProtocol::new(storage, peers, consensus)
+        let mut protocol = LightClientProtocol::new(storage, peers, consensus);
+        protocol.set_mmr_activated_epoch(1);
+        protocol
     }
 
     fn create_filter_protocol(&self, peers: Arc<Peers>) -> FilterProtocol {
