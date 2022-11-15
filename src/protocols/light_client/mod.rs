@@ -330,6 +330,7 @@ impl LightClientProtocol {
                             while let Some((start_number, _, _)) =
                                 self.storage.get_latest_matched_blocks()
                             {
+                                debug!("remove matched blocks start from: {}", start_number);
                                 self.storage.remove_matched_blocks(start_number);
                                 if start_number < to_number {
                                     start_number_opt = Some(start_number);

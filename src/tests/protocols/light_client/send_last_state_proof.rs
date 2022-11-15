@@ -1720,7 +1720,7 @@ async fn reorg_rollback_blocks() {
         let last_header: VerifiableHeader = last_header.into();
         assert!(!prove_state.get_reorg_last_headers().is_empty());
         assert!(prove_state.is_same_as(&last_header));
-        assert_eq!(storage.get_min_filtered_block_number(), 12);
+        assert_eq!(storage.get_min_filtered_block_number(), 11);
         assert_eq!(storage.get_earliest_matched_blocks().unwrap().0, 4);
         assert_eq!(storage.get_latest_matched_blocks().unwrap().0, 8);
         assert!(peers.matched_blocks().read().unwrap().is_empty());

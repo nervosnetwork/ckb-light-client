@@ -659,6 +659,7 @@ impl Storage {
                                 .try_into()
                                 .expect("stored BlockNumber"),
                         );
+                        log::debug!("rollback {}", block_number);
                         let tx_index = TxIndex::from_be_bytes(
                             key[key_prefix_len + 8..key_prefix_len + 12]
                                 .try_into()
@@ -769,11 +770,11 @@ impl Storage {
         }
 
         // we should also sync block filters again
-        if self.get_min_filtered_block_number() > to_number {
+        if self.get_min_filtered_block_number() >= to_number {
             batch
                 .put(
                     Key::Meta(MIN_FILTERED_BLOCK_NUMBER).into_vec(),
-                    to_number.to_le_bytes(),
+                    to_number.saturating_sub(1).to_le_bytes(),
                 )
                 .expect("batch put should be ok");
         }
