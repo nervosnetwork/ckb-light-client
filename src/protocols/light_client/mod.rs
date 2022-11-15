@@ -342,6 +342,9 @@ impl LightClientProtocol {
                             debug!("rollback to block#{}", rollback_to);
                             self.storage.rollback_to_block(rollback_to);
                             matched_blocks.clear();
+                        } else {
+                            error!("Long fork detected, please check if ckb-light-client is connected to the same network ckb node. If you connected ckb-light-client to a dev chain for testing purpose you should remove the storage of ckb-light-client to recover.");
+                            panic!("long fork detected");
                         }
                     }
                 }
