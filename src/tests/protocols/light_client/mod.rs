@@ -67,7 +67,7 @@ fn build_prove_request_content() {
             .epoch(epoch.pack())
             .build();
         let last_total_difficulty = U256::from(last_total_difficulty);
-        storage.update_last_state(&last_total_difficulty, &header.data());
+        storage.update_last_state(&last_total_difficulty, &header.data(), &[]);
     }
 
     // Test different total difficulties.
@@ -177,7 +177,7 @@ async fn test_light_client_get_idle_matched_blocks() {
     );
     chain
         .client_storage()
-        .update_last_state(&U256::one(), &tip_header.header().data());
+        .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
     let tip_hash = tip_header.header().hash();
     let peers = {
         let last_state = LastState::new(tip_header);

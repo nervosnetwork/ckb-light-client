@@ -289,6 +289,7 @@ impl LightClientProtocol {
             self.storage.update_last_state(
                 &new_total_difficulty,
                 &new_prove_state.get_last_header().header().data(),
+                new_prove_state.get_last_headers(),
             );
         }
         self.peers().update_prove_state(peer, new_prove_state);
@@ -301,58 +302,49 @@ impl LightClientProtocol {
         let (old_total_difficulty, _) = self.storage.get_last_state();
         let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
         if new_total_difficulty > old_total_difficulty {
-            if let Some(state) = self.peers().get_state(&peer) {
-                if let Some(old_prove_state) = state.get_prove_state() {
-                    let reorg_last_headers = new_prove_state.get_reorg_last_headers();
-                    if !reorg_last_headers.is_empty() {
-                        let last_headers: HashMap<_, _> = old_prove_state
-                            .get_last_headers()
-                            .iter()
-                            .map(|header| (header.number(), header.hash()))
-                            .collect();
-                        let fork_number =
-                            reorg_last_headers.iter().rev().find_map(|reorg_header| {
-                                let number = reorg_header.number();
-                                last_headers
-                                    .get(&number)
-                                    .map(|hash| {
-                                        if &reorg_header.hash() == hash {
-                                            Some(number)
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .unwrap_or_default()
-                            });
-                        if let Some(to_number) = fork_number {
-                            let mut matched_blocks =
-                                self.peers.matched_blocks().write().expect("poisoned");
-                            let mut start_number_opt = None;
-                            while let Some((start_number, _, _)) =
-                                self.storage.get_latest_matched_blocks()
-                            {
-                                debug!("remove matched blocks start from: {}", start_number);
-                                self.storage.remove_matched_blocks(start_number);
-                                if start_number < to_number {
-                                    start_number_opt = Some(start_number);
-                                    break;
-                                }
+            let reorg_last_headers = new_prove_state.get_reorg_last_headers();
+            if !reorg_last_headers.is_empty() {
+                let old_last_headers: HashMap<_, _> =
+                    self.storage.get_last_n_headers().into_iter().collect();
+                let fork_number = reorg_last_headers.iter().rev().find_map(|reorg_header| {
+                    let number = reorg_header.number();
+                    old_last_headers
+                        .get(&number)
+                        .map(|hash| {
+                            if &reorg_header.hash() == hash {
+                                Some(number)
+                            } else {
+                                None
                             }
-                            let rollback_to = start_number_opt.unwrap_or(to_number);
-                            debug!("rollback to block#{}", rollback_to);
-                            self.storage.rollback_to_block(rollback_to);
-                            matched_blocks.clear();
-                        } else {
-                            error!("Long fork detected, please check if ckb-light-client is connected to the same network ckb node. If you connected ckb-light-client to a dev chain for testing purpose you should remove the storage of ckb-light-client to recover.");
-                            panic!("long fork detected");
+                        })
+                        .unwrap_or_default()
+                });
+                if let Some(to_number) = fork_number {
+                    let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
+                    let mut start_number_opt = None;
+                    while let Some((start_number, _, _)) = self.storage.get_latest_matched_blocks()
+                    {
+                        debug!("remove matched blocks start from: {}", start_number);
+                        self.storage.remove_matched_blocks(start_number);
+                        if start_number < to_number {
+                            start_number_opt = Some(start_number);
+                            break;
                         }
                     }
+                    let rollback_to = start_number_opt.unwrap_or(to_number);
+                    debug!("rollback to block#{}", rollback_to);
+                    self.storage.rollback_to_block(rollback_to);
+                    matched_blocks.clear();
+                } else {
+                    error!("Long fork detected, please check if ckb-light-client is connected to the same network ckb node. If you connected ckb-light-client to a dev chain for testing purpose you should remove the storage of ckb-light-client to recover.");
+                    panic!("long fork detected");
                 }
             }
 
             self.storage.update_last_state(
                 &new_total_difficulty,
                 &new_prove_state.get_last_header().header().data(),
+                new_prove_state.get_last_headers(),
             );
         }
         self.peers().commit_prove_state(peer, new_prove_state);
