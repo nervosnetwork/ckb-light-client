@@ -1092,7 +1092,7 @@ fn get_cells_capacity_bug() {
         )
         .build();
     storage.filter_block(block2.data());
-    storage.update_last_state(&U256::one(), &block2.header().data());
+    storage.update_last_state(&U256::one(), &block2.header().data(), &[]);
 
     let cc = rpc
         .get_cells_capacity(SearchKey {

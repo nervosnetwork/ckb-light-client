@@ -359,7 +359,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
         VerifiableHeader::new(header.clone(), Default::default(), None, Default::default());
     chain
         .client_storage()
-        .update_last_state(&U256::one(), &tip_header.header().data());
+        .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
 
     let peer_index = PeerIndex::new(3);
     let (peers, prove_state_block_hash) = {
@@ -622,7 +622,7 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     let tip_hash = tip_header.header().hash();
     chain
         .client_storage()
-        .update_last_state(&U256::one(), &tip_header.header().data());
+        .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
     let peers = {
         let last_state = LastState::new(tip_header);
         let request = ProveRequest::new(last_state, Default::default());

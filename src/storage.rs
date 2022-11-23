@@ -27,6 +27,7 @@ const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";
 const MIN_FILTERED_BLOCK_NUMBER: &str = "MIN_FILTERED_NUMBER";
+const LAST_N_HEADERS_KEY: &str = "LAST_N_HEADERS";
 
 pub struct ScriptStatus {
     pub script: Script,
@@ -114,7 +115,7 @@ impl Storage {
                 .put_kv(genesis_block_key, genesis_hash_and_txs_hash.as_slice())
                 .expect("batch put should be ok");
             batch.commit().expect("batch commit should be ok");
-            self.update_last_state(&U256::zero(), &block.header());
+            self.update_last_state(&U256::zero(), &block.header(), &[]);
             self.update_min_filtered_block_number(0);
         }
     }
@@ -258,13 +259,19 @@ impl Storage {
             .collect()
     }
 
-    pub fn update_last_state(&self, total_difficulty: &U256, tip_header: &Header) {
+    pub fn update_last_state(
+        &self,
+        total_difficulty: &U256,
+        tip_header: &Header,
+        last_n_headers: &[HeaderView],
+    ) {
         let key = Key::Meta(LAST_STATE_KEY).into_vec();
         let mut value = total_difficulty.to_le_bytes().to_vec();
         value.extend(tip_header.as_slice());
         self.db
             .put(key, &value)
             .expect("db put last state should be ok");
+        self.update_last_n_headers(last_n_headers);
     }
 
     pub fn get_last_state(&self) -> (U256, Header) {
@@ -282,7 +289,36 @@ impl Storage {
             .expect("tip header should be inited")
     }
 
-    /// when all blocks downloaded and inserted into storage call this function.
+    pub fn update_last_n_headers(&self, headers: &[HeaderView]) {
+        let key = Key::Meta(LAST_N_HEADERS_KEY).into_vec();
+        let mut value: Vec<u8> = Vec::with_capacity(headers.len() * 40);
+        for header in headers {
+            value.extend(header.number().to_le_bytes());
+            value.extend(header.hash().as_slice());
+        }
+        self.db
+            .put(key, &value)
+            .expect("db put last n headers should be ok");
+    }
+    pub fn get_last_n_headers(&self) -> Vec<(u64, Byte32)> {
+        let key = Key::Meta(LAST_N_HEADERS_KEY).into_vec();
+        self.db
+            .get_pinned(&key)
+            .expect("db get last n headers should be ok")
+            .map(|data| {
+                assert!(data.len() % 40 == 0);
+                let mut headers = Vec::with_capacity(data.len() / 40);
+                for part in data.windows(40) {
+                    let number = u64::from_le_bytes(part[0..8].try_into().unwrap());
+                    let hash = Byte32::from_slice(&part[8..]).expect("byte32 block hash");
+                    headers.push((number, hash));
+                }
+                headers
+            })
+            .expect("last n headers should be inited")
+    }
+
+    /// 0 all blocks downloaded and inserted into storage call this function.
     pub fn remove_matched_blocks(&self, start_number: u64) {
         let mut key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         key.extend(start_number.to_be_bytes());
