@@ -1,5 +1,5 @@
 use ckb_network::{CKBProtocolContext, PeerIndex};
-use ckb_types::{packed::LightClientMessage, prelude::*};
+use ckb_types::{core::HeaderView, packed::LightClientMessage, prelude::*};
 
 use super::{Status, StatusCode};
 
@@ -18,5 +18,23 @@ impl<'a> LightClientProtocolReply<'a> for &(dyn CKBProtocolContext + 'a) {
         } else {
             Status::ok()
         }
+    }
+}
+
+// TODO Since these methods are so useful, we could move then into `ckb-types`.
+// And also, we should add the `header.epoch().is_well_formed()` check into `header.is_valid()`.
+pub(crate) trait HeaderUtils {
+    fn is_parent_of(&self, child: &Self) -> bool;
+
+    fn is_child_of(&self, parent: &Self) -> bool {
+        parent.is_parent_of(self)
+    }
+}
+
+impl HeaderUtils for HeaderView {
+    fn is_parent_of(&self, child: &Self) -> bool {
+        self.number() + 1 == child.number()
+            || (self.is_genesis() || child.epoch().is_successor_of(self.epoch()))
+            || self.hash() == child.parent_hash()
     }
 }

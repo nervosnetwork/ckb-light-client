@@ -1562,7 +1562,7 @@ async fn last_n_headers_should_be_continuous() {
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        assert!(nc.banned_since(peer_index, StatusCode::InvalidParentHash));
+        assert!(nc.banned_since(peer_index, StatusCode::InvalidParentBlock));
     }
 }
 

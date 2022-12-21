@@ -8,6 +8,7 @@ use faketime::unix_time_as_millis;
 use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
+use super::prelude::*;
 use crate::protocols::MESSAGE_TIMEOUT;
 
 #[derive(Default)]
@@ -195,8 +196,9 @@ impl ProveState {
     }
 
     pub(crate) fn is_parent_of(&self, child_last_state: &LastState) -> bool {
-        self.get_last_header().header().hash()
-            == child_last_state.verifiable_header().header().parent_hash()
+        self.get_last_header()
+            .header()
+            .is_parent_of(child_last_state.verifiable_header().header())
     }
 
     pub(crate) fn get_last_header(&self) -> &VerifiableHeader {
