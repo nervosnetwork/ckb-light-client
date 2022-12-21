@@ -122,7 +122,7 @@ impl<'a> SendLastStateProofProcess<'a> {
             false
         };
 
-        // Check parent hashes for the continuous headers.
+        // Check if headers are continuous.
         if reorg_count != 0 {
             return_if_failed!(check_continuous_headers(&headers[..reorg_count - 1]));
         }
@@ -864,15 +864,19 @@ pub(crate) fn verify_total_difficulty(
 
 pub(crate) fn check_continuous_headers(headers: &[HeaderView]) -> Result<(), Status> {
     for pair in headers.windows(2) {
-        if pair[0].hash() != pair[1].parent_hash() {
+        if !pair[0].is_parent_of(&pair[1]) {
             let errmsg = format!(
-                "failed to verify parent hash for block#{}, hash: {:#x} expect {:#x} but got {:#x}",
+                "failed to verify parent for block (number: {}, epoch: {:#}, hash: {:#x}, parent: {:#x}), \
+                because parent block is (number: {}, epoch: {:#}, hash: {:#x})",
                 pair[1].number(),
+                pair[1].epoch(),
                 pair[1].hash(),
                 pair[1].parent_hash(),
+                pair[0].number(),
+                pair[0].epoch(),
                 pair[0].hash(),
             );
-            return Err(StatusCode::InvalidParentHash.with_context(errmsg));
+            return Err(StatusCode::InvalidParentBlock.with_context(errmsg));
         }
     }
     Ok(())

@@ -42,8 +42,8 @@ pub enum StatusCode {
     InvalidCompactTarget = 433,
     /// Failed to verify the total difficulty.
     InvalidTotalDifficulty = 434,
-    /// Failed to verify the parent hash.
-    InvalidParentHash = 435,
+    /// Failed to verify the parent block.
+    InvalidParentBlock = 435,
     /// Failed to verify the proof.
     InvalidProof = 439,
 
