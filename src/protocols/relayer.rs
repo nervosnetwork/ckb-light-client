@@ -48,8 +48,11 @@ impl PendingTxs {
         self.updated_at = Instant::now();
     }
 
-    fn get(&self, hash: packed::Byte32) -> Option<(packed::Transaction, Cycle, HashSet<PeerId>)> {
-        self.txs.get(&hash).cloned()
+    pub fn get(
+        &self,
+        hash: &packed::Byte32,
+    ) -> Option<(packed::Transaction, Cycle, HashSet<PeerId>)> {
+        self.txs.get(hash).cloned()
     }
 
     fn fetch_transaction_hashes_for_broadcast(&mut self, peer_id: PeerId) -> Vec<packed::Byte32> {
@@ -173,12 +176,14 @@ impl CKBProtocolHandler for RelayProtocol {
                 .tx_hashes()
                 .iter()
                 .filter_map(|tx_hash| {
-                    pending_txs.get(tx_hash.to_entity()).map(|(tx, cycles, _)| {
-                        packed::RelayTransaction::new_builder()
-                            .transaction(tx)
-                            .cycles(cycles.pack())
-                            .build()
-                    })
+                    pending_txs
+                        .get(&tx_hash.to_entity())
+                        .map(|(tx, cycles, _)| {
+                            packed::RelayTransaction::new_builder()
+                                .transaction(tx)
+                                .cycles(cycles.pack())
+                                .build()
+                        })
                 })
                 .collect();
 

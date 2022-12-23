@@ -1,7 +1,7 @@
 use ckb_chain_spec::consensus::Consensus;
 use ckb_jsonrpc_types::{
-    BlockNumber, BlockView, Capacity, CellOutput, HeaderView, JsonBytes, NodeAddress, OutPoint,
-    RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
+    BlockNumber, BlockView, Capacity, CellOutput, Cycle, HeaderView, JsonBytes, NodeAddress,
+    OutPoint, RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
 };
 use ckb_network::{extract_peer_id, NetworkController};
 use ckb_traits::HeaderProvider;
@@ -65,6 +65,12 @@ pub trait BlockFilterRpc {
 pub trait TransactionRpc {
     #[rpc(name = "send_transaction")]
     fn send_transaction(&self, tx: Transaction) -> Result<H256>;
+
+    #[rpc(name = "get_transaction")]
+    fn get_transaction(&self, tx_hash: H256) -> Result<TransactionWithStatus>;
+
+    #[rpc(name = "fetch_transaction")]
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithStatus>>;
 }
 
 #[rpc(server)]
@@ -78,20 +84,8 @@ pub trait ChainRpc {
     #[rpc(name = "get_header")]
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>>;
 
-    #[rpc(name = "get_transaction")]
-    fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>>;
-
-    /// Fetch a header from remote node.
-    ///
-    /// Returns: FetchStatus<HeaderView>
     #[rpc(name = "fetch_header")]
     fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>>;
-
-    /// Fetch a transaction from remote node.
-    ///
-    /// Returns: FetchStatus<TransactionWithHeader>
-    #[rpc(name = "fetch_transaction")]
-    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>>;
 }
 
 #[rpc(server)]
@@ -296,9 +290,24 @@ pub struct Pagination<T> {
 }
 
 #[derive(Serialize, Debug, Eq, PartialEq)]
-pub struct TransactionWithHeader {
-    pub(crate) transaction: TransactionView,
-    pub(crate) header: HeaderView,
+pub struct TransactionWithStatus {
+    pub(crate) transaction: Option<TransactionView>,
+    pub(crate) cycles: Option<Cycle>,
+    pub(crate) tx_status: TxStatus,
+}
+
+#[derive(Serialize, Debug, Eq, PartialEq)]
+pub struct TxStatus {
+    pub status: Status,
+    pub block_hash: Option<H256>,
+}
+
+#[derive(Serialize, Debug, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum Status {
+    Pending,
+    Committed,
+    Unknown,
 }
 
 pub struct BlockFilterRpcImpl {
@@ -306,9 +315,9 @@ pub struct BlockFilterRpcImpl {
 }
 
 pub struct TransactionRpcImpl {
-    pending_txs: Arc<RwLock<PendingTxs>>,
-    swc: StorageWithChainData,
-    consensus: Consensus,
+    pub(crate) pending_txs: Arc<RwLock<PendingTxs>>,
+    pub(crate) swc: StorageWithChainData,
+    pub(crate) consensus: Consensus,
 }
 
 pub struct ChainRpcImpl {
@@ -1070,6 +1079,77 @@ impl TransactionRpc for TransactionRpcImpl {
 
         Ok(tx.hash().unpack())
     }
+
+    fn get_transaction(&self, tx_hash: H256) -> Result<TransactionWithStatus> {
+        if let Some((transaction, header)) = self
+            .swc
+            .storage()
+            .get_transaction_with_header(&tx_hash.pack())
+        {
+            return Ok(TransactionWithStatus {
+                transaction: Some(transaction.into_view().into()),
+                cycles: None,
+                tx_status: TxStatus {
+                    block_hash: Some(header.into_view().hash().unpack()),
+                    status: Status::Committed,
+                },
+            });
+        }
+
+        if let Some((transaction, cycles, _)) = self
+            .pending_txs
+            .read()
+            .expect("pending_txs lock is poisoned")
+            .get(&tx_hash.pack())
+        {
+            return Ok(TransactionWithStatus {
+                transaction: Some(transaction.into_view().into()),
+                cycles: Some(cycles.into()),
+                tx_status: TxStatus {
+                    block_hash: None,
+                    status: Status::Pending,
+                },
+            });
+        }
+
+        Ok(TransactionWithStatus {
+            transaction: None,
+            cycles: None,
+            tx_status: TxStatus {
+                block_hash: None,
+                status: Status::Unknown,
+            },
+        })
+    }
+
+    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithStatus>> {
+        let tws = self.get_transaction(tx_hash.clone())?;
+        if tws.transaction.is_some() {
+            return Ok(FetchStatus::Fetched { data: tws });
+        }
+
+        let now = unix_time_as_millis();
+        if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(&tx_hash) {
+            if missing {
+                // re-fetch the transaction
+                self.swc.add_fetch_tx(tx_hash, now);
+                return Ok(FetchStatus::NotFound);
+            } else if first_sent > 0 {
+                return Ok(FetchStatus::Fetching {
+                    first_sent: first_sent.into(),
+                });
+            } else {
+                return Ok(FetchStatus::Added {
+                    timestamp: added_ts.into(),
+                });
+            }
+        } else {
+            self.swc.add_fetch_tx(tx_hash, now);
+        }
+        Ok(FetchStatus::Added {
+            timestamp: now.into(),
+        })
+    }
 }
 
 impl ChainRpc for ChainRpcImpl {
@@ -1083,19 +1163,6 @@ impl ChainRpc for ChainRpcImpl {
 
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
         Ok(self.swc.get_header(&block_hash.pack()).map(Into::into))
-    }
-
-    fn get_transaction(&self, tx_hash: H256) -> Result<Option<TransactionWithHeader>> {
-        let transaction_with_header = self
-            .swc
-            .storage()
-            .get_transaction_with_header(&tx_hash.pack())
-            .map(|(tx, header)| TransactionWithHeader {
-                transaction: tx.into_view().into(),
-                header: header.into_view().into(),
-            });
-
-        Ok(transaction_with_header)
     }
 
     fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>> {
@@ -1124,33 +1191,6 @@ impl ChainRpc for ChainRpcImpl {
             }
         } else {
             self.swc.add_fetch_header(block_hash, now);
-        }
-        Ok(FetchStatus::Added {
-            timestamp: now.into(),
-        })
-    }
-
-    fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithHeader>> {
-        if let Some(value) = self.get_transaction(tx_hash.clone())? {
-            return Ok(FetchStatus::Fetched { data: value });
-        }
-        let now = unix_time_as_millis();
-        if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(&tx_hash) {
-            if missing {
-                // re-fetch the transaction
-                self.swc.add_fetch_tx(tx_hash, now);
-                return Ok(FetchStatus::NotFound);
-            } else if first_sent > 0 {
-                return Ok(FetchStatus::Fetching {
-                    first_sent: first_sent.into(),
-                });
-            } else {
-                return Ok(FetchStatus::Added {
-                    timestamp: added_ts.into(),
-                });
-            }
-        } else {
-            self.swc.add_fetch_tx(tx_hash, now);
         }
         Ok(FetchStatus::Added {
             timestamp: now.into(),

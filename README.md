@@ -177,9 +177,13 @@ Returns the information about a transaction by hash, the block header is also re
     transaction_hash - the transaction hash
 
 #### Returns
+    TransactionWithStatus struct fields:
 
-    transaction - TransactionView
-    header - HeaderView
+    transaction -  TransactionView
+    cycles - a optional field, cycles used by this transaction
+    tx_status:
+        status - enum "pending", "committed" or "unknown"
+        block_hash - the block hash which contains this transaction, only available when status is "committed"
 
 #### Examples
 
@@ -212,7 +216,7 @@ Fetch a transaction from remote node. If return status is `not_found` will re-se
 
 #### Returns
 
-    {"status": "fetched", "data": TransactionWithHeader }
+    {"status": "fetched", "data": TransactionWithStatus } // TransactionWithStatus is same as get_transaction rpc response
     {"status": "fetching", "first_sent": Uint64 }
     {"status": "added", "timestamp": Uint64 }
     {"status": "not_found" }

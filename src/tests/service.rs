@@ -1,5 +1,6 @@
 use std::sync::{Arc, RwLock};
 
+use ckb_chain_spec::consensus::Consensus;
 use ckb_types::{
     bytes::Bytes,
     core::{
@@ -13,10 +14,11 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{FetchInfo, Peers},
+    protocols::{FetchInfo, Peers, PendingTxs},
     service::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
-        ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, TransactionWithHeader,
+        ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, Status, TransactionRpc,
+        TransactionRpcImpl, TransactionWithStatus, TxStatus,
     },
     storage::{self, StorageWithChainData},
     tests::utils::new_storage,
@@ -725,16 +727,7 @@ fn rpc() {
             header.calc_header_hash().unpack()
         })
         .collect();
-    let fetched_txs: Vec<H256> = [h256!("0xbb11"), h256!("0xbb77"), h256!("0xbb88")]
-        .into_iter()
-        .map(|header_dep| {
-            let tx = TransactionBuilder::default()
-                .header_dep(header_dep.pack())
-                .build();
-            storage.add_fetched_tx(&tx.data(), &Header::default());
-            tx.hash().unpack()
-        })
-        .collect();
+
     // insert fetched headers
     let peers = Arc::new(Peers::new(RwLock::new(vec![extra_header.clone()])));
     peers.fetching_headers().insert(
@@ -747,18 +740,6 @@ fn rpc() {
     );
     peers.fetching_headers().insert(
         h256!("0xaa404").pack(),
-        FetchInfo::new(1111, 0, false, true),
-    );
-    peers.fetching_txs().insert(
-        h256!("0xbb22").pack(),
-        FetchInfo::new(1111, 5566, false, false),
-    );
-    peers.fetching_txs().insert(
-        h256!("0xbb33").pack(),
-        FetchInfo::new(1111, 0, false, false),
-    );
-    peers.fetching_txs().insert(
-        h256!("0xbb404").pack(),
         FetchInfo::new(1111, 0, false, true),
     );
 
@@ -775,20 +756,6 @@ fn rpc() {
         .unwrap()
         .unwrap();
     assert_eq!(extra_header.number(), header.inner.number.value(),);
-
-    // test get_transaction rpc
-    let TransactionWithHeader {
-        transaction,
-        header,
-    } = rpc
-        .get_transaction(pre_tx0.hash().unpack())
-        .unwrap()
-        .unwrap();
-    assert_eq!(transaction.hash, pre_tx0.hash().unpack());
-    assert_eq!(header.hash, pre_block.header().hash().unpack());
-
-    assert_eq!(peers.fetching_headers().len(), 3);
-    assert_eq!(peers.fetching_txs().len(), 3);
 
     // test fetch_header rpc
     let rv = rpc.fetch_header(fetched_headers[0].clone()).unwrap();
@@ -822,44 +789,6 @@ fn rpc() {
     assert_eq!(rv, FetchStatus::NotFound);
     let rv = rpc.fetch_header(h256!("0xaa404")).unwrap();
     assert!(matches!(rv, FetchStatus::Added { .. }));
-
-    // test fetch_transaction rpc
-    let rv = rpc.fetch_transaction(fetched_txs[0].clone()).unwrap();
-    assert_eq!(
-        rv,
-        FetchStatus::Fetched {
-            data: TransactionWithHeader {
-                transaction: TransactionBuilder::default()
-                    .header_dep(h256!("0xbb11").pack())
-                    .build()
-                    .into(),
-                header: Header::default().into_view().into(),
-            }
-        }
-    );
-    let rv = rpc.fetch_transaction(h256!("0xabcdef")).unwrap();
-    assert!(matches!(rv, FetchStatus::Added { .. }));
-    let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
-    assert_eq!(
-        rv,
-        FetchStatus::Fetching {
-            first_sent: 5566.into()
-        }
-    );
-    let rv = rpc.fetch_transaction(h256!("0xbb33")).unwrap();
-    assert_eq!(
-        rv,
-        FetchStatus::Added {
-            timestamp: 1111.into()
-        }
-    );
-    let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
-    assert_eq!(rv, FetchStatus::NotFound);
-    let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
-    assert!(matches!(rv, FetchStatus::Added { .. }));
-
-    assert_eq!(peers.fetching_headers().len(), 4);
-    assert_eq!(peers.fetching_txs().len(), 4);
 
     // test rollback_filtered_transactions
     // rollback 2 blocks
@@ -978,6 +907,94 @@ fn rpc() {
         cc.capacity.value(),
         "cellbases + last block live cell - 2 (rollbacked blocks cells)"
     );
+
+    // test get_transaction rpc
+    peers.fetching_txs().insert(
+        h256!("0xbb22").pack(),
+        FetchInfo::new(1111, 5566, false, false),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb33").pack(),
+        FetchInfo::new(1111, 0, false, false),
+    );
+    peers.fetching_txs().insert(
+        h256!("0xbb404").pack(),
+        FetchInfo::new(1111, 0, false, true),
+    );
+
+    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
+
+    let rpc = TransactionRpcImpl {
+        pending_txs: Arc::new(RwLock::new(PendingTxs::new(10))),
+        swc,
+        consensus: Consensus::default(),
+    };
+    let fetched_txs: Vec<H256> = [h256!("0xbb11"), h256!("0xbb77"), h256!("0xbb88")]
+        .into_iter()
+        .map(|header_dep| {
+            let tx = TransactionBuilder::default()
+                .header_dep(header_dep.pack())
+                .build();
+            storage.add_fetched_tx(&tx.data(), &Header::default());
+            tx.hash().unpack()
+        })
+        .collect();
+
+    let TransactionWithStatus {
+        transaction,
+        tx_status,
+        cycles: _,
+    } = rpc.get_transaction(pre_tx0.hash().unpack()).unwrap();
+    assert_eq!(transaction.unwrap().hash, pre_tx0.hash().unpack());
+    assert_eq!(
+        tx_status.block_hash.unwrap(),
+        pre_block.header().hash().unpack()
+    );
+    assert_eq!(peers.fetching_txs().len(), 3);
+
+    // test fetch_transaction rpc
+    let rv = rpc.fetch_transaction(fetched_txs[0].clone()).unwrap();
+    assert_eq!(
+        rv,
+        FetchStatus::Fetched {
+            data: TransactionWithStatus {
+                transaction: Some(
+                    TransactionBuilder::default()
+                        .header_dep(h256!("0xbb11").pack())
+                        .build()
+                        .into()
+                ),
+                cycles: None,
+                tx_status: TxStatus {
+                    block_hash: Some(Header::default().into_view().hash().unpack()),
+                    status: Status::Committed,
+                },
+            }
+        }
+    );
+    let rv = rpc.fetch_transaction(h256!("0xabcdef")).unwrap();
+    assert!(matches!(rv, FetchStatus::Added { .. }));
+    let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
+    assert_eq!(
+        rv,
+        FetchStatus::Fetching {
+            first_sent: 5566.into()
+        }
+    );
+    let rv = rpc.fetch_transaction(h256!("0xbb33")).unwrap();
+    assert_eq!(
+        rv,
+        FetchStatus::Added {
+            timestamp: 1111.into()
+        }
+    );
+    let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
+    assert_eq!(rv, FetchStatus::NotFound);
+    let rv = rpc.fetch_transaction(h256!("0xbb404")).unwrap();
+    assert!(matches!(rv, FetchStatus::Added { .. }));
+
+    assert_eq!(peers.fetching_headers().len(), 4);
+    assert_eq!(peers.fetching_txs().len(), 4);
 }
 
 #[test]
