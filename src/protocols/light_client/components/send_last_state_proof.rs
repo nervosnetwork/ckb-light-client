@@ -57,7 +57,7 @@ impl<'a> SendLastStateProofProcess<'a> {
         if !original_request.is_same_as(&last_header) {
             if self.message.proof().is_empty() {
                 return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
-                self.protocol.get_block_samples(self.nc, self.peer);
+                self.protocol.get_last_state_proof(self.nc, self.peer);
             } else {
                 warn!("peer {} send an unknown proof", self.peer);
             }

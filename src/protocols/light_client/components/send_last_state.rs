@@ -53,7 +53,7 @@ impl<'a> SendLastStateProcess<'a> {
             }
         } else {
             trace!("peer {}: initialize last state", self.peer);
-            self.protocol.get_block_samples(self.nc, self.peer);
+            self.protocol.get_last_state_proof(self.nc, self.peer);
         }
 
         Status::ok()
