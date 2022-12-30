@@ -12,23 +12,11 @@ A CKB light client based on [RFC 44] and [RFC 45].
 
 ## How to connect testnet
 
-1. Build a full node with latest [ckb develop branch](https://github.com/nervosnetwork/ckb/tree/develop), this is an optional step, you may use the public testnet bootnodes instead.
+1. Run your own full node, this is an optional step, you may use the public testnet bootnodes instead.
 
-```
-git clone https://github.com/nervosnetwork/ckb.git
-git checkout develop
-make prod
-```
-
-Run a testnet with light client protocols
-
-init ckb in a new folder:
+Download ckb [v0.106.0 or above](https://github.com/nervosnetwork/ckb/releases/tag/v0.106.0), init and run ckb in a new folder:
 ```
 ckb init -c testnet
-```
-
-modify ckb.toml, add a line `block_filter_enable = true` to the section of `[store]` and start ckb
-```
 ckb run
 ```
 
@@ -37,7 +25,7 @@ Get full node peer id
 curl http://localhost:8114/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"local_node_info", "params": [], "id": 1}'
 ```
 
-2. Build a light client with [this branch](https://github.com/nervosnetwork/ckb-light-client/tree/develop)
+2. Build a light client with [this branch](https://github.com/nervosnetwork/ckb-light-client/tree/develop) or download the prebuilt binary.
 
 ```
 git clone https://github.com/nervosnetwork/ckb-light-client.git
@@ -47,11 +35,11 @@ cargo build --release
 
 3. Run light client
 
-Copy `config.toml` to a new folder, if you want to connect to the full node you just build in step 1, modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
+Copy the `ckb-light-client` binary and `config/testnet.toml` to a new folder, if you want to connect to the full node you just build in step 1, modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
 
-start light client
+Start light client:
 ```
-RUST_LOG=info,ckb_light_client=trace ./ckb-light-client run --config-file ./config.toml
+RUST_LOG=info,ckb_light_client=info ./ckb-light-client run --config-file ./testnet.toml
 ```
 
 ## RPC
