@@ -26,7 +26,9 @@ async fn test_sync_add_block() {
         script_type: ScriptType::Lock,
         block_number: 1,
     }];
-    chain.client_storage().update_filter_scripts(scripts);
+    chain
+        .client_storage()
+        .update_filter_scripts(scripts, Default::default());
 
     let min_filtered_block_number = chain
         .client_storage()

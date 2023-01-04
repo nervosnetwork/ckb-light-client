@@ -17,8 +17,8 @@ use crate::{
     protocols::{FetchInfo, Peers, PendingTxs},
     service::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
-        ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, Status, TransactionRpc,
-        TransactionRpcImpl, TransactionWithStatus, TxStatus,
+        ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, SetScriptsCommand, Status,
+        TransactionRpc, TransactionRpcImpl, TransactionWithStatus, TxStatus,
     },
     storage::{self, StorageWithChainData},
     tests::utils::new_storage,
@@ -111,41 +111,47 @@ fn rpc() {
         .build();
 
     storage.init_genesis_block(block0.data());
-    storage.update_filter_scripts(vec![
-        storage::ScriptStatus {
-            script: lock_script1.clone(),
-            script_type: storage::ScriptType::Lock,
-            block_number: 0,
-        },
-        storage::ScriptStatus {
-            script: type_script1.clone(),
-            script_type: storage::ScriptType::Type,
-            block_number: 0,
-        },
-        storage::ScriptStatus {
-            script: lock_script3,
-            script_type: storage::ScriptType::Lock,
-            block_number: 0,
-        },
-    ]);
+    storage.update_filter_scripts(
+        vec![
+            storage::ScriptStatus {
+                script: lock_script1.clone(),
+                script_type: storage::ScriptType::Lock,
+                block_number: 0,
+            },
+            storage::ScriptStatus {
+                script: type_script1.clone(),
+                script_type: storage::ScriptType::Type,
+                block_number: 0,
+            },
+            storage::ScriptStatus {
+                script: lock_script3,
+                script_type: storage::ScriptType::Lock,
+                block_number: 0,
+            },
+        ],
+        Default::default(),
+    );
 
     // test get_scripts rpc
     let scripts = rpc.get_scripts().unwrap();
     assert_eq!(scripts.len(), 3);
 
     // test set_scripts rpc
-    rpc.set_scripts(vec![
-        ScriptStatus {
-            script: lock_script1.clone().into(),
-            script_type: ScriptType::Lock,
-            block_number: 0.into(),
-        },
-        ScriptStatus {
-            script: type_script1.clone().into(),
-            script_type: ScriptType::Type,
-            block_number: 0.into(),
-        },
-    ])
+    rpc.set_scripts(
+        vec![
+            ScriptStatus {
+                script: lock_script1.clone().into(),
+                script_type: ScriptType::Lock,
+                block_number: 0.into(),
+            },
+            ScriptStatus {
+                script: type_script1.clone().into(),
+                script_type: ScriptType::Type,
+                block_number: 0.into(),
+            },
+        ],
+        None,
+    )
     .unwrap();
     let scripts = rpc.get_scripts().unwrap();
     assert_eq!(
@@ -792,18 +798,21 @@ fn rpc() {
 
     // test rollback_filtered_transactions
     // rollback 2 blocks
-    storage.update_filter_scripts(vec![
-        storage::ScriptStatus {
-            script: lock_script1.clone(),
-            script_type: storage::ScriptType::Lock,
-            block_number: total_blocks,
-        },
-        storage::ScriptStatus {
-            script: type_script1.clone(),
-            script_type: storage::ScriptType::Type,
-            block_number: total_blocks,
-        },
-    ]);
+    storage.update_filter_scripts(
+        vec![
+            storage::ScriptStatus {
+                script: lock_script1.clone(),
+                script_type: storage::ScriptType::Lock,
+                block_number: total_blocks,
+            },
+            storage::ScriptStatus {
+                script: type_script1.clone(),
+                script_type: storage::ScriptType::Type,
+                block_number: total_blocks,
+            },
+        ],
+        Default::default(),
+    );
     storage.rollback_to_block((total_blocks - 2).into());
 
     let scripts = storage.get_filter_scripts();
@@ -1040,11 +1049,14 @@ fn get_cells_capacity_bug() {
         )
         .build();
     storage.init_genesis_block(block0.data());
-    storage.update_filter_scripts(vec![storage::ScriptStatus {
-        script: lock_script1.clone(),
-        script_type: storage::ScriptType::Lock,
-        block_number: 0,
-    }]);
+    storage.update_filter_scripts(
+        vec![storage::ScriptStatus {
+            script: lock_script1.clone(),
+            script_type: storage::ScriptType::Lock,
+            block_number: 0,
+        }],
+        Default::default(),
+    );
 
     let lock_script2 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
@@ -1171,18 +1183,21 @@ fn get_cells_after_rollback_bug() {
         )
         .build();
     storage.init_genesis_block(block0.data());
-    storage.update_filter_scripts(vec![
-        storage::ScriptStatus {
-            script: lock_script1.clone(),
-            script_type: storage::ScriptType::Lock,
-            block_number: 0,
-        },
-        storage::ScriptStatus {
-            script: lock_script2.clone(),
-            script_type: storage::ScriptType::Lock,
-            block_number: 0,
-        },
-    ]);
+    storage.update_filter_scripts(
+        vec![
+            storage::ScriptStatus {
+                script: lock_script1.clone(),
+                script_type: storage::ScriptType::Lock,
+                block_number: 0,
+            },
+            storage::ScriptStatus {
+                script: lock_script2.clone(),
+                script_type: storage::ScriptType::Lock,
+                block_number: 0,
+            },
+        ],
+        Default::default(),
+    );
 
     let tx10 = TransactionBuilder::default()
         .output(
@@ -1334,24 +1349,27 @@ fn test_set_scripts_clear_matched_blocks() {
     }
     let block_number_a: u64 = 3;
     let block_number_x: u64 = 4;
-    rpc.set_scripts(vec![
-        ScriptStatus {
-            script: Script::new_builder()
-                .args(Bytes::from("abc").pack())
-                .build()
-                .into(),
-            script_type: ScriptType::Lock,
-            block_number: block_number_a.into(),
-        },
-        ScriptStatus {
-            script: Script::new_builder()
-                .args(Bytes::from("xyz").pack())
-                .build()
-                .into(),
-            script_type: ScriptType::Type,
-            block_number: block_number_x.into(),
-        },
-    ])
+    rpc.set_scripts(
+        vec![
+            ScriptStatus {
+                script: Script::new_builder()
+                    .args(Bytes::from("abc").pack())
+                    .build()
+                    .into(),
+                script_type: ScriptType::Lock,
+                block_number: block_number_a.into(),
+            },
+            ScriptStatus {
+                script: Script::new_builder()
+                    .args(Bytes::from("xyz").pack())
+                    .build()
+                    .into(),
+                script_type: ScriptType::Type,
+                block_number: block_number_x.into(),
+            },
+        ],
+        None,
+    )
     .unwrap();
     assert_eq!(
         storage.get_min_filtered_block_number(),
@@ -1360,4 +1378,91 @@ fn test_set_scripts_clear_matched_blocks() {
     assert!(storage.get_earliest_matched_blocks().is_none());
     assert!(storage.get_latest_matched_blocks().is_none());
     assert!(peers.matched_blocks().read().unwrap().is_empty());
+}
+
+#[test]
+fn test_set_scripts_command() {
+    let storage = new_storage("set-scripts-command");
+    let peers = Arc::new(Peers::new(RwLock::new(Vec::new())));
+    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
+    let rpc = BlockFilterRpcImpl { swc };
+
+    rpc.set_scripts(
+        vec![
+            ScriptStatus {
+                script: Script::new_builder()
+                    .args(Bytes::from("abc").pack())
+                    .build()
+                    .into(),
+                script_type: ScriptType::Lock,
+                block_number: 3u64.into(),
+            },
+            ScriptStatus {
+                script: Script::new_builder()
+                    .args(Bytes::from("xyz").pack())
+                    .build()
+                    .into(),
+                script_type: ScriptType::Type,
+                block_number: 4u64.into(),
+            },
+        ],
+        None,
+    )
+    .unwrap();
+
+    rpc.set_scripts(
+        vec![ScriptStatus {
+            script: Script::new_builder()
+                .args(Bytes::from("abc").pack())
+                .build()
+                .into(),
+            script_type: ScriptType::Lock,
+            block_number: 6u64.into(),
+        }],
+        Some(SetScriptsCommand::All),
+    )
+    .unwrap();
+    let scripts = rpc.get_scripts().unwrap();
+    assert_eq!(scripts.len(), 1);
+
+    rpc.set_scripts(
+        vec![ScriptStatus {
+            script: Script::new_builder()
+                .args(Bytes::from("xyz").pack())
+                .build()
+                .into(),
+            script_type: ScriptType::Lock,
+            block_number: 3u64.into(),
+        }],
+        Some(SetScriptsCommand::Partial),
+    )
+    .unwrap();
+    let scripts = rpc.get_scripts().unwrap();
+    assert_eq!(scripts.len(), 2);
+    assert_eq!(storage.get_min_filtered_block_number(), 3);
+
+    rpc.set_scripts(vec![], Some(SetScriptsCommand::Partial))
+        .unwrap();
+    let scripts = rpc.get_scripts().unwrap();
+    assert_eq!(scripts.len(), 2);
+
+    rpc.set_scripts(
+        vec![ScriptStatus {
+            script: Script::new_builder()
+                .args(Bytes::from("xyz").pack())
+                .build()
+                .into(),
+            script_type: ScriptType::Lock,
+            block_number: 0u64.into(),
+        }],
+        Some(SetScriptsCommand::Delete),
+    )
+    .unwrap();
+    let scripts = rpc.get_scripts().unwrap();
+    assert_eq!(scripts.len(), 1);
+
+    rpc.set_scripts(vec![], Some(SetScriptsCommand::Delete))
+        .unwrap();
+    let scripts = rpc.get_scripts().unwrap();
+    assert_eq!(scripts.len(), 1);
 }

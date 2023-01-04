@@ -34,7 +34,11 @@ use crate::{
 pub trait BlockFilterRpc {
     /// curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [{"script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}, "block_number": "0x59F74D"}], "id": 1}'
     #[rpc(name = "set_scripts")]
-    fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()>;
+    fn set_scripts(
+        &self,
+        scripts: Vec<ScriptStatus>,
+        command: Option<SetScriptsCommand>,
+    ) -> Result<()>;
 
     #[rpc(name = "get_scripts")]
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>>;
@@ -92,6 +96,27 @@ pub trait ChainRpc {
 pub trait NetRpc {
     #[rpc(name = "get_peers")]
     fn get_peers(&self) -> Result<Vec<RemoteNode>>;
+}
+
+#[derive(Deserialize, Serialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum SetScriptsCommand {
+    // Replace all scripts with new scripts, non-exist scripts will be deleted
+    All,
+    // Update partial scripts with new scripts, non-exist scripts will be ignored
+    Partial,
+    // Delete scripts, non-exist scripts will be ignored
+    Delete,
+}
+
+impl From<SetScriptsCommand> for storage::SetScriptsCommand {
+    fn from(cmd: SetScriptsCommand) -> Self {
+        match cmd {
+            SetScriptsCommand::All => Self::All,
+            SetScriptsCommand::Partial => Self::Partial,
+            SetScriptsCommand::Delete => Self::Delete,
+        }
+    }
 }
 
 #[derive(Deserialize, Serialize, Eq, PartialEq, Debug)]
@@ -330,10 +355,16 @@ pub struct NetRpcImpl {
 }
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
-    fn set_scripts(&self, scripts: Vec<ScriptStatus>) -> Result<()> {
+    fn set_scripts(
+        &self,
+        scripts: Vec<ScriptStatus>,
+        command: Option<SetScriptsCommand>,
+    ) -> Result<()> {
         let mut matched_blocks = self.swc.matched_blocks().write().expect("poisoned");
         let scripts = scripts.into_iter().map(Into::into).collect();
-        self.swc.storage().update_filter_scripts(scripts);
+        self.swc
+            .storage()
+            .update_filter_scripts(scripts, command.map(Into::into).unwrap_or_default());
         matched_blocks.clear();
         Ok(())
     }

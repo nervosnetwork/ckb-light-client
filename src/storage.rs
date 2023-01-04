@@ -35,6 +35,18 @@ pub struct ScriptStatus {
     pub block_number: BlockNumber,
 }
 
+pub enum SetScriptsCommand {
+    All,
+    Partial,
+    Delete,
+}
+
+impl Default for SetScriptsCommand {
+    fn default() -> Self {
+        Self::All
+    }
+}
+
 #[derive(PartialEq, Eq, Hash)]
 pub enum ScriptType {
     Lock,
@@ -186,43 +198,89 @@ impl Storage {
             .collect()
     }
 
-    /// Update all filter scripts' status to the specified block number and delete the outdated ones.
-    pub fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>) {
-        let should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
-        let mut batch = self.batch();
-
-        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
-        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
-
-        self.db
-            .iterator(mode)
-            .take_while(|(key, _value)| key.starts_with(&key_prefix))
-            .for_each(|(key, _value)| {
-                batch.delete(key).expect("batch delete should be ok");
-            });
-
+    pub fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
+        let mut should_filter_genesis_block = false;
         let mut min_block_number = None;
-        for ss in scripts {
-            if min_block_number
-                .as_ref()
-                .map(|n| *n > ss.block_number)
-                .unwrap_or(true)
-            {
-                min_block_number = Some(ss.block_number);
+        let mut batch = self.batch();
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+
+        match command {
+            SetScriptsCommand::All => {
+                should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
+                let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+
+                self.db
+                    .iterator(mode)
+                    .take_while(|(key, _value)| key.starts_with(&key_prefix))
+                    .for_each(|(key, _value)| {
+                        batch.delete(key).expect("batch delete should be ok");
+                    });
+
+                for ss in scripts {
+                    if min_block_number
+                        .as_ref()
+                        .map(|n| *n > ss.block_number)
+                        .unwrap_or(true)
+                    {
+                        min_block_number = Some(ss.block_number);
+                    }
+                    let key = [
+                        key_prefix.as_ref(),
+                        ss.script.as_slice(),
+                        match ss.script_type {
+                            ScriptType::Lock => &[0],
+                            ScriptType::Type => &[1],
+                        },
+                    ]
+                    .concat();
+                    batch
+                        .put(key, ss.block_number.to_be_bytes())
+                        .expect("batch put should be ok");
+                }
             }
-            let key = [
-                key_prefix.as_ref(),
-                ss.script.as_slice(),
-                match ss.script_type {
-                    ScriptType::Lock => &[0],
-                    ScriptType::Type => &[1],
-                },
-            ]
-            .concat();
-            batch
-                .put(key, ss.block_number.to_be_bytes())
-                .expect("batch put should be ok");
+            SetScriptsCommand::Partial => {
+                if scripts.is_empty() {
+                    return;
+                }
+                should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
+                let mut min_filtered_block_number = self.get_min_filtered_block_number();
+
+                for ss in scripts {
+                    min_filtered_block_number = min_filtered_block_number.min(ss.block_number);
+                    let key = [
+                        key_prefix.as_ref(),
+                        ss.script.as_slice(),
+                        match ss.script_type {
+                            ScriptType::Lock => &[0],
+                            ScriptType::Type => &[1],
+                        },
+                    ]
+                    .concat();
+                    batch
+                        .put(key, ss.block_number.to_be_bytes())
+                        .expect("batch put should be ok");
+                }
+                min_block_number = Some(min_filtered_block_number);
+            }
+            SetScriptsCommand::Delete => {
+                if scripts.is_empty() {
+                    return;
+                }
+                for ss in scripts {
+                    let key = [
+                        key_prefix.as_ref(),
+                        ss.script.as_slice(),
+                        match ss.script_type {
+                            ScriptType::Lock => &[0],
+                            ScriptType::Type => &[1],
+                        },
+                    ]
+                    .concat();
+                    batch.delete(key).expect("batch delete should be ok");
+                }
+            }
         }
+
         batch.commit().expect("batch commit should be ok");
 
         if let Some(min_number) = min_block_number {
