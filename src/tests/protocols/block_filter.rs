@@ -48,13 +48,14 @@ async fn test_block_filter_ignore_start_number() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -101,13 +102,14 @@ async fn test_block_filter_empty_filters() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -154,13 +156,14 @@ async fn test_block_filter_invalid_filters_count() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -212,13 +215,14 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
     let min_filtered_block_number = 3;
     let proved_number = min_filtered_block_number;
     let start_number = min_filtered_block_number + 1;
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -267,13 +271,14 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
     let min_filtered_block_number = 3;
     let proved_number = min_filtered_block_number + 3;
     let start_number = min_filtered_block_number + 1;
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -446,13 +451,14 @@ async fn test_block_filter_notify_ask_filters() {
 
     let min_filtered_block_number = 3;
     // for should_ask() return true
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -521,13 +527,14 @@ async fn test_block_filter_notify_not_reach_ask() {
     let nc = MockNetworkContext::new(SupportProtocols::Filter);
 
     let min_filtered_block_number = 3;
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -564,13 +571,14 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
 
     let min_filtered_block_number = 3;
     // for should_ask() return true
-    chain
-        .client_storage()
-        .update_filter_scripts(vec![ScriptStatus {
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
             block_number: min_filtered_block_number,
-        }]);
+        }],
+        Default::default(),
+    );
 
     let peer_index = PeerIndex::new(3);
     let peers = {

@@ -49,10 +49,14 @@ RUST_LOG=info,ckb_light_client=info ./ckb-light-client run --config-file ./testn
 Set some scripts to filter
 
 #### Parameters
-
-    script - Script
-    script_type - Enum "lock" or "type"
-    block_number - Filter start number
+    Vec<ScriptStatus>: Array of script status
+        script - Script
+        script_type - Enum "lock" or "type"
+        block_number - Filter start number
+    SetScriptCommand: An optional enum parameter to control the behavior of set_scripts
+        "all" - Replace all existing scripts with new scripts, non-exist scripts will be deleted, this is the default behavior
+        "partial" - Update partial scripts with new scripts, non-exist scripts will be ignored
+        "delete" - Delete scripts by `script` and `script_type`, the `block_number` field will be ignored
 
 #### Returns
 
@@ -60,8 +64,19 @@ Set some scripts to filter
 
 #### Examples
 
+Set a new script to filter and replace all existing scripts:
 ```
 curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0x50878ce52a68feb47237c29574d82288f58b5d21"}, "script_type": "lock", "block_number": "0x0"}]], "id": 1}'
+```
+
+Add a new script to filter:
+```
+curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0xd7c521f77cae39e7083d1cd664a893395fe25fdb"}, "script_type": "lock", "block_number": "0x64"}], "partial"], "id": 1}'
+```
+
+Delete a script from filter:
+```
+curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"jsonrpc": "2.0", "method":"set_scripts", "params": [[{"script": {"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8", "hash_type": "type", "args": "0xd7c521f77cae39e7083d1cd664a893395fe25fdb"}, "script_type": "lock", "block_number": "0x0"}], "delete"], "id": 1}'
 ```
 
 ### `get_scripts`
