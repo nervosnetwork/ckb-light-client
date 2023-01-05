@@ -208,6 +208,18 @@ impl LightClientProtocol {
                 return;
             }
 
+            // Skipped if the header is proved in other peers.
+            if let Some((peer_copied_from, prove_state)) =
+                self.peers().find_if_a_header_is_proved(last_header)
+            {
+                info!(
+                    "peer {}: copy prove state from peer {}",
+                    peer, peer_copied_from
+                );
+                self.peers().update_prove_state(peer, prove_state);
+                return;
+            }
+
             if let Some(content) = self.build_prove_request_content(&peer_state, last_header) {
                 trace!("peer {}: send get last state proof", peer);
                 let message = packed::LightClientMessage::new_builder()

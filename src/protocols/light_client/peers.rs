@@ -798,6 +798,24 @@ impl Peers {
             .collect()
     }
 
+    pub(crate) fn find_if_a_header_is_proved(
+        &self,
+        header: &VerifiableHeader,
+    ) -> Option<(PeerIndex, ProveState)> {
+        self.inner.iter().find_map(|item| {
+            item.value()
+                .state
+                .get_prove_state()
+                .and_then(|prove_state| {
+                    if prove_state.is_same_as(header) {
+                        Some((*item.key(), prove_state.clone()))
+                    } else {
+                        None
+                    }
+                })
+        })
+    }
+
     pub(crate) fn get_best_proved_peers(&self, best_tip: &packed::Header) -> Vec<PeerIndex> {
         self.get_peers_which_are_proved()
             .into_iter()

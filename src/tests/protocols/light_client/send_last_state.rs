@@ -340,3 +340,82 @@ async fn update_to_noncontinuous_last_state() {
         assert!(!prove_state.is_same_as(&last_header));
     }
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn update_to_proved_last_state() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peer_index_proved = PeerIndex::new(2);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers.add_peer(peer_index_proved);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+
+    let num = 12;
+    chain.mine_to(num + 2);
+
+    let snapshot = chain.shared().snapshot();
+
+    // Setup the test fixture.
+    {
+        let peer_state = protocol
+            .get_peer_state(&peer_index_proved)
+            .expect("has peer state");
+        let prove_request = {
+            let last_header: VerifiableHeader = snapshot
+                .get_verifiable_header_by_number(num)
+                .expect("block stored")
+                .into();
+            let content = protocol
+                .build_prove_request_content(&peer_state, &last_header)
+                .expect("build prove request content");
+            let last_state = LastState::new(last_header);
+            protocol
+                .peers()
+                .update_last_state(peer_index_proved, last_state.clone());
+            ProveRequest::new(last_state, content)
+        };
+        let prove_state = {
+            let last_n_headers = (1..num)
+                .into_iter()
+                .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
+                .collect::<Vec<_>>();
+            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+        };
+        protocol.commit_prove_state(peer_index_proved, prove_state);
+    }
+
+    // Run the test.
+    {
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let content = packed::SendLastState::new_builder()
+                .last_header(last_header.clone())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+        let last_header: VerifiableHeader = last_header.into();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.sent_messages().borrow().is_empty());
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        assert!(prove_state.is_same_as(&last_header));
+    }
+}
