@@ -720,6 +720,8 @@ impl Storage {
     }
 
     /// Rollback filtered block data to specified block number
+    ///
+    /// N.B. The specified block will be removed.
     pub fn rollback_to_block(&self, to_number: BlockNumber) {
         let scripts = self.get_filter_scripts();
         let mut batch = self.batch();

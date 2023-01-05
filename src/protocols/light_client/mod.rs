@@ -336,14 +336,15 @@ impl LightClientProtocol {
                     let mut start_number_opt = None;
                     while let Some((start_number, _, _)) = self.storage.get_latest_matched_blocks()
                     {
-                        debug!("remove matched blocks start from: {}", start_number);
-                        self.storage.remove_matched_blocks(start_number);
-                        if start_number < to_number {
+                        if start_number > to_number {
+                            debug!("remove matched blocks start from: {}", start_number);
+                            self.storage.remove_matched_blocks(start_number);
+                        } else {
                             start_number_opt = Some(start_number);
                             break;
                         }
                     }
-                    let rollback_to = start_number_opt.unwrap_or(to_number);
+                    let rollback_to = start_number_opt.unwrap_or(to_number) + 1;
                     debug!("rollback to block#{}", rollback_to);
                     self.storage.rollback_to_block(rollback_to);
                     matched_blocks.clear();

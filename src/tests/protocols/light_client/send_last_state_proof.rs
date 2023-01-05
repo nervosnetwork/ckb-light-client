@@ -1766,8 +1766,7 @@ async fn last_n_headers_should_be_continuous() {
     }
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn reorg_rollback_blocks() {
+async fn reorg_rollback_blocks(rollback_blocks_num: u64) {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -1801,6 +1800,7 @@ async fn reorg_rollback_blocks() {
         assert_eq!(tip_number, num);
     }
 
+    let earliest_matched_number = 4;
     let prev_last_number = 15;
     let prev_sampled_numbers = vec![3, 4, 7, 10];
     let sampled_numbers = vec![17, 20, 22, 25, 28];
@@ -1834,8 +1834,8 @@ async fn reorg_rollback_blocks() {
     }
 
     let storage = chain.client_storage();
-    storage.update_min_filtered_block_number(num);
-    for matched_start_number in [4, 8, 12, 16, 20] {
+    storage.update_min_filtered_block_number(prev_last_number - 1);
+    for matched_start_number in earliest_matched_number..prev_last_number {
         storage.add_matched_blocks(
             matched_start_number,
             4,
@@ -1843,8 +1843,15 @@ async fn reorg_rollback_blocks() {
         );
     }
 
-    chain.rollback_to(prev_last_number - 1, Default::default());
-    chain.mine_to(32);
+    assert_eq!(
+        storage.get_min_filtered_block_number(),
+        prev_last_number - 1
+    );
+
+    if rollback_blocks_num > 0 {
+        chain.rollback_to(prev_last_number - rollback_blocks_num, Default::default());
+        chain.mine_to(32);
+    }
 
     {
         let prove_request = chain.build_prove_request(
@@ -1920,11 +1927,48 @@ async fn reorg_rollback_blocks() {
         let last_header: VerifiableHeader = last_header.into();
         assert!(!prove_state.get_reorg_last_headers().is_empty());
         assert!(prove_state.is_same_as(&last_header));
-        assert_eq!(storage.get_min_filtered_block_number(), 11);
-        assert_eq!(storage.get_earliest_matched_blocks().unwrap().0, 4);
-        assert_eq!(storage.get_latest_matched_blocks().unwrap().0, 8);
+        let min_filtered_block_number = if rollback_blocks_num == 0 {
+            prev_last_number - 1
+        } else {
+            prev_last_number - rollback_blocks_num
+        };
+        assert_eq!(
+            storage.get_min_filtered_block_number(),
+            min_filtered_block_number
+        );
+        if earliest_matched_number <= prev_last_number - rollback_blocks_num {
+            assert_eq!(
+                storage.get_earliest_matched_blocks().unwrap().0,
+                earliest_matched_number
+            );
+        }
+        assert_eq!(
+            storage.get_latest_matched_blocks().unwrap().0,
+            min_filtered_block_number
+        );
         assert!(peers.matched_blocks().read().unwrap().is_empty());
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reorg_rollback_0_blocks() {
+    // No fork but reorg headers are sent.
+    //
+    // Since the light client only has a hash of the start header,
+    // the light client couldn't distinguish whether the reorg is required,
+    // so the light client just accept these reorg headers.
+    reorg_rollback_blocks(0).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reorg_rollback_1_blocks() {
+    // Only the last header is changed.
+    reorg_rollback_blocks(1).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reorg_rollback_2_blocks() {
+    reorg_rollback_blocks(2).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
