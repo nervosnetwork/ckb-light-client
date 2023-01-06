@@ -366,7 +366,7 @@ impl Storage {
             .map(|data| {
                 assert!(data.len() % 40 == 0);
                 let mut headers = Vec::with_capacity(data.len() / 40);
-                for part in data.windows(40) {
+                for part in data.chunks(40) {
                     let number = u64::from_le_bytes(part[0..8].try_into().unwrap());
                     let hash = Byte32::from_slice(&part[8..]).expect("byte32 block hash");
                     headers.push((number, hash));
