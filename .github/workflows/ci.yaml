@@ -8,7 +8,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: full
-  RUST_TOOLCHAIN: 1.61.0
+  RUST_TOOLCHAIN: 1.66.0
 jobs:
   rustfmt:
     name: Checks / Format
