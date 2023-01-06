@@ -6,7 +6,7 @@ use crate::error::{Error, Result};
 
 pub(crate) fn create_directory<P: AsRef<Path>>(path: P) -> Result<()> {
     let path = path.as_ref();
-    fs::create_dir_all(&path.to_path_buf().clean()).map_err(|err| {
+    fs::create_dir_all(path.to_path_buf().clean()).map_err(|err| {
         let errmsg = format!(
             "failed to create directory {} since {}",
             path.display(),

@@ -917,7 +917,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
 
         let key = Key::Meta(LAST_STATE_KEY).into_vec();
         let tip_header = snapshot
-            .get(&key)
+            .get(key)
             .expect("snapshot get last state should be ok")
             .map(|data| packed::HeaderReader::from_slice_should_be_ok(&data[32..]).to_entity())
             .expect("tip header should be inited");

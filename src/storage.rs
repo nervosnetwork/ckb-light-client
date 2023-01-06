@@ -412,8 +412,7 @@ impl Storage {
         let mut value = blocks_count.to_le_bytes().to_vec();
         for (block_hash, proved) in matched_blocks {
             value.extend(block_hash.as_slice());
-            let proved_value: u8 = if proved { 1 } else { 0 };
-            value.push(proved_value);
+            value.push(u8::from(proved));
         }
         self.db
             .put(key, &value)
@@ -504,7 +503,7 @@ impl Storage {
         let key = Key::Meta(MIN_FILTERED_BLOCK_NUMBER).into_vec();
         let value = block_number.to_le_bytes();
         self.db
-            .put(key, &value)
+            .put(key, value)
             .expect("db put min filtered block number should be ok");
     }
 
