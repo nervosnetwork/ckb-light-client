@@ -69,7 +69,7 @@ impl FilterProtocol {
     }
 
     fn should_ask(&self) -> bool {
-        !self.storage.get_filter_scripts().is_empty()
+        !self.storage.is_filter_scripts_empty()
             && (self.last_ask_time.read().unwrap().is_none()
                 || self.last_ask_time.read().unwrap().unwrap().elapsed()
                     > GET_BLOCK_FILTERS_TIMEOUT)

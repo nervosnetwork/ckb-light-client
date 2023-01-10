@@ -13,6 +13,7 @@ use ckb_types::{
     H256, U256,
 };
 
+use crate::storage::SetScriptsCommand;
 use crate::storage::{ScriptStatus, ScriptType};
 use crate::{
     protocols::{
@@ -352,6 +353,14 @@ async fn test_block_filter_ok_with_blocks_matched() {
         .code_hash(H256(rand::random()).pack())
         .args(Bytes::from(vec![1, 2, 3]).pack())
         .build();
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
+            script: script.clone(),
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }],
+        SetScriptsCommand::All,
+    );
     chain
         .client_storage()
         .update_min_filtered_block_number(min_filtered_block_number);

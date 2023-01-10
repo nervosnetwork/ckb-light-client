@@ -32,6 +32,10 @@ impl<'a> BlockFiltersProcess<'a> {
     }
 
     pub fn execute(self) -> Status {
+        if self.filter.storage.is_filter_scripts_empty() {
+            info!("ignoring, filter scripts may have been cleared during syncing");
+            return Status::ok();
+        }
         let peer_state_opt = self.filter.peers.get_state(&self.peer);
         if peer_state_opt.is_none() {
             info!("ignoring, peer {} is disconnected", self.peer);
