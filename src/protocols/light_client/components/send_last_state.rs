@@ -45,7 +45,8 @@ impl<'a> SendLastStateProcess<'a> {
                 if let Some(prove_state) = peer_state.get_prove_state() {
                     if prove_state.is_parent_of(&last_state) {
                         trace!("peer {}: new last state could be trusted", self.peer);
-                        let child_prove_state = prove_state.new_child(last_state);
+                        let last_n_blocks = self.protocol.last_n_blocks() as usize;
+                        let child_prove_state = prove_state.new_child(last_state, last_n_blocks);
                         self.protocol
                             .update_prove_state_to_child(self.peer, child_prove_state);
                     }

@@ -129,6 +129,17 @@ pub(crate) trait RunningChainExt: ChainExt {
         }
     }
 
+    fn mine_to_with<F: FnMut(packed::Block) -> BlockView>(
+        &self,
+        block_number: BlockNumber,
+        builder: F,
+    ) {
+        let chain_tip_number = self.shared().snapshot().tip_number();
+        if chain_tip_number < block_number {
+            self.mine_blocks_with((block_number - chain_tip_number) as usize, builder);
+        }
+    }
+
     fn mine_block<F: FnMut(packed::Block) -> BlockView>(&self, mut builder: F) -> BlockNumber {
         let block_template = self
             .shared()
@@ -156,6 +167,16 @@ pub(crate) trait RunningChainExt: ChainExt {
     fn mine_blocks(&self, blocks_count: usize) {
         for _ in 0..blocks_count {
             let _ = self.mine_block(|block| block.as_advanced_builder().build());
+        }
+    }
+
+    fn mine_blocks_with<F: FnMut(packed::Block) -> BlockView>(
+        &self,
+        blocks_count: usize,
+        mut builder: F,
+    ) {
+        for _ in 0..blocks_count {
+            let _ = self.mine_block(&mut builder);
         }
     }
 
