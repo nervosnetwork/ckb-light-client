@@ -171,6 +171,16 @@ impl Storage {
             .build()
     }
 
+    pub fn is_filter_scripts_empty(&self) -> bool {
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+        let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
+        self.db
+            .iterator(mode)
+            .take_while(|(key, _value)| key.starts_with(&key_prefix))
+            .next()
+            .is_none()
+    }
+
     pub fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
