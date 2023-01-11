@@ -23,7 +23,7 @@ use log::{debug, error, info, trace, warn};
 mod components;
 pub mod constant;
 mod peers;
-mod prelude;
+pub(crate) mod prelude;
 mod sampling;
 
 #[cfg(test)]
@@ -311,11 +311,28 @@ impl LightClientProtocol {
     /// - Update the peer's cache.
     /// - Try to update the storage and handle potential fork.
     pub(crate) fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) {
-        let (old_total_difficulty, _) = self.storage.get_last_state();
+        let (old_total_difficulty, prev_last_header) = self.storage.get_last_state();
         let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
         if new_total_difficulty > old_total_difficulty {
             let reorg_last_headers = new_prove_state.get_reorg_last_headers();
-            if !reorg_last_headers.is_empty() {
+            if reorg_last_headers.is_empty() {
+                let prev_last_header_number: BlockNumber = prev_last_header.raw().number().unpack();
+                // If previous last header is block#1, that means there are no previous last n
+                // headers, so we could NOT distinguish whether the block#1 is a fork block or not.
+                // For safety, just remove the block#1.
+                if prev_last_header_number == 1 {
+                    info!("rollback to block#1 since previous last header number is 1");
+                    let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
+                    while let Some((start_number, _, _)) = self.storage.get_latest_matched_blocks()
+                    {
+                        if start_number > 0 {
+                            self.storage.remove_matched_blocks(start_number);
+                        }
+                    }
+                    self.storage.rollback_to_block(1);
+                    matched_blocks.clear();
+                }
+            } else {
                 let old_last_headers: HashMap<_, _> =
                     self.storage.get_last_n_headers().into_iter().collect();
                 let fork_number = reorg_last_headers.iter().rev().find_map(|reorg_header| {
@@ -332,6 +349,7 @@ impl LightClientProtocol {
                         .unwrap_or_default()
                 });
                 if let Some(to_number) = fork_number {
+                    debug!("fork to number: {}", to_number);
                     let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
                     let mut start_number_opt = None;
                     while let Some((start_number, _, _)) = self.storage.get_latest_matched_blocks()
@@ -345,7 +363,7 @@ impl LightClientProtocol {
                         }
                     }
                     let rollback_to = start_number_opt.unwrap_or(to_number) + 1;
-                    debug!("rollback to block#{}", rollback_to);
+                    info!("rollback to block#{}", rollback_to);
                     self.storage.rollback_to_block(rollback_to);
                     matched_blocks.clear();
                 } else {

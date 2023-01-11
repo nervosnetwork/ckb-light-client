@@ -182,11 +182,14 @@ impl ProveState {
         }
     }
 
-    pub(crate) fn new_child(&self, child_last_state: LastState) -> Self {
+    pub(crate) fn new_child(&self, child_last_state: LastState, last_n_blocks: usize) -> Self {
         let parent_header = self.get_last_header().header();
         let mut last_headers = self.last_headers.clone();
         let reorg_last_headers = self.reorg_last_headers.clone();
-        last_headers.remove(0);
+        // To avoid unlimited memory growth.
+        if last_headers.len() >= last_n_blocks {
+            last_headers.remove(0);
+        }
         last_headers.push(parent_header.clone());
         Self {
             last_state: child_last_state,

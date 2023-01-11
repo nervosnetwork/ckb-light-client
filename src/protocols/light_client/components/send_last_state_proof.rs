@@ -70,13 +70,15 @@ impl<'a> SendLastStateProofProcess<'a> {
             .iter()
             .map(|header| header.to_entity().into())
             .collect::<Vec<VerifiableHeader>>();
+        let last_n_blocks = self.protocol.last_n_blocks() as usize;
 
         // Check if the response is match the request.
         let (reorg_count, sampled_count, last_n_count) =
             return_if_failed!(check_if_response_is_matched(
-                self.protocol.last_n_blocks() as usize,
+                last_n_blocks,
                 original_request.get_content(),
                 &headers,
+                &last_header
             ));
         trace!(
             "peer {}: headers count: reorg: {}, sampled: {}, last_n: {}",
@@ -179,20 +181,57 @@ impl<'a> SendLastStateProofProcess<'a> {
                     .build();
                 self.nc.reply(self.peer, &message);
             } else {
-                log::warn!("peer {}, build prove request failed", self.peer);
+                warn!("peer {}, build prove request failed", self.peer);
             }
         } else {
+            let reorg_last_headers = headers[..reorg_count]
+                .iter()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let mut new_last_headers = headers[headers.len() - last_n_count..]
+                .iter()
+                .map(ToOwned::to_owned)
+                .collect::<Vec<_>>();
+            let last_headers = match last_n_count.cmp(&last_n_blocks) {
+                Ordering::Equal => new_last_headers,
+                Ordering::Greater => {
+                    let split_at = last_n_count - last_n_blocks;
+                    new_last_headers.split_off(split_at)
+                }
+                Ordering::Less => {
+                    if let Some(prove_state) = peer_state.get_prove_state() {
+                        let old_last_headers = if reorg_count == 0 {
+                            prove_state.get_last_headers()
+                        } else {
+                            &headers[..reorg_count]
+                        };
+                        // last_headers from previous prove state are empty
+                        // iff the chain only has 1 block after MMR enabled.
+                        if old_last_headers.is_empty() {
+                            new_last_headers
+                        } else {
+                            let required_count = last_n_blocks - last_n_count;
+                            let old_last_headers_len = old_last_headers.len();
+                            old_last_headers
+                                .iter()
+                                .skip(old_last_headers_len.saturating_sub(required_count))
+                                .map(ToOwned::to_owned)
+                                .chain(new_last_headers.into_iter())
+                                .collect::<Vec<_>>()
+                        }
+                    } else if reorg_count == 0 {
+                        new_last_headers
+                    } else {
+                        unreachable!("no previous prove state but has reorg blocks");
+                    }
+                }
+            };
+
             // Commit the status if all checks are passed.
             let prove_state = ProveState::new_from_request(
                 original_request.to_owned(),
-                headers[..reorg_count]
-                    .iter()
-                    .map(ToOwned::to_owned)
-                    .collect(),
-                headers[reorg_count + sampled_count..]
-                    .iter()
-                    .map(ToOwned::to_owned)
-                    .collect(),
+                reorg_last_headers,
+                last_headers,
             );
             self.protocol.commit_prove_state(self.peer, prove_state);
         }
@@ -490,7 +529,13 @@ pub(crate) fn check_if_response_is_matched(
     last_n_blocks: usize,
     prev_request: &packed::GetLastStateProof,
     headers: &[VerifiableHeader],
+    last_header: &VerifiableHeader,
 ) -> Result<(usize, usize, usize), Status> {
+    if headers.is_empty() {
+        let errmsg = "headers should NOT be empty";
+        return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
+    }
+
     // Headers should be sorted.
     if headers
         .windows(2)
@@ -555,8 +600,24 @@ pub(crate) fn check_if_response_is_matched(
         (0, total_count - reorg_count)
     };
 
-    // Check if the sampled headers are subject to requested difficulties distribution.
-    if sampled_count != 0 {
+    if sampled_count == 0 {
+        if last_n_count > 0 {
+            // If no sampled headers, the last_n_blocks should be all new blocks.
+            let first_last_n_header_number = headers[reorg_count].header().number();
+            let last_last_n_header_number = headers[headers.len() - 1].header().number();
+            let last_number = last_header.header().number();
+            if first_last_n_header_number != start_number
+                || last_last_n_header_number + 1 != last_number
+            {
+                let errmsg = format!(
+                "there should be all blocks of [{}, {}) since no sampled blocks, but got [{}, {}]",
+                start_number, last_number, first_last_n_header_number, last_last_n_header_number
+            );
+                return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
+            }
+        }
+    } else {
+        // Check if the sampled headers are subject to requested difficulties distribution.
         let first_last_n_total_difficulty: U256 =
             headers[reorg_count + sampled_count].total_difficulty();
 
