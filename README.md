@@ -224,6 +224,33 @@ Fetch a transaction from remote node. If return status is `not_found` will re-se
     {"status": "added", "timestamp": Uint64 }
     {"status": "not_found" }
 
+### `get_peers`
+
+Returns the connected peers' information.
+
+#### Parameters
+
+    null
+
+#### Returns
+
+    version - the remote node version
+    node_id - the remote node ID
+    addresses: array of remote node addresses
+        address - the remote node address in multiaddr format
+        score - the remote node score, a higher score means a higher probability of a successful connection
+    connected_duration: elapsed time in milliseconds since the remote node is connected
+    sync_state: an optional parameter indicates sync state, null means chain sync has not started with this remote node yet
+        requested_best_known_header - requested best known header of remote peer, null means no request is sent yet, HeaderView struct
+        proved_best_known_header - proved best known header of remote peer, null means no proof is received yet, HeaderView struct
+    protocols: array of active running protocols
+        id - the protocol id
+        version - the protocol version
+
+### `local_node_info`
+
+To facilitate code migration, the rpc is same as ckb fullnode's `local_node_info`, please refer to ckb rpc [doc](https://github.com/nervosnetwork/ckb/tree/develop/rpc#method-local_node_info)
+
 ### `get_cells`
 
 To facilitate code migration, the rpc is same as ckb-indexer, please refer to ckb-indexer rpc [doc](https://github.com/nervosnetwork/ckb-indexer#get_cells)
