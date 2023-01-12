@@ -247,6 +247,10 @@ Returns the connected peers' information.
         id - the protocol id
         version - the protocol version
 
+### `local_node_info`
+
+To facilitate code migration, the rpc is same as ckb fullnode's `local_node_info`, please refer to ckb rpc [doc](https://github.com/nervosnetwork/ckb/tree/develop/rpc#method-local_node_info)
+
 ### `get_cells`
 
 To facilitate code migration, the rpc is same as ckb-indexer, please refer to ckb-indexer rpc [doc](https://github.com/nervosnetwork/ckb-indexer#get_cells)

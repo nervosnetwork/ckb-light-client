@@ -94,6 +94,9 @@ pub trait ChainRpc {
 
 #[rpc(server)]
 pub trait NetRpc {
+    #[rpc(name = "local_node_info")]
+    fn local_node_info(&self) -> Result<LocalNode>;
+
     #[rpc(name = "get_peers")]
     fn get_peers(&self) -> Result<Vec<RemoteNode>>;
 }
@@ -172,6 +175,43 @@ impl From<storage::ScriptStatus> for ScriptStatus {
             block_number: ss.block_number.into(),
         }
     }
+}
+
+#[derive(Deserialize, Serialize)]
+pub struct LocalNode {
+    /// light client node version.
+    ///
+    /// Example: "version": "0.2.0"
+    pub version: String,
+    /// The unique node ID derived from the p2p private key.
+    ///
+    /// The private key is generated randomly on the first boot.
+    pub node_id: String,
+    /// Whether this node is active.
+    ///
+    /// An inactive node ignores incoming p2p messages and drops outgoing messages.
+    pub active: bool,
+    /// P2P addresses of this node.
+    ///
+    /// A node can have multiple addresses.
+    pub addresses: Vec<NodeAddress>,
+    /// Supported protocols.
+    pub protocols: Vec<LocalNodeProtocol>,
+    /// Count of currently connected peers.
+    pub connections: Uint64,
+}
+
+/// The information of a P2P protocol that is supported by the local node.
+#[derive(Deserialize, Serialize)]
+pub struct LocalNodeProtocol {
+    /// Unique protocol ID.
+    pub id: Uint64,
+    /// Readable protocol name.
+    pub name: String,
+    /// Supported versions.
+    ///
+    /// See [Semantic Version](https://semver.org/) about how to specify a version.
+    pub support_versions: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -929,7 +969,37 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
     }
 }
 
+const MAX_ADDRS: usize = 50;
+
 impl NetRpc for NetRpcImpl {
+    fn local_node_info(&self) -> Result<LocalNode> {
+        Ok(LocalNode {
+            version: self.network_controller.version().to_owned(),
+            node_id: self.network_controller.node_id(),
+            active: self.network_controller.is_active(),
+            addresses: self
+                .network_controller
+                .public_urls(MAX_ADDRS)
+                .into_iter()
+                .map(|(address, score)| NodeAddress {
+                    address,
+                    score: u64::from(score).into(),
+                })
+                .collect(),
+            protocols: self
+                .network_controller
+                .protocols()
+                .into_iter()
+                .map(|(protocol_id, name, support_versions)| LocalNodeProtocol {
+                    id: (protocol_id.value() as u64).into(),
+                    name,
+                    support_versions,
+                })
+                .collect::<Vec<_>>(),
+            connections: (self.network_controller.connected_peers().len() as u64).into(),
+        })
+    }
+
     fn get_peers(&self) -> Result<Vec<RemoteNode>> {
         let peers: Vec<RemoteNode> = self
             .network_controller
