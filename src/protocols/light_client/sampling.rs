@@ -175,7 +175,7 @@ pub(crate) fn estimate_samples_count(
                 m,
                 last_n_blocks
             );
-            0
+            1
         } else {
             debug_assert!(
                 m <= blocks_count,
