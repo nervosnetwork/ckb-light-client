@@ -176,24 +176,14 @@ pub(crate) fn estimate_samples_count(
                 last_n_blocks
             );
             1
-        } else {
-            debug_assert!(
-                m <= blocks_count,
+        } else if m > blocks_count {
+            warn!(
                 "sampling: the estimated samples count ({}>{}) is too bigger",
-                m,
-                blocks_count
+                m, blocks_count
             );
-            if m > blocks_count {
-                // This branch should be unreachable.
-                // For safety, we return an acceptable value.
-                warn!(
-                    "sampling: the estimated samples count ({}>{}) is too bigger",
-                    m, blocks_count
-                );
-                blocks_count - last_n_blocks
-            } else {
-                m - last_n_blocks
-            }
+            blocks_count - last_n_blocks
+        } else {
+            m - last_n_blocks
         }
     }
 }

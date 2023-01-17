@@ -17,6 +17,8 @@ use super::BAD_MESSAGE_BAN_TIME;
 pub enum StatusCode {
     /// OK
     OK = 200,
+    /// Require re-check.
+    RequireRecheck = 201,
 
     /// Malformed protocol message.
     MalformedProtocolMessage = 400,
@@ -126,7 +128,7 @@ impl Status {
 
     /// Whether the code is `OK` or not.
     pub fn is_ok(&self) -> bool {
-        self.code == StatusCode::OK
+        self.code == StatusCode::OK || self.code == StatusCode::RequireRecheck
     }
 
     /// Whether the session should be banned.

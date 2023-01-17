@@ -180,6 +180,9 @@ impl<'a> SendLastStateProofProcess<'a> {
                     .set(content)
                     .build();
                 self.nc.reply(self.peer, &message);
+
+                let errmsg = "failed to verify TAU";
+                return StatusCode::RequireRecheck.with_context(errmsg);
             } else {
                 warn!("peer {}, build prove request failed", self.peer);
             }
@@ -233,7 +236,47 @@ impl<'a> SendLastStateProofProcess<'a> {
                 reorg_last_headers,
                 last_headers,
             );
-            self.protocol.commit_prove_state(self.peer, prove_state);
+            let long_fork_detected = !self
+                .protocol
+                .commit_prove_state(self.peer, prove_state.clone());
+
+            if long_fork_detected {
+                if original_request.if_require_full_sampling() {
+                    error!(
+                        "Long fork detected, please check if ckb-light-client is connected to \
+                         the same network ckb node. If you connected ckb-light-client to a dev \
+                         chain for testing purpose you should remove the storage of \
+                         ckb-light-client to recover."
+                    );
+                    panic!("long fork detected");
+                } else {
+                    let last_header = prove_state.get_last_header();
+                    if let Some(content) = self
+                        .protocol
+                        .build_prove_request_content_from_genesis(last_header)
+                    {
+                        let mut prove_request =
+                            ProveRequest::new(LastState::new(last_header.clone()), content.clone());
+                        prove_request.require_full_sampling();
+                        self.protocol
+                            .peers()
+                            .update_prove_request(self.peer, Some(prove_request));
+
+                        let message = packed::LightClientMessage::new_builder()
+                            .set(content)
+                            .build();
+                        self.nc.reply(self.peer, &message);
+
+                        let errmsg = "long fork detected";
+                        return StatusCode::RequireRecheck.with_context(errmsg);
+                    } else {
+                        warn!(
+                            "peer {}, build prove request from genesis failed",
+                            self.peer
+                        );
+                    }
+                }
+            }
         }
 
         debug!("block proof verify passed for peer: {}", self.peer);
