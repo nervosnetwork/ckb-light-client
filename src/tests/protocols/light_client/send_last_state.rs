@@ -342,6 +342,123 @@ async fn update_to_noncontinuous_last_state() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn update_to_continuous_but_forked_last_state() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = Arc::new(Peers::default());
+        peers.add_peer(peer_index);
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+
+    let mut num = 12;
+    chain.mine_to_with(num + 1, |block| {
+        let block_number: u64 = block.header().raw().number().unpack();
+        block
+            .as_advanced_builder()
+            .timestamp((100 + block_number).pack())
+            .build()
+    });
+
+    // Setup the test fixture:
+    // - Update last state.
+    // - Commit prove state.
+    {
+        let snapshot = chain.shared().snapshot();
+        let peer_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state");
+        assert!(peer_state.get_prove_state().is_none());
+        let prove_request = {
+            let last_header: VerifiableHeader = snapshot
+                .get_verifiable_header_by_number(num)
+                .expect("block stored")
+                .into();
+            let content = protocol
+                .build_prove_request_content(&peer_state, &last_header)
+                .expect("build prove request content");
+            let last_state = LastState::new(last_header);
+            protocol
+                .peers()
+                .update_last_state(peer_index, last_state.clone());
+            ProveRequest::new(last_state, content)
+        };
+        let prove_state = {
+            let last_n_headers = (1..num)
+                .into_iter()
+                .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
+                .collect::<Vec<_>>();
+            ProveState::new_from_request(prove_request, Vec::new(), last_n_headers)
+        };
+        protocol.commit_prove_state(peer_index, prove_state);
+    }
+
+    let prev_last_header: VerifiableHeader = chain
+        .shared()
+        .snapshot()
+        .get_verifiable_header_by_number(num)
+        .expect("block stored")
+        .into();
+    {
+        chain.rollback_to(num - 5, Default::default());
+        num += 1;
+        chain.mine_to_with(num, |block| {
+            let block_number: u64 = block.header().raw().number().unpack();
+            block
+                .as_advanced_builder()
+                .timestamp((200 + block_number).pack())
+                .build()
+        });
+        assert_eq!(chain.shared().snapshot().tip_number(), num);
+    }
+
+    // Run the test.
+    {
+        let last_header = chain
+            .shared()
+            .snapshot()
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let content = packed::SendLastState::new_builder()
+                .last_header(last_header.clone())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+        let last_header: VerifiableHeader = last_header.into();
+        let last_state = LastState::new(last_header.clone());
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        assert!(!prove_state.is_parent_of(&last_state));
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.sent_messages().borrow().is_empty());
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        assert!(!prove_state.is_same_as(&last_header));
+
+        assert!(prove_state.is_same_as(&prev_last_header));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn update_to_proved_last_state() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
