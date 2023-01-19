@@ -1578,7 +1578,7 @@ async fn reorg_rollback_5_blocks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn reorg_detect_long_fork_without_full_sampling() {
+async fn reorg_detect_long_fork_turn_1() {
     let param = ReorgTestParameter {
         last_number: 30,
         rollback_blocks_count: 6,
@@ -1590,12 +1590,12 @@ async fn reorg_detect_long_fork_without_full_sampling() {
 
 #[tokio::test(flavor = "multi_thread")]
 #[should_panic(expected = "long fork detected")]
-async fn reorg_detect_long_fork_with_full_sampling() {
+async fn reorg_detect_long_fork_turn_2() {
     let param = ReorgTestParameter {
         last_number: 30,
         rollback_blocks_count: 6,
         last_n_blocks: 5,
-        require_full_sampling: true,
+        long_fork_detected: true,
         ..Default::default()
     };
     test_with_reorg_blocks(param).await;
@@ -1609,7 +1609,7 @@ struct ReorgTestParameter {
     reorg_blocks_opt: Option<Vec<BlockNumber>>,
     rollback_blocks_count: BlockNumber,
     last_n_blocks: BlockNumber,
-    require_full_sampling: bool,
+    long_fork_detected: bool,
     expected_last_headers_count_opt: Option<BlockNumber>,
     result: StatusCode,
 }
@@ -1761,8 +1761,8 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             boundary_number,
             last_n_blocks,
         );
-        if param.require_full_sampling {
-            prove_request.require_full_sampling();
+        if param.long_fork_detected {
+            prove_request.long_fork_detected();
         }
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
@@ -1775,14 +1775,18 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             .get_verifiable_header_by_number(last_number)
             .expect("block stored");
         let data = {
-            let reorg_blocks = param.reorg_blocks_opt.unwrap_or_else(|| {
-                let reorg_start_number = if prev_last_number > last_n_blocks + 1 {
-                    prev_last_number - last_n_blocks
-                } else {
-                    1
-                };
-                (reorg_start_number..prev_last_number).collect()
-            });
+            let reorg_blocks = if param.long_fork_detected {
+                Default::default()
+            } else {
+                param.reorg_blocks_opt.unwrap_or_else(|| {
+                    let reorg_start_number = if prev_last_number > last_n_blocks + 1 {
+                        prev_last_number - last_n_blocks
+                    } else {
+                        1
+                    };
+                    (reorg_start_number..prev_last_number).collect()
+                })
+            };
             let first_last_n_number = if last_number > last_n_blocks {
                 cmp::min(boundary_number, last_number - last_n_blocks)
             } else {
@@ -1839,7 +1843,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
         // long fork detected
         if rollback_blocks_count > last_n_blocks {
             let prove_request = peer_state.get_prove_request().unwrap();
-            assert!(prove_request.if_require_full_sampling());
+            assert!(prove_request.if_long_fork_detected());
             return;
         }
 
