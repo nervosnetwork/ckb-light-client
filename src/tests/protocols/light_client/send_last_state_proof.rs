@@ -1578,12 +1578,24 @@ async fn reorg_rollback_5_blocks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-#[should_panic(expected = "long fork detected")]
-async fn reorg_detect_long_fork() {
+async fn reorg_detect_long_fork_without_full_sampling() {
     let param = ReorgTestParameter {
         last_number: 30,
         rollback_blocks_count: 6,
         last_n_blocks: 5,
+        ..Default::default()
+    };
+    test_with_reorg_blocks(param).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+#[should_panic(expected = "long fork detected")]
+async fn reorg_detect_long_fork_with_full_sampling() {
+    let param = ReorgTestParameter {
+        last_number: 30,
+        rollback_blocks_count: 6,
+        last_n_blocks: 5,
+        require_full_sampling: true,
         ..Default::default()
     };
     test_with_reorg_blocks(param).await;
@@ -1597,6 +1609,7 @@ struct ReorgTestParameter {
     reorg_blocks_opt: Option<Vec<BlockNumber>>,
     rollback_blocks_count: BlockNumber,
     last_n_blocks: BlockNumber,
+    require_full_sampling: bool,
     expected_last_headers_count_opt: Option<BlockNumber>,
     result: StatusCode,
 }
@@ -1741,13 +1754,16 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
 
     // Run the test.
     {
-        let prove_request = chain.build_prove_request(
+        let mut prove_request = chain.build_prove_request(
             prev_last_number,
             last_number,
             &sampled_numbers,
             boundary_number,
             last_n_blocks,
         );
+        if param.require_full_sampling {
+            prove_request.require_full_sampling();
+        }
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
         protocol.peers().update_last_state(peer_index, last_state);
         protocol
@@ -1816,9 +1832,18 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
 
         assert!(nc.not_banned(peer_index));
 
-        let prove_state = protocol
+        let peer_state = protocol
             .get_peer_state(&peer_index)
-            .expect("has peer state")
+            .expect("has peer state");
+
+        // long fork detected
+        if rollback_blocks_count > last_n_blocks {
+            let prove_request = peer_state.get_prove_request().unwrap();
+            assert!(prove_request.if_require_full_sampling());
+            return;
+        }
+
+        let prove_state = peer_state
             .get_prove_state()
             .expect("has prove state")
             .to_owned();

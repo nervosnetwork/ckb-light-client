@@ -15,6 +15,7 @@ use ckb_types::{
     packed,
     prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader,
+    U256,
 };
 
 use faketime::unix_time_as_millis;
@@ -310,7 +311,7 @@ impl LightClientProtocol {
     /// Update the prove state base on the previous request.
     /// - Update the peer's cache.
     /// - Try to update the storage and handle potential fork.
-    pub(crate) fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) {
+    pub(crate) fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) -> bool {
         let (old_total_difficulty, prev_last_header) = self.storage.get_last_state();
         let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
         if new_total_difficulty > old_total_difficulty {
@@ -367,8 +368,8 @@ impl LightClientProtocol {
                     self.storage.rollback_to_block(rollback_to);
                     matched_blocks.clear();
                 } else {
-                    error!("Long fork detected, please check if ckb-light-client is connected to the same network ckb node. If you connected ckb-light-client to a dev chain for testing purpose you should remove the storage of ckb-light-client to recover.");
-                    panic!("long fork detected");
+                    warn!("long fork detected");
+                    return false;
                 }
             }
 
@@ -379,6 +380,8 @@ impl LightClientProtocol {
             );
         }
         self.peers().commit_prove_state(peer, new_prove_state);
+
+        true
     }
 }
 
@@ -632,6 +635,43 @@ impl LightClientProtocol {
                 }
                 (last_tip.calc_header_hash(), start_number, total_difficulty)
             });
+        if start_total_difficulty > last_total_difficulty || start_number >= last_number {
+            return None;
+        }
+        let builder = packed::GetLastStateProof::new_builder()
+            .last_hash(last_header.header().hash())
+            .start_hash(start_hash)
+            .start_number(start_number.pack())
+            .last_n_blocks(last_n_blocks.pack());
+        let content = if last_number - start_number <= last_n_blocks {
+            builder.difficulty_boundary(start_total_difficulty.pack())
+        } else {
+            let (difficulty_boundary, difficulties) = sampling::sample_blocks(
+                start_number,
+                &start_total_difficulty,
+                last_number,
+                &last_total_difficulty,
+                last_n_blocks,
+            );
+            builder
+                .difficulty_boundary(difficulty_boundary.pack())
+                .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
+        }
+        .build();
+        Some(content)
+    }
+
+    pub(crate) fn build_prove_request_content_from_genesis(
+        &self,
+        last_header: &VerifiableHeader,
+    ) -> Option<packed::GetLastStateProof> {
+        let last_n_blocks = self.last_n_blocks();
+        let last_number = last_header.header().number();
+        let last_total_difficulty = last_header.total_difficulty();
+        let (start_hash, start_number, start_total_difficulty) = {
+            let genesis = self.storage.get_genesis_block();
+            (genesis.calc_header_hash(), 0, U256::zero())
+        };
         if start_total_difficulty > last_total_difficulty || start_number >= last_number {
             return None;
         }

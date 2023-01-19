@@ -66,6 +66,7 @@ pub(crate) struct ProveRequest {
     last_state: LastState,
     content: packed::GetLastStateProof,
     skip_check_tau: bool,
+    require_full_sampling: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -144,6 +145,7 @@ impl ProveRequest {
             last_state,
             content,
             skip_check_tau: false,
+            require_full_sampling: false,
         }
     }
 
@@ -165,6 +167,14 @@ impl ProveRequest {
 
     pub(crate) fn skip_check_tau(&mut self) {
         self.skip_check_tau = true;
+    }
+
+    pub(crate) fn if_require_full_sampling(&self) -> bool {
+        self.require_full_sampling
+    }
+
+    pub(crate) fn require_full_sampling(&mut self) {
+        self.require_full_sampling = true;
     }
 }
 
