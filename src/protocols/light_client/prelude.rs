@@ -34,7 +34,7 @@ pub(crate) trait HeaderUtils {
 impl HeaderUtils for HeaderView {
     fn is_parent_of(&self, child: &Self) -> bool {
         self.number() + 1 == child.number()
-            || (self.is_genesis() || child.epoch().is_successor_of(self.epoch()))
-            || self.hash() == child.parent_hash()
+            && (self.is_genesis() || child.epoch().is_successor_of(self.epoch()))
+            && self.hash() == child.parent_hash()
     }
 }
