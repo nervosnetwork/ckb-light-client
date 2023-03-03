@@ -34,7 +34,7 @@ pub(crate) use self::peers::FetchInfo;
 
 use prelude::*;
 
-pub(crate) use self::peers::{LastState, PeerState, Peers, ProveRequest, ProveState};
+pub(crate) use self::peers::{LastState, Peer, PeerState, Peers, ProveRequest, ProveState};
 use super::{
     status::{Status, StatusCode},
     BAD_MESSAGE_BAN_TIME,
@@ -80,23 +80,27 @@ impl CKBProtocolHandler for LightClientProtocol {
     async fn connected(
         &mut self,
         nc: Arc<dyn CKBProtocolContext + Sync>,
-        peer: PeerIndex,
+        peer_index: PeerIndex,
         version: &str,
     ) {
-        info!("LightClient({}).connected peer={}", version, peer);
-        self.peers().add_peer(peer);
-        self.get_last_state(nc.as_ref(), peer);
+        info!("LightClient({}).connected peer={}", version, peer_index);
+        self.peers().add_peer(peer_index);
+        self.get_last_state(nc.as_ref(), peer_index);
     }
 
-    async fn disconnected(&mut self, _nc: Arc<dyn CKBProtocolContext + Sync>, peer: PeerIndex) {
-        info!("LightClient.disconnected peer={}", peer);
-        self.peers().remove_peer(peer);
+    async fn disconnected(
+        &mut self,
+        _nc: Arc<dyn CKBProtocolContext + Sync>,
+        peer_index: PeerIndex,
+    ) {
+        info!("LightClient.disconnected peer={}", peer_index);
+        self.peers().remove_peer(peer_index);
     }
 
     async fn received(
         &mut self,
         nc: Arc<dyn CKBProtocolContext + Sync>,
-        peer: PeerIndex,
+        peer_index: PeerIndex,
         data: Bytes,
     ) {
         let msg = match packed::LightClientMessageReader::from_slice(&data) {
@@ -104,10 +108,10 @@ impl CKBProtocolHandler for LightClientProtocol {
             _ => {
                 warn!(
                     "LightClient.received a malformed message from Peer({})",
-                    peer
+                    peer_index
                 );
                 nc.ban_peer(
-                    peer,
+                    peer_index,
                     BAD_MESSAGE_BAN_TIME,
                     String::from("send us a malformed message"),
                 );
@@ -116,18 +120,28 @@ impl CKBProtocolHandler for LightClientProtocol {
         };
 
         let item_name = msg.item_name();
-        let status = self.try_process(nc.as_ref(), peer, msg);
-        trace!("LightClient.received peer={}, message={}", peer, item_name);
+        let status = self.try_process(nc.as_ref(), peer_index, msg);
+        trace!(
+            "LightClient.received peer={}, message={}",
+            peer_index,
+            item_name
+        );
         if let Some(ban_time) = status.should_ban() {
             error!(
                 "process {} from {}, ban {:?} since result is {}",
-                item_name, peer, ban_time, status
+                item_name, peer_index, ban_time, status
             );
-            nc.ban_peer(peer, ban_time, status.to_string());
+            nc.ban_peer(peer_index, ban_time, status.to_string());
         } else if status.should_warn() {
-            warn!("process {} from {}, result is {}", item_name, peer, status);
+            warn!(
+                "process {} from {}, result is {}",
+                item_name, peer_index, status
+            );
         } else if !status.is_ok() {
-            debug!("process {} from {}, result is {}", item_name, peer, status);
+            debug!(
+                "process {} from {}, result is {}",
+                item_name, peer_index, status
+            );
         }
     }
 
@@ -151,40 +165,41 @@ impl LightClientProtocol {
     fn try_process(
         &mut self,
         nc: &dyn CKBProtocolContext,
-        peer: PeerIndex,
+        peer_index: PeerIndex,
         message: packed::LightClientMessageUnionReader<'_>,
     ) -> Status {
         match message {
             packed::LightClientMessageUnionReader::SendLastState(reader) => {
-                components::SendLastStateProcess::new(reader, self, peer, nc).execute()
+                components::SendLastStateProcess::new(reader, self, peer_index, nc).execute()
             }
             packed::LightClientMessageUnionReader::SendLastStateProof(reader) => {
-                components::SendLastStateProofProcess::new(reader, self, peer, nc).execute()
+                components::SendLastStateProofProcess::new(reader, self, peer_index, nc).execute()
             }
             packed::LightClientMessageUnionReader::SendBlocksProof(reader) => {
-                components::SendBlocksProofProcess::new(reader, self, peer, nc).execute()
+                components::SendBlocksProofProcess::new(reader, self, peer_index, nc).execute()
             }
             packed::LightClientMessageUnionReader::SendTransactionsProof(reader) => {
-                components::SendTransactionsProofProcess::new(reader, self, peer, nc).execute()
+                components::SendTransactionsProofProcess::new(reader, self, peer_index, nc)
+                    .execute()
             }
             _ => StatusCode::UnexpectedProtocolMessage.into(),
         }
     }
 
-    fn get_last_state(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
+    fn get_last_state(&self, nc: &dyn CKBProtocolContext, peer_index: PeerIndex) {
         let content = packed::GetLastState::new_builder()
             .subscribe(true.pack())
             .build();
         let message = packed::LightClientMessage::new_builder()
             .set(content)
             .build();
-        nc.reply(peer, &message);
+        nc.reply(peer_index, &message);
     }
 
-    fn get_last_state_proof(&self, nc: &dyn CKBProtocolContext, peer: PeerIndex) {
+    fn get_last_state_proof(&self, nc: &dyn CKBProtocolContext, peer_index: PeerIndex) {
         let peer_state = self
             .peers()
-            .get_state(&peer)
+            .get_state(&peer_index)
             .expect("checked: should have state");
 
         if let Some(last_state) = peer_state.get_last_state() {
@@ -210,29 +225,30 @@ impl LightClientProtocol {
             }
 
             // Skipped if the header is proved in other peers.
-            if let Some((peer_copied_from, prove_state)) =
+            if let Some((peer_index_copied_from, prove_state)) =
                 self.peers().find_if_a_header_is_proved(last_header)
             {
                 info!(
                     "peer {}: copy prove state from peer {}",
-                    peer, peer_copied_from
+                    peer_index, peer_index_copied_from
                 );
-                self.peers().update_prove_state(peer, prove_state);
+                self.peers().update_prove_state(peer_index, prove_state);
                 return;
             }
 
             if let Some(content) = self.build_prove_request_content(&peer_state, last_header) {
-                trace!("peer {}: send get last state proof", peer);
+                trace!("peer {}: send get last state proof", peer_index);
                 let message = packed::LightClientMessage::new_builder()
                     .set(content.clone())
                     .build();
-                nc.reply(peer, &message);
+                nc.reply(peer_index, &message);
                 let now = unix_time_as_millis();
-                self.peers().update_timestamp(peer, now);
+                self.peers().update_timestamp(peer_index, now);
                 let prove_request = ProveRequest::new(last_state.clone(), content);
-                self.peers().update_prove_request(peer, Some(prove_request));
+                self.peers()
+                    .update_prove_request(peer_index, Some(prove_request));
             } else {
-                warn!("peer {}: build prove request failed", peer);
+                warn!("peer {}: build prove request failed", peer_index);
             }
         }
     }
@@ -282,20 +298,20 @@ impl LightClientProtocol {
     /// Processes a new last state that received from a peer which has a fork chain.
     fn process_last_state(
         &self,
-        peer: PeerIndex,
+        peer_index: PeerIndex,
         last_header: VerifiableHeader,
     ) -> Result<(), Status> {
         self.check_verifiable_header(&last_header)?;
         let last_state = LastState::new(last_header);
-        trace!("peer {}: update last state", peer);
-        self.peers().update_last_state(peer, last_state);
+        trace!("peer {}: update last state", peer_index);
+        self.peers().update_last_state(peer_index, last_state);
         Ok(())
     }
 
     /// Update the prove state to the child block.
     /// - Update the peer's cache.
     /// - Try to update the storage without caring about fork.
-    fn update_prove_state_to_child(&self, peer: PeerIndex, new_prove_state: ProveState) {
+    fn update_prove_state_to_child(&self, peer_index: PeerIndex, new_prove_state: ProveState) {
         let (old_total_difficulty, _) = self.storage.get_last_state();
         let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
         if new_total_difficulty > old_total_difficulty {
@@ -305,13 +321,17 @@ impl LightClientProtocol {
                 new_prove_state.get_last_headers(),
             );
         }
-        self.peers().update_prove_state(peer, new_prove_state);
+        self.peers().update_prove_state(peer_index, new_prove_state);
     }
 
     /// Update the prove state base on the previous request.
     /// - Update the peer's cache.
     /// - Try to update the storage and handle potential fork.
-    pub(crate) fn commit_prove_state(&self, peer: PeerIndex, new_prove_state: ProveState) -> bool {
+    pub(crate) fn commit_prove_state(
+        &self,
+        peer_index: PeerIndex,
+        new_prove_state: ProveState,
+    ) -> bool {
         let (old_total_difficulty, prev_last_header) = self.storage.get_last_state();
         let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
         if new_total_difficulty > old_total_difficulty {
@@ -379,7 +399,7 @@ impl LightClientProtocol {
                 new_prove_state.get_last_headers(),
             );
         }
-        self.peers().commit_prove_state(peer, new_prove_state);
+        self.peers().commit_prove_state(peer_index, new_prove_state);
 
         true
     }
@@ -456,8 +476,16 @@ impl LightClientProtocol {
         &self.peers
     }
 
-    pub(crate) fn get_peer_state(&self, peer: &PeerIndex) -> Result<PeerState, Status> {
-        if let Some(state) = self.peers().get_state(peer) {
+    pub(crate) fn get_peer(&self, peer_index: &PeerIndex) -> Result<Peer, Status> {
+        if let Some(state) = self.peers().get_peer(peer_index) {
+            Ok(state)
+        } else {
+            Err(StatusCode::PeerIsNotFound.into())
+        }
+    }
+
+    pub(crate) fn get_peer_state(&self, peer_index: &PeerIndex) -> Result<PeerState, Status> {
+        if let Some(state) = self.peers().get_state(peer_index) {
             Ok(state)
         } else {
             Err(StatusCode::PeerStateIsNotFound.into())
@@ -466,20 +494,20 @@ impl LightClientProtocol {
 
     fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
         let now = faketime::unix_time_as_millis();
-        for peer in self.peers().get_peers_which_have_timeout(now) {
-            self.peers().mark_fetching_headers_timeout(peer);
-            self.peers().mark_fetching_txs_timeout(peer);
+        for peer_index in self.peers().get_peers_which_have_timeout(now) {
+            self.peers().mark_fetching_headers_timeout(peer_index);
+            self.peers().mark_fetching_txs_timeout(peer_index);
 
-            warn!("peer {}: reach timeout", peer);
-            if let Err(err) = nc.disconnect(peer, "reach timeout") {
-                error!("disconnect peer({}) error: {}", peer, err);
+            warn!("peer {}: reach timeout", peer_index);
+            if let Err(err) = nc.disconnect(peer_index, "reach timeout") {
+                error!("disconnect peer({}) error: {}", peer_index, err);
             };
         }
         let before = now - constant::REFRESH_PEERS_DURATION.as_millis() as u64;
-        for peer in self.peers().get_peers_which_require_updating(before) {
+        for peer_index in self.peers().get_peers_which_require_updating(before) {
             // TODO Different messages should have different timeouts.
-            self.get_last_state(nc, peer);
-            self.get_last_state_proof(nc, peer);
+            self.get_last_state(nc, peer_index);
+            self.get_last_state_proof(nc, peer_index);
         }
     }
 
@@ -515,13 +543,13 @@ impl LightClientProtocol {
             .get_headers_to_fetch()
             .chunks(GET_BLOCKS_PROOF_LIMIT)
         {
-            if let Some(peer) = best_peers.iter().find(|peer| {
+            if let Some(peer_index) = best_peers.iter().find(|peer_index| {
                 self.peers
-                    .get_state(peer)
-                    .map(|peer_state| peer_state.get_blocks_proof_request().is_none())
+                    .get_peer(peer_index)
+                    .map(|peer| peer.get_blocks_proof_request().is_none())
                     .unwrap_or(false)
             }) {
-                debug!("send block proof request to peer: {}", peer);
+                debug!("send block proof request to peer: {}", peer_index);
                 let mut block_hashes = Vec::with_capacity(block_hashes_all.len());
                 for block_hash in block_hashes_all {
                     if block_hash == &last_hash {
@@ -544,10 +572,13 @@ impl LightClientProtocol {
                         .build()
                         .as_bytes();
 
-                    self.peers.update_blocks_proof_request(*peer, Some(content));
-                    if let Err(err) =
-                        nc.send_message(SupportProtocols::LightClient.protocol_id(), *peer, message)
-                    {
+                    self.peers
+                        .update_blocks_proof_request(*peer_index, Some(content));
+                    if let Err(err) = nc.send_message(
+                        SupportProtocols::LightClient.protocol_id(),
+                        *peer_index,
+                        message,
+                    ) {
                         let error_message =
                             format!("nc.send_message LightClientMessage, error: {:?}", err);
                         error!("{}", error_message);
@@ -565,13 +596,13 @@ impl LightClientProtocol {
             .get_txs_to_fetch()
             .chunks(GET_TRANSACTIONS_PROOF_LIMIT)
         {
-            if let Some(peer) = best_peers.iter().find(|peer| {
+            if let Some(peer_index) = best_peers.iter().find(|peer_index| {
                 self.peers
-                    .get_state(peer)
-                    .map(|peer_state| peer_state.get_txs_proof_request().is_none())
+                    .get_peer(peer_index)
+                    .map(|peer| peer.get_txs_proof_request().is_none())
                     .unwrap_or(false)
             }) {
-                debug!("send transaction proof request to peer: {}", peer);
+                debug!("send transaction proof request to peer: {}", peer_index);
                 let content = packed::GetTransactionsProof::new_builder()
                     .tx_hashes(tx_hashes.to_vec().pack())
                     .last_hash(last_hash.clone())
@@ -580,10 +611,11 @@ impl LightClientProtocol {
                     .set(content.clone())
                     .build();
 
-                self.peers.update_txs_proof_request(*peer, Some(content));
+                self.peers
+                    .update_txs_proof_request(*peer_index, Some(content));
                 if let Err(err) = nc.send_message(
                     SupportProtocols::LightClient.protocol_id(),
-                    *peer,
+                    *peer_index,
                     message.as_bytes(),
                 ) {
                     let error_message =

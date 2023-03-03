@@ -25,10 +25,12 @@ pub enum StatusCode {
     /// Unexpected light-client protocol message.
     UnexpectedProtocolMessage = 401,
 
+    /// The peer is not found.
+    PeerIsNotFound = 411,
     /// The peer state is not found.
-    PeerStateIsNotFound = 411,
+    PeerStateIsNotFound = 412,
     /// The last state sent from server is invalid.
-    InvalidLastState = 412,
+    InvalidLastState = 413,
 
     /// Receives a response but the peer isn't waiting for a response.
     PeerIsNotOnProcess = 421,

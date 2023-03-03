@@ -32,7 +32,7 @@ async fn peer_state_is_not_found() {
     let peer_index = PeerIndex::new(1);
     protocol.received(nc.context(), peer_index, data).await;
 
-    assert!(nc.banned_since(peer_index, StatusCode::PeerStateIsNotFound));
+    assert!(nc.banned_since(peer_index, StatusCode::PeerIsNotFound));
 }
 
 #[tokio::test]
@@ -145,10 +145,8 @@ async fn last_state_is_changed() {
 
         assert!(nc.not_banned(peer_index));
 
-        let peer_state = protocol
-            .get_peer_state(&peer_index)
-            .expect("has peer state");
-        assert!(peer_state.get_blocks_proof_request().is_none());
+        let peer = protocol.get_peer(&peer_index).expect("has peer");
+        assert!(peer.get_blocks_proof_request().is_none());
     }
 }
 
@@ -383,10 +381,8 @@ async fn get_blocks_with_chunks() {
             .collect::<Vec<_>>();
         assert_eq!(actual_block_hashes.as_slice(), block_hashes.as_slice());
 
-        let peer_state = protocol
-            .get_peer_state(&peer_index)
-            .expect("has peer state");
-        assert!(peer_state.get_blocks_proof_request().is_none());
+        let peer = protocol.get_peer(&peer_index).expect("has peer");
+        assert!(peer.get_blocks_proof_request().is_none());
     }
 }
 
@@ -725,10 +721,8 @@ async fn test_send_blocks_proof(param: TestParameter) {
                 assert_eq!(content.block_hashes().as_slice(), block_hashes.as_slice());
             }
 
-            let peer_state = protocol
-                .get_peer_state(&peer_index)
-                .expect("has peer state");
-            assert!(peer_state.get_blocks_proof_request().is_none());
+            let peer = protocol.get_peer(&peer_index).expect("has peer");
+            assert!(peer.get_blocks_proof_request().is_none());
         } else {
             if param.missing_block_hashes != param.returned_missing_block_hashes
                 || param.block_numbers != param.returned_headers

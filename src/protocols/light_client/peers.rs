@@ -31,6 +31,9 @@ pub struct Peers {
 pub struct Peer {
     // The peer is just discovered when it's `None`.
     state: PeerState,
+    blocks_proof_request: Option<BlocksProofRequest>,
+    blocks_request: Option<BlocksRequest>,
+    txs_proof_request: Option<TransactionsProofRequest>,
     update_timestamp: u64,
 }
 
@@ -56,9 +59,6 @@ pub(crate) struct PeerState {
     last_state: Option<LastState>,
     prove_request: Option<ProveRequest>,
     prove_state: Option<ProveState>,
-    blocks_proof_request: Option<BlocksProofRequest>,
-    blocks_request: Option<BlocksRequest>,
-    txs_proof_request: Option<TransactionsProofRequest>,
 }
 
 #[derive(Clone)]
@@ -334,16 +334,6 @@ impl PeerState {
         self.prove_state.as_ref()
     }
 
-    pub(crate) fn get_blocks_proof_request(&self) -> Option<&BlocksProofRequest> {
-        self.blocks_proof_request.as_ref()
-    }
-    pub(crate) fn get_blocks_request(&self) -> Option<&BlocksRequest> {
-        self.blocks_request.as_ref()
-    }
-    pub(crate) fn get_txs_proof_request(&self) -> Option<&TransactionsProofRequest> {
-        self.txs_proof_request.as_ref()
-    }
-
     fn update_last_state(&mut self, last_state: LastState) {
         self.last_state = Some(last_state);
     }
@@ -355,15 +345,27 @@ impl PeerState {
     fn update_prove_state(&mut self, state: ProveState) {
         self.prove_state = Some(state);
     }
+}
 
-    fn update_blocks_proof_request(&mut self, request: Option<BlocksProofRequest>) {
-        self.blocks_proof_request = request;
+impl Peer {
+    fn new(update_timestamp: u64) -> Self {
+        Self {
+            state: Default::default(),
+            blocks_proof_request: None,
+            blocks_request: None,
+            txs_proof_request: None,
+            update_timestamp,
+        }
     }
-    fn update_blocks_request(&mut self, request: Option<BlocksRequest>) {
-        self.blocks_request = request;
+
+    pub(crate) fn get_blocks_proof_request(&self) -> Option<&BlocksProofRequest> {
+        self.blocks_proof_request.as_ref()
     }
-    fn update_txs_proof_request(&mut self, request: Option<TransactionsProofRequest>) {
-        self.txs_proof_request = request;
+    pub(crate) fn get_blocks_request(&self) -> Option<&BlocksRequest> {
+        self.blocks_request.as_ref()
+    }
+    pub(crate) fn get_txs_proof_request(&self) -> Option<&TransactionsProofRequest> {
+        self.txs_proof_request.as_ref()
     }
 
     fn add_block(&mut self, block_hash: &Byte32) {
@@ -376,16 +378,7 @@ impl PeerState {
             false
         };
         if finished {
-            self.update_blocks_request(None);
-        }
-    }
-}
-
-impl Peer {
-    fn new(update_timestamp: u64) -> Self {
-        Self {
-            state: Default::default(),
-            update_timestamp,
+            self.blocks_request = None;
         }
     }
 }
@@ -453,9 +446,9 @@ impl Peers {
         }
     }
     // mark all fetching hashes (headers/txs) as timeout
-    pub(crate) fn mark_fetching_headers_timeout(&self, peer: PeerIndex) {
-        if let Some(peer_state) = self.get_state(&peer) {
-            if let Some(request) = peer_state.get_blocks_proof_request() {
+    pub(crate) fn mark_fetching_headers_timeout(&self, peer_index: PeerIndex) {
+        if let Some(peer) = self.get_peer(&peer_index) {
+            if let Some(request) = peer.get_blocks_proof_request() {
                 for block_hash in request.block_hashes() {
                     if let Some(mut pair) = self.fetching_headers.get_mut(&block_hash.pack()) {
                         pair.value_mut().timeout = true;
@@ -464,9 +457,9 @@ impl Peers {
             }
         }
     }
-    pub(crate) fn mark_fetching_txs_timeout(&self, peer: PeerIndex) {
-        if let Some(peer_state) = self.get_state(&peer) {
-            if let Some(request) = peer_state.get_txs_proof_request() {
+    pub(crate) fn mark_fetching_txs_timeout(&self, peer_index: PeerIndex) {
+        if let Some(peer) = self.get_peer(&peer_index) {
+            if let Some(request) = peer.get_txs_proof_request() {
                 for tx_hash in request.tx_hashes() {
                     if let Some(mut pair) = self.fetching_txs.get_mut(&tx_hash.pack()) {
                         pair.value_mut().timeout = true;
@@ -520,6 +513,10 @@ impl Peers {
         self.inner.get(index).map(|peer| peer.state.clone())
     }
 
+    pub(crate) fn get_peer(&self, index: &PeerIndex) -> Option<Peer> {
+        self.inner.get(index).map(|peer| peer.clone())
+    }
+
     pub(crate) fn update_last_state(&self, index: PeerIndex, last_state: LastState) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.state.update_last_state(last_state);
@@ -568,7 +565,7 @@ impl Peers {
     ) -> Option<bool> {
         let block_hash = block.header().calc_header_hash();
         for mut pair in self.inner.iter_mut() {
-            pair.value_mut().state.add_block(&block_hash);
+            pair.value_mut().add_block(&block_hash);
         }
         matched_blocks
             .get_mut(&block_hash.unpack())
@@ -646,8 +643,8 @@ impl Peers {
     ) -> Vec<Byte32> {
         let mut proof_requested_hashes = HashSet::new();
         for pair in self.inner.iter() {
-            let peer_state = &pair.value().state;
-            if let Some(req) = peer_state.get_blocks_proof_request() {
+            let peer = &pair.value();
+            if let Some(req) = peer.get_blocks_proof_request() {
                 for hash in req.block_hashes() {
                     proof_requested_hashes.insert(hash);
                 }
@@ -673,8 +670,8 @@ impl Peers {
     ) -> Vec<Byte32> {
         let mut block_requested_hashes = HashSet::new();
         for pair in self.inner.iter() {
-            let peer_state = &pair.value().state;
-            if let Some(req) = peer_state.get_blocks_request() {
+            let peer = &pair.value();
+            if let Some(req) = peer.get_blocks_request() {
                 for hash in req.hashes.keys() {
                     block_requested_hashes.insert(hash.clone());
                 }
@@ -725,16 +722,14 @@ impl Peers {
         request: Option<packed::GetBlocksProof>,
     ) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_blocks_proof_request(
-                request.map(|content| BlocksProofRequest::new(content, unix_time_as_millis())),
-            );
+            peer.blocks_proof_request =
+                request.map(|content| BlocksProofRequest::new(content, unix_time_as_millis()));
         }
     }
     pub(crate) fn update_blocks_request(&self, index: PeerIndex, hashes: Option<Vec<Byte32>>) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_blocks_request(
-                hashes.map(|hashes| BlocksRequest::new(hashes, unix_time_as_millis())),
-            );
+            peer.blocks_request =
+                hashes.map(|hashes| BlocksRequest::new(hashes, unix_time_as_millis()));
         }
     }
     pub(crate) fn update_txs_proof_request(
@@ -743,10 +738,8 @@ impl Peers {
         request: Option<packed::GetTransactionsProof>,
     ) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_txs_proof_request(
-                request
-                    .map(|content| TransactionsProofRequest::new(content, unix_time_as_millis())),
-            );
+            peer.txs_proof_request = request
+                .map(|content| TransactionsProofRequest::new(content, unix_time_as_millis()));
         }
     }
 
@@ -767,9 +760,8 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                let peer_state = &item.value().state;
-                peer_state
-                    .get_blocks_proof_request()
+                let peer = &item.value();
+                peer.get_blocks_proof_request()
                     .and_then(|req| {
                         if now > req.when_sent + MESSAGE_TIMEOUT {
                             Some(*item.key())
@@ -778,7 +770,7 @@ impl Peers {
                         }
                     })
                     .or_else(|| {
-                        peer_state.get_blocks_request().and_then(|req| {
+                        peer.get_blocks_request().and_then(|req| {
                             if now > req.when_sent + MESSAGE_TIMEOUT {
                                 Some(*item.key())
                             } else {
@@ -787,7 +779,7 @@ impl Peers {
                         })
                     })
                     .or_else(|| {
-                        peer_state.get_txs_proof_request().and_then(|req| {
+                        peer.get_txs_proof_request().and_then(|req| {
                             if now > req.when_sent + MESSAGE_TIMEOUT {
                                 Some(*item.key())
                             } else {

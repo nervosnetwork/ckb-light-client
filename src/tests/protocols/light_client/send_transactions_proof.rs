@@ -524,7 +524,7 @@ async fn test_send_headers_txs_request() {
             .first_sent()
             > 0
     );
-    let peer_state = peers.get_state(&peer_index).unwrap();
-    assert!(peer_state.get_blocks_proof_request().is_some());
-    assert!(peer_state.get_txs_proof_request().is_some());
+    let peer = peers.get_peer(&peer_index).unwrap();
+    assert!(peer.get_blocks_proof_request().is_some());
+    assert!(peer.get_txs_proof_request().is_some());
 }
