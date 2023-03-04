@@ -11,8 +11,7 @@ use ckb_types::{
 
 use crate::{
     protocols::{
-        light_client::constant::GET_IDLE_BLOCKS_TOKEN, LastState, PeerState, Peers, ProveRequest,
-        ProveState, BAD_MESSAGE_BAN_TIME,
+        light_client::constant::GET_IDLE_BLOCKS_TOKEN, PeerState, Peers, BAD_MESSAGE_BAN_TIME,
     },
     tests::{
         prelude::*,
@@ -180,13 +179,9 @@ async fn test_light_client_get_idle_matched_blocks() {
         .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
     let tip_hash = tip_header.header().hash();
     let peers = {
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let unproved_block_hash = H256(rand::random()).pack();

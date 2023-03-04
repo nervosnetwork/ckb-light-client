@@ -1,7 +1,7 @@
 use super::super::{LastState, LightClientProtocol, Status};
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
-use log::trace;
+use log::{debug, trace};
 
 pub(crate) struct SendLastStateProcess<'a> {
     message: packed::SendLastStateReader<'a>,
@@ -33,12 +33,18 @@ impl<'a> SendLastStateProcess<'a> {
 
         let last_state = LastState::new(last_header);
 
-        self.protocol
+        return_if_failed!(self
+            .protocol
             .peers()
-            .update_last_state(self.peer_index, last_state.clone());
+            .update_last_state(self.peer_index, last_state.clone()));
 
         if let Some(prev_last_state) = peer_state.get_last_state() {
-            trace!("peer {}: update last state", self.peer_index);
+            trace!(
+                "peer {}: update last state from {} to {}",
+                self.peer_index,
+                prev_last_state.verifiable_header().header().number(),
+                last_state.verifiable_header().header().number()
+            );
             if prev_last_state.verifiable_header().total_difficulty()
                 < last_state.verifiable_header().total_difficulty()
             {
@@ -47,14 +53,22 @@ impl<'a> SendLastStateProcess<'a> {
                         trace!("peer {}: new last state could be trusted", self.peer_index);
                         let last_n_blocks = self.protocol.last_n_blocks() as usize;
                         let child_prove_state = prove_state.new_child(last_state, last_n_blocks);
-                        self.protocol
-                            .update_prove_state_to_child(self.peer_index, child_prove_state);
+                        return_if_failed!(self
+                            .protocol
+                            .update_prove_state_to_child(self.peer_index, child_prove_state));
                     }
                 }
             }
         } else {
             trace!("peer {}: initialize last state", self.peer_index);
-            self.protocol.get_last_state_proof(self.nc, self.peer_index);
+            let is_sent =
+                return_if_failed!(self.protocol.get_last_state_proof(self.nc, self.peer_index));
+            if !is_sent {
+                debug!(
+                    "peer {} skip sending a request for last state proof",
+                    self.peer_index
+                );
+            }
         }
 
         Status::ok()

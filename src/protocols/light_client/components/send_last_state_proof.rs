@@ -59,7 +59,14 @@ impl<'a> SendLastStateProofProcess<'a> {
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                self.protocol.get_last_state_proof(self.nc, self.peer_index);
+                let is_sent =
+                    return_if_failed!(self.protocol.get_last_state_proof(self.nc, self.peer_index));
+                if !is_sent {
+                    debug!(
+                        "peer {} skip sending a request for last state proof",
+                        self.peer_index
+                    );
+                }
             } else {
                 warn!("peer {} send an unknown proof", self.peer_index);
             }
@@ -177,9 +184,10 @@ impl<'a> SendLastStateProofProcess<'a> {
                 let mut prove_request =
                     ProveRequest::new(LastState::new(last_header), content.clone());
                 prove_request.skip_check_tau();
-                self.protocol
+                return_if_failed!(self
+                    .protocol
                     .peers()
-                    .update_prove_request(self.peer_index, Some(prove_request));
+                    .update_prove_request(self.peer_index, prove_request));
 
                 let message = packed::LightClientMessage::new_builder()
                     .set(content)
@@ -252,9 +260,9 @@ impl<'a> SendLastStateProofProcess<'a> {
                 panic!("long fork detected");
             }
 
-            let long_fork_detected = !self
+            let long_fork_detected = !return_if_failed!(self
                 .protocol
-                .commit_prove_state(self.peer_index, prove_state.clone());
+                .commit_prove_state(self.peer_index, prove_state.clone()));
 
             if long_fork_detected {
                 let last_header = prove_state.get_last_header();
@@ -265,9 +273,10 @@ impl<'a> SendLastStateProofProcess<'a> {
                     let mut prove_request =
                         ProveRequest::new(LastState::new(last_header.clone()), content.clone());
                     prove_request.long_fork_detected();
-                    self.protocol
+                    return_if_failed!(self
+                        .protocol
                         .peers()
-                        .update_prove_request(self.peer_index, Some(prove_request));
+                        .update_prove_request(self.peer_index, prove_request));
 
                     let message = packed::LightClientMessage::new_builder()
                         .set(content)

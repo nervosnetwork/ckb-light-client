@@ -5,11 +5,14 @@ use ckb_types::{
 };
 use dashmap::DashMap;
 use faketime::unix_time_as_millis;
-use std::collections::{HashMap, HashSet};
-use std::sync::RwLock;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt, mem,
+    sync::RwLock,
+};
 
 use super::prelude::*;
-use crate::protocols::MESSAGE_TIMEOUT;
+use crate::protocols::{Status, StatusCode, MESSAGE_TIMEOUT};
 
 #[derive(Default)]
 pub struct Peers {
@@ -53,12 +56,58 @@ pub(crate) struct LastState {
     header: VerifiableHeader,
 }
 
-#[derive(Clone, Default)]
-pub(crate) struct PeerState {
-    // Save the header instead of the request message
-    last_state: Option<LastState>,
-    prove_request: Option<ProveRequest>,
-    prove_state: Option<ProveState>,
+/*
+ * ```plantuml
+ * @startuml
+ * state "Initialized"                as st1
+ * state "RequestFirstLastState"      as st2
+ * state "OnlyHasLastState"           as st3
+ * state "RequestFirstLastStateProof" as st4
+ * state "Ready"                      as st5
+ * state "RequestNewLastState"        as st6
+ * state "RequestNewLastStateProof"   as st7
+ *
+ * [*] ->   st1 : Connect Peer
+ * st1 ->   st2 : Send    GetLastState
+ * st2 -D-> st3 : Receive SendLastState
+ * st3 ->   st4 : Send    GetLastStateProof
+ * st4 ->   st5 : Receive SendLastStateProof
+ * st5 -U-> st6 : Send    GetLastState
+ * st6 ->   st5 : Receive SendLastState
+ * st5 -D-> st7 : Send    GetLastStateProof
+ * st7 ->   st5 : Receive SendLastStateProof
+ * @endum
+ * ```
+ */
+#[derive(Clone)]
+pub(crate) enum PeerState {
+    Initialized,
+    RequestFirstLastState {
+        _todo_when_sent: u64,
+    },
+    OnlyHasLastState {
+        last_state: LastState,
+    },
+    RequestFirstLastStateProof {
+        last_state: LastState,
+        request: ProveRequest,
+        _todo_when_sent: u64,
+    },
+    Ready {
+        last_state: LastState,
+        prove_state: ProveState,
+    },
+    RequestNewLastState {
+        last_state: LastState,
+        prove_state: ProveState,
+        _todo_when_sent: u64,
+    },
+    RequestNewLastStateProof {
+        last_state: LastState,
+        prove_state: ProveState,
+        request: ProveRequest,
+        _todo_when_sent: u64,
+    },
 }
 
 #[derive(Clone)]
@@ -321,29 +370,201 @@ impl TransactionsProofRequest {
     }
 }
 
+impl Default for PeerState {
+    fn default() -> Self {
+        Self::Initialized
+    }
+}
+
+impl fmt::Display for PeerState {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Initialized => write!(f, "PeerState::Initialized"),
+            Self::RequestFirstLastState { .. } => write!(f, "PeerState::RequestFirstLastState"),
+            Self::OnlyHasLastState { .. } => write!(f, "PeerState::OnlyHasLastState"),
+            Self::RequestFirstLastStateProof { .. } => {
+                write!(f, "PeerState::RequestFirstLastStateProof")
+            }
+            Self::Ready { .. } => write!(f, "PeerState::Ready"),
+            Self::RequestNewLastState { .. } => {
+                write!(f, "PeerState::RequestNewLastState")
+            }
+            Self::RequestNewLastStateProof { .. } => {
+                write!(f, "PeerState::RequestNewLastStateProof")
+            }
+        }
+    }
+}
+
 impl PeerState {
+    fn take(&mut self) -> Self {
+        let mut ret = Self::Initialized;
+        mem::swap(self, &mut ret);
+        ret
+    }
+
     pub(crate) fn get_last_state(&self) -> Option<&LastState> {
-        self.last_state.as_ref()
+        match self {
+            Self::Initialized | Self::RequestFirstLastState { .. } => None,
+            Self::OnlyHasLastState { ref last_state, .. }
+            | Self::RequestFirstLastStateProof { ref last_state, .. }
+            | Self::Ready { ref last_state, .. }
+            | Self::RequestNewLastState { ref last_state, .. }
+            | Self::RequestNewLastStateProof { ref last_state, .. } => Some(last_state),
+        }
     }
 
     pub(crate) fn get_prove_request(&self) -> Option<&ProveRequest> {
-        self.prove_request.as_ref()
+        match self {
+            Self::RequestFirstLastStateProof { ref request, .. }
+            | Self::RequestNewLastStateProof { ref request, .. } => Some(request),
+            Self::Initialized
+            | Self::OnlyHasLastState { .. }
+            | Self::RequestFirstLastState { .. }
+            | Self::Ready { .. }
+            | Self::RequestNewLastState { .. } => None,
+        }
     }
 
     pub(crate) fn get_prove_state(&self) -> Option<&ProveState> {
-        self.prove_state.as_ref()
+        match self {
+            Self::Ready {
+                ref prove_state, ..
+            }
+            | Self::RequestNewLastState {
+                ref prove_state, ..
+            }
+            | Self::RequestNewLastStateProof {
+                ref prove_state, ..
+            } => Some(prove_state),
+            Self::Initialized
+            | Self::RequestFirstLastState { .. }
+            | Self::OnlyHasLastState { .. }
+            | Self::RequestFirstLastStateProof { .. } => None,
+        }
     }
 
-    fn update_last_state(&mut self, last_state: LastState) {
-        self.last_state = Some(last_state);
+    fn request_last_state(self, when_sent: u64) -> Result<Self, Status> {
+        match self {
+            Self::Initialized => {
+                let new_state = Self::RequestFirstLastState {
+                    _todo_when_sent: when_sent,
+                };
+                Ok(new_state)
+            }
+            Self::Ready {
+                last_state,
+                prove_state,
+            } => {
+                let new_state = Self::RequestNewLastState {
+                    last_state,
+                    prove_state,
+                    _todo_when_sent: when_sent,
+                };
+                Ok(new_state)
+            }
+            _ => {
+                let errmsg = format!("{} request last state", self);
+                Err(StatusCode::IncorrectLastState.with_context(errmsg))
+            }
+        }
     }
 
-    fn update_prove_request(&mut self, request: Option<ProveRequest>) {
-        self.prove_request = request;
+    fn receive_last_state(mut self, new_last_state: LastState) -> Result<Self, Status> {
+        match self {
+            Self::RequestFirstLastState { .. } => {
+                let new_state = Self::OnlyHasLastState {
+                    last_state: new_last_state,
+                };
+                Ok(new_state)
+            }
+            Self::RequestNewLastState { prove_state, .. } => {
+                let new_state = Self::Ready {
+                    last_state: new_last_state,
+                    prove_state,
+                };
+                Ok(new_state)
+            }
+            Self::OnlyHasLastState { ref mut last_state }
+            | Self::RequestFirstLastStateProof {
+                ref mut last_state, ..
+            }
+            | Self::Ready {
+                ref mut last_state, ..
+            }
+            | Self::RequestNewLastStateProof {
+                ref mut last_state, ..
+            } => {
+                *last_state = new_last_state;
+                Ok(self)
+            }
+            _ => {
+                let errmsg = format!("{} receive last state", self);
+                Err(StatusCode::IncorrectLastState.with_context(errmsg))
+            }
+        }
     }
 
-    fn update_prove_state(&mut self, state: ProveState) {
-        self.prove_state = Some(state);
+    fn request_last_state_proof(
+        mut self,
+        new_request: ProveRequest,
+        when_sent: u64,
+    ) -> Result<Self, Status> {
+        match self {
+            Self::OnlyHasLastState { last_state, .. } => {
+                let new_state = Self::RequestFirstLastStateProof {
+                    last_state,
+                    request: new_request,
+                    _todo_when_sent: when_sent,
+                };
+                Ok(new_state)
+            }
+            Self::Ready {
+                last_state,
+                prove_state,
+                ..
+            } => {
+                let new_state = Self::RequestNewLastStateProof {
+                    last_state,
+                    prove_state,
+                    request: new_request,
+                    _todo_when_sent: when_sent,
+                };
+                Ok(new_state)
+            }
+            Self::RequestFirstLastStateProof {
+                ref mut request, ..
+            }
+            | Self::RequestNewLastStateProof {
+                ref mut request, ..
+            } => {
+                *request = new_request;
+                Ok(self)
+            }
+            _ => {
+                let errmsg = format!("{} request last state proof", self);
+                Err(StatusCode::IncorrectLastState.with_context(errmsg))
+            }
+        }
+    }
+
+    fn receive_last_state_proof(self, new_prove_state: ProveState) -> Result<Self, Status> {
+        match self {
+            Self::OnlyHasLastState { last_state }
+            | Self::RequestFirstLastStateProof { last_state, .. }
+            | Self::Ready { last_state, .. }
+            | Self::RequestNewLastStateProof { last_state, .. } => {
+                let new_state = Self::Ready {
+                    last_state,
+                    prove_state: new_prove_state,
+                };
+                Ok(new_state)
+            }
+            _ => {
+                let errmsg = format!("{} receive last state proof", self);
+                Err(StatusCode::IncorrectLastState.with_context(errmsg))
+            }
+        }
     }
 }
 
@@ -517,45 +738,83 @@ impl Peers {
         self.inner.get(index).map(|peer| peer.clone())
     }
 
-    pub(crate) fn update_last_state(&self, index: PeerIndex, last_state: LastState) {
-        if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_last_state(last_state);
-        }
-    }
-
     pub(crate) fn update_timestamp(&self, index: PeerIndex, timestamp: u64) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.update_timestamp = timestamp;
         }
     }
 
-    pub(crate) fn update_prove_request(&self, index: PeerIndex, request: Option<ProveRequest>) {
-        let now = unix_time_as_millis();
-        if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_prove_request(request);
-            peer.update_timestamp = now;
-        }
+    #[cfg(test)]
+    pub(crate) fn mock_prove_request(
+        &self,
+        index: PeerIndex,
+        request: ProveRequest,
+    ) -> Result<(), Status> {
+        let last_state = LastState::new(request.get_last_header().to_owned());
+        self.request_last_state(index)?;
+        self.update_last_state(index, last_state)?;
+        self.update_prove_request(index, request)
     }
 
-    /// Update the prove state without any requests.
-    pub(crate) fn update_prove_state(&self, index: PeerIndex, state: ProveState) {
-        let now = unix_time_as_millis();
-        if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_prove_state(state);
-            peer.update_timestamp = now;
-        }
+    #[cfg(test)]
+    pub(crate) fn mock_prove_state(
+        &self,
+        index: PeerIndex,
+        tip_header: VerifiableHeader,
+    ) -> Result<(), Status> {
+        let last_state = LastState::new(tip_header);
+        let request = ProveRequest::new(last_state.clone(), Default::default());
+        let prove_state =
+            ProveState::new_from_request(request.clone(), Default::default(), Default::default());
+        self.request_last_state(index)?;
+        self.update_last_state(index, last_state)?;
+        self.update_prove_request(index, request)?;
+        self.update_prove_state(index, prove_state)
     }
 
-    /// Commit the prove state from the previous request.
-    pub(crate) fn commit_prove_state(&self, index: PeerIndex, state: ProveState) {
+    pub(crate) fn request_last_state(&self, index: PeerIndex) -> Result<(), Status> {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            let now = unix_time_as_millis();
+            peer.state = peer.state.take().request_last_state(now)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn update_last_state(
+        &self,
+        index: PeerIndex,
+        last_state: LastState,
+    ) -> Result<(), Status> {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state = peer.state.take().receive_last_state(last_state)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn update_prove_request(
+        &self,
+        index: PeerIndex,
+        request: ProveRequest,
+    ) -> Result<(), Status> {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            let now = unix_time_as_millis();
+            peer.state = peer.state.take().request_last_state_proof(request, now)?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn update_prove_state(
+        &self,
+        index: PeerIndex,
+        state: ProveState,
+    ) -> Result<(), Status> {
         *self.last_headers.write().expect("poisoned") = state.get_last_headers().to_vec();
-
-        let now = unix_time_as_millis();
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.state.update_prove_state(state);
-            peer.state.update_prove_request(None);
+            let now = unix_time_as_millis();
+            peer.state = peer.state.take().receive_last_state_proof(state)?;
             peer.update_timestamp = now;
         }
+        Ok(())
     }
 
     pub(crate) fn add_block(

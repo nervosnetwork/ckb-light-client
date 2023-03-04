@@ -48,7 +48,7 @@ async fn peer_state_is_not_found() {
     let peer_index = PeerIndex::new(1);
     protocol.received(nc.context(), peer_index, data).await;
 
-    assert!(nc.banned_since(peer_index, StatusCode::PeerStateIsNotFound));
+    assert!(nc.banned_since(peer_index, StatusCode::PeerIsNotFound));
 }
 
 #[tokio::test]
@@ -60,6 +60,7 @@ async fn no_matched_request() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -91,6 +92,7 @@ async fn update_last_state() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -116,12 +118,14 @@ async fn update_last_state() {
             let last_state = LastState::new(last_header);
             protocol
                 .peers()
-                .update_last_state(peer_index, last_state.clone());
+                .update_last_state(peer_index, last_state.clone())
+                .unwrap();
             ProveRequest::new(last_state, content)
         };
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     num += 2;
@@ -172,6 +176,7 @@ async fn unknown_proof() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -197,12 +202,14 @@ async fn unknown_proof() {
             let last_state = LastState::new(last_header);
             protocol
                 .peers()
-                .update_last_state(peer_index, last_state.clone());
+                .update_last_state(peer_index, last_state.clone())
+                .unwrap();
             ProveRequest::new(last_state, content)
         };
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     num += 2;
@@ -242,6 +249,7 @@ async fn headers_should_be_sorted() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -271,12 +279,14 @@ async fn headers_should_be_sorted() {
             let last_state = LastState::new(last_header);
             protocol
                 .peers()
-                .update_last_state(peer_index, last_state.clone());
+                .update_last_state(peer_index, last_state.clone())
+                .unwrap();
             ProveRequest::new(last_state, content)
         };
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -325,6 +335,7 @@ async fn valid_proof_with_boundary_not_in_last_n() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -348,10 +359,14 @@ async fn valid_proof_with_boundary_not_in_last_n() {
             protocol.last_n_blocks(),
         );
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -415,6 +430,7 @@ async fn valid_proof_with_boundary_in_last_n() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -438,10 +454,14 @@ async fn valid_proof_with_boundary_in_last_n() {
             protocol.last_n_blocks(),
         );
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -505,6 +525,7 @@ async fn valid_proof_with_no_matched_sample() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -563,10 +584,14 @@ async fn valid_proof_with_no_matched_sample() {
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -629,6 +654,7 @@ async fn valid_proof_with_prove_state() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -654,6 +680,15 @@ async fn valid_proof_with_prove_state() {
             prev_boundary_number,
             protocol.last_n_blocks(),
         );
+        let prev_last_state = LastState::new(prev_prove_request.get_last_header().to_owned());
+        protocol
+            .peers()
+            .update_last_state(peer_index, prev_last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prev_prove_request.clone())
+            .unwrap();
         let prove_state = {
             let prev_last_n_blocks_start_number = if prev_last_number > protocol.last_n_blocks() + 1
             {
@@ -667,7 +702,9 @@ async fn valid_proof_with_prove_state() {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
         };
-        protocol.commit_prove_state(peer_index, prove_state);
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         let prove_request = chain.build_prove_request(
             prev_last_number,
             num,
@@ -676,10 +713,14 @@ async fn valid_proof_with_prove_state() {
             protocol.last_n_blocks(),
         );
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -743,6 +784,7 @@ async fn valid_proof_with_reorg_blocks() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -768,6 +810,15 @@ async fn valid_proof_with_reorg_blocks() {
             prev_boundary_number,
             protocol.last_n_blocks(),
         );
+        let prev_last_state = LastState::new(prev_prove_request.get_last_header().to_owned());
+        protocol
+            .peers()
+            .update_last_state(peer_index, prev_last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prev_prove_request.clone())
+            .unwrap();
         let prove_state = {
             let prev_last_n_blocks_start_number = if prev_last_number > protocol.last_n_blocks() + 1
             {
@@ -781,7 +832,9 @@ async fn valid_proof_with_reorg_blocks() {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
         };
-        protocol.commit_prove_state(peer_index, prove_state);
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         let prove_request = chain.build_prove_request(
             prev_last_number,
             num,
@@ -789,11 +842,10 @@ async fn valid_proof_with_reorg_blocks() {
             boundary_number,
             protocol.last_n_blocks(),
         );
-        let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .mock_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -875,6 +927,7 @@ async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -899,10 +952,14 @@ async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
             protocol.last_n_blocks(),
         );
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -979,6 +1036,7 @@ async fn invalid_parent_chain_root_for_non_genesis_blocks() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -1003,10 +1061,14 @@ async fn invalid_parent_chain_root_for_non_genesis_blocks() {
             protocol.last_n_blocks(),
         );
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -1271,6 +1333,7 @@ async fn test_send_last_state_proof(param: TestParameter) {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -1301,10 +1364,14 @@ async fn test_send_last_state_proof(param: TestParameter) {
             last_n_blocks,
         );
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
     }
 
     // Run the test.
@@ -1625,6 +1692,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
             .matched_blocks()
             .write()
@@ -1698,6 +1766,15 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             prev_boundary_number,
             last_n_blocks,
         );
+        let prev_last_state = LastState::new(prev_prove_request.get_last_header().to_owned());
+        protocol
+            .peers()
+            .update_last_state(peer_index, prev_last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prev_prove_request.clone())
+            .unwrap();
         let prove_state = {
             let prev_last_n_blocks_start_number = if prev_last_number > last_n_blocks + 1 {
                 prev_last_number - last_n_blocks
@@ -1710,7 +1787,9 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
         };
-        protocol.commit_prove_state(peer_index, prove_state);
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
     }
 
     // Setup the storage data.
@@ -1765,10 +1844,14 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             prove_request.long_fork_detected();
         }
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
 
         let snapshot = chain.shared().snapshot();
         let last_header = snapshot

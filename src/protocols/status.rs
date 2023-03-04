@@ -27,10 +27,10 @@ pub enum StatusCode {
 
     /// The peer is not found.
     PeerIsNotFound = 411,
-    /// The peer state is not found.
-    PeerStateIsNotFound = 412,
     /// The last state sent from server is invalid.
-    InvalidLastState = 413,
+    InvalidLastState = 412,
+    /// The peer state is not correct for transition.
+    IncorrectLastState = 413,
 
     /// Receives a response but the peer isn't waiting for a response.
     PeerIsNotOnProcess = 421,

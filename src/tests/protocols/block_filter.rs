@@ -16,9 +16,7 @@ use ckb_types::{
 use crate::storage::SetScriptsCommand;
 use crate::storage::{ScriptStatus, ScriptType};
 use crate::{
-    protocols::{
-        LastState, Peers, ProveRequest, ProveState, BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN,
-    },
+    protocols::{Peers, BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -69,13 +67,9 @@ async fn test_block_filter_ignore_start_number() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -123,13 +117,9 @@ async fn test_block_filter_empty_filters() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -177,13 +167,9 @@ async fn test_block_filter_invalid_filters_count() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -236,13 +222,9 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -292,13 +274,9 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -378,13 +356,9 @@ async fn test_block_filter_ok_with_blocks_matched() {
     let peer_index = PeerIndex::new(3);
     let (peers, prove_state_block_hash) = {
         let prove_state_block_hash = header.hash();
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         (peers, prove_state_block_hash)
     };
 
@@ -480,13 +454,9 @@ async fn test_block_filter_notify_ask_filters() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -521,6 +491,7 @@ async fn test_block_filter_notify_no_proved_peers() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -556,13 +527,9 @@ async fn test_block_filter_notify_not_reach_ask() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -600,13 +567,9 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let mut protocol = chain.create_filter_protocol(peers);
@@ -641,13 +604,9 @@ async fn test_block_filter_notify_recover_matched_blocks() {
         .client_storage()
         .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
     let peers = {
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let unproved_block_hash = H256(rand::random()).pack();

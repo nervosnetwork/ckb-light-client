@@ -44,6 +44,7 @@ async fn no_matched_request() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -70,6 +71,7 @@ async fn last_state_is_changed() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -95,9 +97,6 @@ async fn last_state_is_changed() {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -114,11 +113,17 @@ async fn last_state_is_changed() {
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
@@ -159,6 +164,7 @@ async fn unexpected_response() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -185,9 +191,6 @@ async fn unexpected_response() {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -204,11 +207,17 @@ async fn unexpected_response() {
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
@@ -261,6 +270,7 @@ async fn get_blocks_with_chunks() {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -288,9 +298,6 @@ async fn get_blocks_with_chunks() {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -307,11 +314,17 @@ async fn get_blocks_with_chunks() {
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
@@ -607,6 +620,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
     let peers = {
         let peers = Arc::new(Peers::default());
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -630,9 +644,6 @@ async fn test_send_blocks_proof(param: TestParameter) {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -653,11 +664,17 @@ async fn test_send_blocks_proof(param: TestParameter) {
             &param.block_numbers,
             &param.missing_block_hashes,
         );
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
