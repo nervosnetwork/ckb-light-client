@@ -1,10 +1,10 @@
 use ckb_network::PeerIndex;
+use ckb_systemtime::unix_time_as_millis;
 use ckb_types::{
     core::HeaderView, packed, packed::Byte32, prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader, H256,
 };
 use dashmap::DashMap;
-use faketime::unix_time_as_millis;
 use std::{
     collections::{HashMap, HashSet},
     fmt, mem,

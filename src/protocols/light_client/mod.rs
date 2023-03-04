@@ -18,7 +18,7 @@ use ckb_types::{
     U256,
 };
 
-use faketime::unix_time_as_millis;
+use ckb_systemtime::unix_time_as_millis;
 use log::{debug, error, info, trace, warn};
 
 mod components;
@@ -517,7 +517,7 @@ impl LightClientProtocol {
     }
 
     fn refresh_all_peers(&mut self, nc: &dyn CKBProtocolContext) {
-        let now = faketime::unix_time_as_millis();
+        let now = unix_time_as_millis();
         for peer_index in self.peers().get_peers_which_have_timeout(now) {
             self.peers().mark_fetching_headers_timeout(peer_index);
             self.peers().mark_fetching_txs_timeout(peer_index);

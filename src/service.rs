@@ -4,9 +4,9 @@ use ckb_jsonrpc_types::{
     OutPoint, RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
 };
 use ckb_network::{extract_peer_id, NetworkController};
+use ckb_systemtime::unix_time_as_millis;
 use ckb_traits::HeaderProvider;
 use ckb_types::{core, packed, prelude::*, H256};
-use faketime::unix_time_as_millis;
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_derive::rpc;
 use jsonrpc_http_server::{Server, ServerBuilder};
