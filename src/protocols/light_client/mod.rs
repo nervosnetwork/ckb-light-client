@@ -259,8 +259,6 @@ impl LightClientProtocol {
                     .set(content.clone())
                     .build();
                 nc.reply(peer_index, &message);
-                let now = unix_time_as_millis();
-                self.peers().update_timestamp(peer_index, now);
                 let prove_request = ProveRequest::new(last_state.clone(), content);
                 self.peers()
                     .update_prove_request(peer_index, prove_request)?;
@@ -529,11 +527,22 @@ impl LightClientProtocol {
                 error!("disconnect peer({}) error: {}", peer_index, err);
             };
         }
-        let before = now - constant::REFRESH_PEERS_DURATION.as_millis() as u64;
-        for peer_index in self.peers().get_peers_which_require_updating(before) {
-            // TODO Different messages should have different timeouts.
-            let _ = self.get_last_state(nc, peer_index);
-            let _ = self.get_last_state_proof(nc, peer_index);
+        let before_ts = now - constant::REFRESH_PEERS_DURATION.as_millis() as u64;
+        for index in self.peers().get_peers_which_require_new_state(before_ts) {
+            if let Err(err) = self.get_last_state(nc, index) {
+                error!(
+                    "failed to request last state from peer={} since {}",
+                    index, err
+                );
+            }
+        }
+        for index in self.peers().get_peers_which_require_new_proof() {
+            if let Err(err) = self.get_last_state_proof(nc, index) {
+                error!(
+                    "failed to request last state proof from peer={} since {}",
+                    index, err
+                );
+            }
         }
     }
 

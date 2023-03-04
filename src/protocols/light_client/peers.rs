@@ -37,7 +37,6 @@ pub struct Peer {
     blocks_proof_request: Option<BlocksProofRequest>,
     blocks_request: Option<BlocksRequest>,
     txs_proof_request: Option<TransactionsProofRequest>,
-    update_timestamp: u64,
 }
 
 pub struct FetchInfo {
@@ -54,6 +53,7 @@ pub struct FetchInfo {
 #[derive(Clone, Debug)]
 pub(crate) struct LastState {
     header: VerifiableHeader,
+    update_ts: u64,
 }
 
 /*
@@ -83,7 +83,7 @@ pub(crate) struct LastState {
 pub(crate) enum PeerState {
     Initialized,
     RequestFirstLastState {
-        _todo_when_sent: u64,
+        when_sent: u64,
     },
     OnlyHasLastState {
         last_state: LastState,
@@ -91,7 +91,7 @@ pub(crate) enum PeerState {
     RequestFirstLastStateProof {
         last_state: LastState,
         request: ProveRequest,
-        _todo_when_sent: u64,
+        when_sent: u64,
     },
     Ready {
         last_state: LastState,
@@ -100,13 +100,13 @@ pub(crate) enum PeerState {
     RequestNewLastState {
         last_state: LastState,
         prove_state: ProveState,
-        _todo_when_sent: u64,
+        when_sent: u64,
     },
     RequestNewLastStateProof {
         last_state: LastState,
         prove_state: ProveState,
         request: ProveRequest,
-        _todo_when_sent: u64,
+        when_sent: u64,
     },
 }
 
@@ -180,7 +180,10 @@ impl AsRef<VerifiableHeader> for LastState {
 
 impl LastState {
     pub(crate) fn new(header: VerifiableHeader) -> LastState {
-        LastState { header }
+        LastState {
+            header,
+            update_ts: unix_time_as_millis(),
+        }
     }
 
     pub(crate) fn verifiable_header(&self) -> &VerifiableHeader {
@@ -447,9 +450,7 @@ impl PeerState {
     fn request_last_state(self, when_sent: u64) -> Result<Self, Status> {
         match self {
             Self::Initialized => {
-                let new_state = Self::RequestFirstLastState {
-                    _todo_when_sent: when_sent,
-                };
+                let new_state = Self::RequestFirstLastState { when_sent };
                 Ok(new_state)
             }
             Self::Ready {
@@ -459,7 +460,7 @@ impl PeerState {
                 let new_state = Self::RequestNewLastState {
                     last_state,
                     prove_state,
-                    _todo_when_sent: when_sent,
+                    when_sent,
                 };
                 Ok(new_state)
             }
@@ -508,14 +509,14 @@ impl PeerState {
     fn request_last_state_proof(
         mut self,
         new_request: ProveRequest,
-        when_sent: u64,
+        new_when_sent: u64,
     ) -> Result<Self, Status> {
         match self {
             Self::OnlyHasLastState { last_state, .. } => {
                 let new_state = Self::RequestFirstLastStateProof {
                     last_state,
                     request: new_request,
-                    _todo_when_sent: when_sent,
+                    when_sent: new_when_sent,
                 };
                 Ok(new_state)
             }
@@ -528,17 +529,22 @@ impl PeerState {
                     last_state,
                     prove_state,
                     request: new_request,
-                    _todo_when_sent: when_sent,
+                    when_sent: new_when_sent,
                 };
                 Ok(new_state)
             }
             Self::RequestFirstLastStateProof {
-                ref mut request, ..
+                ref mut request,
+                ref mut when_sent,
+                ..
             }
             | Self::RequestNewLastStateProof {
-                ref mut request, ..
+                ref mut request,
+                ref mut when_sent,
+                ..
             } => {
                 *request = new_request;
+                *when_sent = new_when_sent;
                 Ok(self)
             }
             _ => {
@@ -566,16 +572,46 @@ impl PeerState {
             }
         }
     }
+
+    fn require_new_last_state(&self, before_ts: u64) -> bool {
+        self.get_last_state()
+            .map(|last_state| last_state.update_ts < before_ts)
+            .unwrap_or(true)
+    }
+
+    fn require_new_last_state_proof(&self) -> bool {
+        match self {
+            Self::Ready {
+                ref last_state,
+                ref prove_state,
+            } => !prove_state.is_same_as(last_state.as_ref()),
+            Self::OnlyHasLastState { .. } => true,
+            Self::Initialized
+            | Self::RequestFirstLastState { .. }
+            | Self::RequestFirstLastStateProof { .. }
+            | Self::RequestNewLastState { .. }
+            | Self::RequestNewLastStateProof { .. } => false,
+        }
+    }
+
+    fn when_sent_request(&self) -> Option<u64> {
+        match self {
+            Self::Initialized | Self::OnlyHasLastState { .. } | Self::Ready { .. } => None,
+            Self::RequestFirstLastState { when_sent }
+            | Self::RequestFirstLastStateProof { when_sent, .. }
+            | Self::RequestNewLastState { when_sent, .. }
+            | Self::RequestNewLastStateProof { when_sent, .. } => Some(*when_sent),
+        }
+    }
 }
 
 impl Peer {
-    fn new(update_timestamp: u64) -> Self {
+    fn new() -> Self {
         Self {
             state: Default::default(),
             blocks_proof_request: None,
             blocks_request: None,
             txs_proof_request: None,
-            update_timestamp,
         }
     }
 
@@ -715,8 +751,7 @@ impl Peers {
     }
 
     pub(crate) fn add_peer(&self, index: PeerIndex) {
-        let now = unix_time_as_millis();
-        let peer = Peer::new(now);
+        let peer = Peer::new();
         self.inner.insert(index, peer);
     }
 
@@ -736,12 +771,6 @@ impl Peers {
 
     pub(crate) fn get_peer(&self, index: &PeerIndex) -> Option<Peer> {
         self.inner.get(index).map(|peer| peer.clone())
-    }
-
-    pub(crate) fn update_timestamp(&self, index: PeerIndex, timestamp: u64) {
-        if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.update_timestamp = timestamp;
-        }
     }
 
     #[cfg(test)]
@@ -810,9 +839,7 @@ impl Peers {
     ) -> Result<(), Status> {
         *self.last_headers.write().expect("poisoned") = state.get_last_headers().to_vec();
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            let now = unix_time_as_millis();
             peer.state = peer.state.take().receive_last_state_proof(state)?;
-            peer.update_timestamp = now;
         }
         Ok(())
     }
@@ -1002,11 +1029,26 @@ impl Peers {
         }
     }
 
-    pub(crate) fn get_peers_which_require_updating(&self, before_timestamp: u64) -> Vec<PeerIndex> {
+    pub(crate) fn get_peers_which_require_new_state(&self, before_ts: u64) -> Vec<PeerIndex> {
         self.inner
             .iter()
             .filter_map(|item| {
-                if item.value().update_timestamp < before_timestamp {
+                let require_update = item.value().state.require_new_last_state(before_ts);
+                if require_update {
+                    Some(*item.key())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub(crate) fn get_peers_which_require_new_proof(&self) -> Vec<PeerIndex> {
+        self.inner
+            .iter()
+            .filter_map(|item| {
+                let require_update = item.value().state.require_new_last_state_proof();
+                if require_update {
                     Some(*item.key())
                 } else {
                     None
@@ -1020,13 +1062,23 @@ impl Peers {
             .iter()
             .filter_map(|item| {
                 let peer = &item.value();
-                peer.get_blocks_proof_request()
-                    .and_then(|req| {
-                        if now > req.when_sent + MESSAGE_TIMEOUT {
+                peer.state
+                    .when_sent_request()
+                    .and_then(|when_sent| {
+                        if now > when_sent + MESSAGE_TIMEOUT {
                             Some(*item.key())
                         } else {
                             None
                         }
+                    })
+                    .or_else(|| {
+                        peer.get_blocks_proof_request().and_then(|req| {
+                            if now > req.when_sent + MESSAGE_TIMEOUT {
+                                Some(*item.key())
+                            } else {
+                                None
+                            }
+                        })
                     })
                     .or_else(|| {
                         peer.get_blocks_request().and_then(|req| {
