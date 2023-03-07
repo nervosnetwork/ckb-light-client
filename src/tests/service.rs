@@ -14,23 +14,20 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{FetchInfo, Peers, PendingTxs},
+    protocols::{FetchInfo, PendingTxs},
     service::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
         ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, SetScriptsCommand, Status,
         TransactionRpc, TransactionRpcImpl, TransactionWithStatus, TxStatus,
     },
     storage::{self, StorageWithChainData},
-    tests::utils::new_storage,
+    tests::utils::{create_peers, new_storage},
 };
 
 #[test]
 fn rpc() {
     let storage = new_storage("rpc");
-    let swc = StorageWithChainData::new(
-        storage.clone(),
-        Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    );
+    let swc = StorageWithChainData::new(storage.clone(), create_peers());
     let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
@@ -735,7 +732,12 @@ fn rpc() {
         .collect();
 
     // insert fetched headers
-    let peers = Arc::new(Peers::new(RwLock::new(vec![extra_header.clone()])));
+    let peers = create_peers();
+    peers
+        .last_headers()
+        .write()
+        .unwrap()
+        .push(extra_header.clone());
     peers.fetching_headers().insert(
         h256!("0xaa22").pack(),
         FetchInfo::new(1111, 3344, false, false),
@@ -822,10 +824,7 @@ fn rpc() {
         "rollback should update script filter block number"
     );
 
-    let swc = StorageWithChainData::new(
-        storage.clone(),
-        Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    );
+    let swc = StorageWithChainData::new(storage.clone(), create_peers());
     let rpc = BlockFilterRpcImpl { swc };
 
     // test get_cells rpc after rollback
@@ -1009,10 +1008,7 @@ fn rpc() {
 #[test]
 fn get_cells_capacity_bug() {
     let storage = new_storage("get_cells_capacity_bug");
-    let swc = StorageWithChainData::new(
-        storage.clone(),
-        Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    );
+    let swc = StorageWithChainData::new(storage.clone(), create_peers());
     let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
@@ -1137,10 +1133,7 @@ fn get_cells_capacity_bug() {
 #[test]
 fn get_cells_after_rollback_bug() {
     let storage = new_storage("get_cells_after_rollback_bug");
-    let swc = StorageWithChainData::new(
-        storage.clone(),
-        Arc::new(Peers::new(RwLock::new(Vec::new()))),
-    );
+    let swc = StorageWithChainData::new(storage.clone(), create_peers());
     let rpc = BlockFilterRpcImpl { swc };
 
     // setup test data
@@ -1333,7 +1326,7 @@ fn get_cells_after_rollback_bug() {
 #[test]
 fn test_set_scripts_clear_matched_blocks() {
     let storage = new_storage("set-scripts-clear-matched-blocks");
-    let peers = Arc::new(Peers::new(RwLock::new(Vec::new())));
+    let peers = create_peers();
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
     let rpc = BlockFilterRpcImpl { swc };
 
@@ -1383,7 +1376,7 @@ fn test_set_scripts_clear_matched_blocks() {
 #[test]
 fn test_set_scripts_command() {
     let storage = new_storage("set-scripts-command");
-    let peers = Arc::new(Peers::new(RwLock::new(Vec::new())));
+    let peers = create_peers();
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
     let rpc = BlockFilterRpcImpl { swc };
 

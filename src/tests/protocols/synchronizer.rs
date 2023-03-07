@@ -8,7 +8,6 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::Peers,
     storage::{ScriptStatus, ScriptType},
     tests::{
         prelude::*,
@@ -48,7 +47,7 @@ async fn test_sync_add_block() {
     );
     let peer_index = PeerIndex::new(3);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         {
             let mut matched_blocks = peers.matched_blocks().write().unwrap();

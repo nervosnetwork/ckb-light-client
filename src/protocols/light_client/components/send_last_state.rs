@@ -42,12 +42,10 @@ impl<'a> SendLastStateProcess<'a> {
             trace!(
                 "peer {}: update last state from {} to {}",
                 self.peer_index,
-                prev_last_state.verifiable_header().header().number(),
-                last_state.verifiable_header().header().number()
+                prev_last_state,
+                last_state,
             );
-            if prev_last_state.verifiable_header().total_difficulty()
-                < last_state.verifiable_header().total_difficulty()
-            {
+            if prev_last_state.total_difficulty() < last_state.total_difficulty() {
                 if let Some(prove_state) = peer_state.get_prove_state() {
                     if prove_state.is_parent_of(&last_state) {
                         trace!("peer {}: new last state could be trusted", self.peer_index);

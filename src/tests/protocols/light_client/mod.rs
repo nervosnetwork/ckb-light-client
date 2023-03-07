@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
     core::{BlockNumber, EpochNumberWithFraction, HeaderBuilder},
@@ -10,9 +8,7 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{
-        light_client::constant::GET_IDLE_BLOCKS_TOKEN, PeerState, Peers, BAD_MESSAGE_BAN_TIME,
-    },
+    protocols::{light_client::constant::GET_IDLE_BLOCKS_TOKEN, PeerState, BAD_MESSAGE_BAN_TIME},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -29,7 +25,7 @@ async fn malformed_message() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
-    let peers = Arc::new(Peers::default());
+    let peers = chain.create_peers();
     let mut protocol = chain.create_light_client_protocol(peers);
 
     let peer_index = PeerIndex::new(3);
@@ -46,7 +42,7 @@ async fn malformed_message() {
 fn build_prove_request_content() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
 
-    let peers = Arc::new(Peers::default());
+    let peers = chain.create_peers();
     let protocol = chain.create_light_client_protocol(peers);
     let storage = chain.client_storage();
 
@@ -179,7 +175,7 @@ async fn test_light_client_get_idle_matched_blocks() {
         .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
     let tip_hash = tip_header.header().hash();
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers

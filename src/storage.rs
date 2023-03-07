@@ -10,7 +10,7 @@ use ckb_types::{
     bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        BlockNumber, HeaderView, TransactionInfo,
+        BlockNumber, BlockView, HeaderView, TransactionInfo,
     },
     packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
@@ -20,6 +20,7 @@ use ckb_types::{
 use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 
 use crate::error::Result;
+use crate::patches::{build_filter_data, calc_filter_hash, FilterDataProvider};
 use crate::protocols::Peers;
 
 pub const LAST_STATE_KEY: &str = "LAST_STATE";
@@ -28,6 +29,7 @@ const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";
 const MIN_FILTERED_BLOCK_NUMBER: &str = "MIN_FILTERED_NUMBER";
 const LAST_N_HEADERS_KEY: &str = "LAST_N_HEADERS";
+const MAX_CHECK_POINT_INDEX: &str = "MAX_CHECK_POINT_INDEX";
 
 pub struct ScriptStatus {
     pub script: Script,
@@ -51,6 +53,34 @@ impl Default for SetScriptsCommand {
 pub enum ScriptType {
     Lock,
     Type,
+}
+
+struct WrappedBlockView<'a> {
+    inner: &'a BlockView,
+    index: HashMap<Byte32, usize>,
+}
+
+impl<'a> WrappedBlockView<'a> {
+    fn new(inner: &'a BlockView) -> Self {
+        let index = inner
+            .transactions()
+            .into_iter()
+            .enumerate()
+            .map(|(index, tx)| (tx.hash(), index))
+            .collect();
+        Self { inner, index }
+    }
+}
+
+impl<'a> FilterDataProvider for WrappedBlockView<'a> {
+    fn cell(&self, out_point: &OutPoint) -> Option<CellOutput> {
+        self.index.get(&out_point.tx_hash()).and_then(|tx_index| {
+            self.inner
+                .transactions()
+                .get(*tx_index)
+                .and_then(|tx| tx.outputs().get(out_point.index().unpack()))
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -128,6 +158,20 @@ impl Storage {
                 .expect("batch put should be ok");
             batch.commit().expect("batch commit should be ok");
             self.update_last_state(&U256::zero(), &block.header(), &[]);
+            let genesis_block_filter_hash: Byte32 = {
+                let block_view = block.into_view();
+                let provider = WrappedBlockView::new(&block_view);
+                let parent_block_filter_hash = Byte32::zero();
+                let (genesis_block_filter_vec, missing_out_points) =
+                    build_filter_data(provider, &block_view.transactions());
+                if !missing_out_points.is_empty() {
+                    panic!("Genesis block shouldn't missing any out points.");
+                }
+                let genesis_block_filter_data = genesis_block_filter_vec.pack();
+                calc_filter_hash(&parent_block_filter_hash, &genesis_block_filter_data).pack()
+            };
+            self.update_max_check_point_index(0);
+            self.update_check_points(0, &[genesis_block_filter_hash]);
             self.update_min_filtered_block_number(0);
         }
     }
@@ -515,6 +559,57 @@ impl Storage {
         self.db
             .put(key, value)
             .expect("db put min filtered block number should be ok");
+    }
+
+    pub fn get_last_check_point(&self) -> (CpIndex, Byte32) {
+        let index = self.get_max_check_point_index();
+        let hash = self
+            .get_check_points(index, 1)
+            .get(0)
+            .cloned()
+            .expect("db get last check point should be ok");
+        (index, hash)
+    }
+
+    pub fn get_max_check_point_index(&self) -> CpIndex {
+        let key = Key::Meta(MAX_CHECK_POINT_INDEX).into_vec();
+        self.db
+            .get_pinned(&key)
+            .expect("db get max check point index should be ok")
+            .map(|data| CpIndex::from_be_bytes(data.as_ref().try_into().unwrap()))
+            .expect("db get max check point index should be ok")
+    }
+
+    pub fn update_max_check_point_index(&self, index: CpIndex) {
+        let key = Key::Meta(MAX_CHECK_POINT_INDEX).into_vec();
+        let value = index.to_be_bytes();
+        self.db
+            .put(key, value)
+            .expect("db put max check point index should be ok");
+    }
+
+    pub fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
+        let start_key = Key::CheckPointIndex(start_index).into_vec();
+        let key_prefix = [KeyPrefix::CheckPointIndex as u8];
+        let mode = IteratorMode::From(start_key.as_ref(), Direction::Forward);
+        self.db
+            .iterator(mode)
+            .take_while(|(key, _value)| key.starts_with(&key_prefix))
+            .take(limit)
+            .map(|(_key, value)| Byte32::from_slice(&value).expect("stored block filter hash"))
+            .collect()
+    }
+
+    pub fn update_check_points(&self, start_index: CpIndex, check_points: &[Byte32]) {
+        let mut index = start_index;
+        let mut batch = self.batch();
+        for cp in check_points {
+            let key = Key::CheckPointIndex(index).into_vec();
+            let value = Value::BlockFilterHash(cp);
+            batch.put_kv(key, value).expect("batch put should be ok");
+            index += 1;
+        }
+        batch.commit().expect("batch commit should be ok");
     }
 
     pub fn update_block_number(&self, block_number: BlockNumber) {
@@ -1084,6 +1179,7 @@ impl Batch {
 }
 
 pub type TxIndex = u32;
+pub type CpIndex = u32;
 pub type OutputIndex = u32;
 pub type CellIndex = u32;
 pub enum CellType {
@@ -1102,6 +1198,7 @@ pub enum CellType {
 /// | 128          | TxTypeScript       | TxHash                   |
 /// | 160          | BlockHash          | Header                   |
 /// | 192          | BlockNumber        | BlockHash                |
+/// | 208          | CheckPointIndex    | BlockFilterHash          |
 /// | 224          | Meta               | Meta                     |
 /// +--------------+--------------------+--------------------------+
 ///
@@ -1113,6 +1210,8 @@ pub enum Key<'a> {
     TxTypeScript(&'a Script, BlockNumber, TxIndex, CellIndex, CellType),
     BlockHash(&'a Byte32),
     BlockNumber(BlockNumber),
+    // The index number for check points.
+    CheckPointIndex(CpIndex),
     Meta(&'a str),
 }
 
@@ -1121,6 +1220,7 @@ pub enum Value<'a> {
     TxHash(&'a Byte32),
     Header(&'a Header),
     BlockHash(&'a Byte32),
+    BlockFilterHash(&'a Byte32),
     Meta(Vec<u8>),
 }
 
@@ -1133,6 +1233,7 @@ pub enum KeyPrefix {
     TxTypeScript = 128,
     BlockHash = 160,
     BlockNumber = 192,
+    CheckPointIndex = 208,
     Meta = 224,
 }
 
@@ -1183,6 +1284,10 @@ impl<'a> From<Key<'a>> for Vec<u8> {
                 encoded.push(KeyPrefix::BlockNumber as u8);
                 encoded.extend_from_slice(&block_number.to_be_bytes());
             }
+            Key::CheckPointIndex(index) => {
+                encoded.push(KeyPrefix::CheckPointIndex as u8);
+                encoded.extend_from_slice(&index.to_be_bytes());
+            }
             Key::Meta(meta_key) => {
                 encoded.push(KeyPrefix::Meta as u8);
                 encoded.extend_from_slice(meta_key.as_bytes());
@@ -1205,6 +1310,7 @@ impl<'a> From<Value<'a>> for Vec<u8> {
             Value::TxHash(tx_hash) => tx_hash.as_slice().into(),
             Value::Header(header) => header.as_slice().into(),
             Value::BlockHash(block_hash) => block_hash.as_slice().into(),
+            Value::BlockFilterHash(block_filter_hash) => block_filter_hash.as_slice().into(),
             Value::Meta(meta_value) => meta_value,
         }
     }

@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
     core::{EpochNumberWithFraction, HeaderBuilder},
@@ -9,7 +7,7 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{LastState, Peers, ProveRequest, ProveState, StatusCode},
+    protocols::{LastState, ProveRequest, ProveState, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -21,7 +19,7 @@ async fn peer_state_is_not_found() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
-    let peers = Arc::new(Peers::default());
+    let peers = chain.create_peers();
     let mut protocol = chain.create_light_client_protocol(peers);
 
     let data = {
@@ -45,7 +43,7 @@ async fn invalid_nonce() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -72,7 +70,7 @@ async fn invalid_chain_root() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -108,7 +106,7 @@ async fn initialize_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -169,7 +167,7 @@ async fn update_to_continuous_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -268,7 +266,7 @@ async fn update_to_noncontinuous_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -367,7 +365,7 @@ async fn update_to_continuous_but_forked_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -493,7 +491,7 @@ async fn update_to_proved_last_state() {
     let peer_index = PeerIndex::new(1);
     let peer_index_proved = PeerIndex::new(2);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.add_peer(peer_index_proved);
         peers

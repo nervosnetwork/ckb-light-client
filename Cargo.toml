@@ -22,6 +22,7 @@ ckb-traits        = "0.108.0"
 ckb-resource      = "0.108.0"
 ckb-verification  = "0.108.0"
 ckb-systemtime    = "0.108.0"
+ckb-hash          = "0.108.0"
 ckb-merkle-mountain-range = "0.5.1"
 golomb-coded-set = "0.2.0"
 rocksdb = { package = "ckb-rocksdb", version ="=0.19.0", features = ["snappy"], default-features = false }

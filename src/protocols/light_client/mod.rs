@@ -19,7 +19,7 @@ use ckb_types::{
 };
 
 use ckb_systemtime::unix_time_as_millis;
-use log::{debug, error, info, trace, warn};
+use log::{debug, error, info, log_enabled, trace, warn, Level};
 
 mod components;
 pub mod constant;
@@ -126,30 +126,7 @@ impl CKBProtocolHandler for LightClientProtocol {
 
         let item_name = msg.item_name();
         let status = self.try_process(nc.as_ref(), peer_index, msg);
-        if let Some(ban_time) = status.should_ban() {
-            error!(
-                "LightClient.received {} from {}, result {}, ban {:?}",
-                item_name, peer_index, status, ban_time
-            );
-            nc.ban_peer(peer_index, ban_time, status.to_string());
-        } else if status.should_warn() {
-            warn!(
-                "LightClient.received {} from {}, result {}",
-                item_name, peer_index, status
-            );
-        } else if !status.is_ok() {
-            debug!(
-                "LightClient.received {} from {}, result {}",
-                item_name, peer_index, status
-            );
-        } else {
-            trace!(
-                "LightClient.received {} from {}, result {}",
-                item_name,
-                peer_index,
-                status
-            );
-        }
+        status.process(nc, peer_index, "LightClient", item_name);
     }
 
     async fn notify(&mut self, nc: Arc<dyn CKBProtocolContext + Sync>, token: u64) {
@@ -220,7 +197,7 @@ impl LightClientProtocol {
             .expect("checked: should have state");
 
         if let Some(last_state) = peer_state.get_last_state() {
-            let last_header = last_state.verifiable_header();
+            let last_header = last_state.as_ref();
 
             let is_proved = peer_state
                 .get_prove_state()
@@ -543,6 +520,174 @@ impl LightClientProtocol {
                     index, err
                 );
             }
+        }
+        self.finalize_check_points(nc);
+    }
+
+    fn finalize_check_points(&mut self, nc: &dyn CKBProtocolContext) {
+        let peers = self.peers();
+        let required_peers_count = peers.required_peers_count();
+        let mut peers_with_data = peers.get_all_proved_check_points();
+        if log_enabled!(Level::Trace) {
+            for (peer_index, (start_cpindex, check_points)) in peers_with_data.iter() {
+                trace!(
+                    "check points for peer {} in [{},{}]",
+                    peer_index,
+                    start_cpindex,
+                    start_cpindex + check_points.len() as u32 - 1,
+                );
+            }
+        }
+
+        if peers_with_data.len() < required_peers_count {
+            debug!(
+                "no enough peers for finalizing check points, \
+                requires {} but got {}",
+                required_peers_count,
+                peers_with_data.len()
+            );
+            return;
+        }
+        trace!(
+            "requires {} peers for finalizing check points and got {}",
+            required_peers_count,
+            peers_with_data.len()
+        );
+        let (last_cpindex, last_check_point) = self.storage.get_last_check_point();
+        trace!(
+            "finalized check point is {}, {:#x}",
+            last_cpindex,
+            last_check_point
+        );
+        // Clean finalized check points for new proved peers.
+        {
+            let mut peers_should_be_skipped = Vec::new();
+            for (peer_index, (start_cpindex, check_points)) in peers_with_data.iter_mut() {
+                if *start_cpindex > last_cpindex {
+                    // Impossible, in fact.
+                    error!(
+                        "peer {} will be banned \
+                        since start check point {} is later than finalized {}",
+                        peer_index, start_cpindex, last_cpindex
+                    );
+                    peers_should_be_skipped.push((*peer_index, true));
+                    continue;
+                }
+                let index = (last_cpindex - *start_cpindex) as usize;
+                if index >= check_points.len() {
+                    peers_should_be_skipped.push((*peer_index, false));
+                    continue;
+                }
+                if check_points[index] != last_check_point {
+                    info!(
+                        "peer {} will be banned \
+                        since its {}-th check point is {:#x} but finalized is {:#x}",
+                        peer_index, last_cpindex, check_points[index], last_check_point
+                    );
+                    peers_should_be_skipped.push((*peer_index, true));
+                    continue;
+                }
+                if index > 0 {
+                    check_points.drain(..index);
+                    *start_cpindex = last_cpindex;
+                    peers.remove_first_n_check_points(*peer_index, index);
+                    trace!(
+                        "peer {} remove first {} check points, \
+                        new start check point is {}, {:#x}",
+                        peer_index,
+                        index,
+                        *start_cpindex,
+                        check_points[0]
+                    );
+                }
+            }
+            for (peer_index, should_ban) in peers_should_be_skipped {
+                if should_ban {
+                    nc.ban_peer(
+                        peer_index,
+                        BAD_MESSAGE_BAN_TIME,
+                        String::from("incorrect check points"),
+                    );
+                }
+                peers_with_data.remove(&peer_index);
+            }
+        }
+        if peers_with_data.len() < required_peers_count {
+            trace!(
+                "no enough peers for finalizing check points after cleaning, \
+                requires {} but got {}",
+                required_peers_count,
+                peers_with_data.len()
+            );
+            return;
+        }
+        // Find a new check point to finalized.
+        let check_point_opt = {
+            let length_max = {
+                let mut check_points_sizes = peers_with_data
+                    .values()
+                    .map(|(_cpindex, check_points)| check_points.len())
+                    .collect::<Vec<_>>();
+                check_points_sizes.sort();
+                check_points_sizes[required_peers_count - 1]
+            };
+            trace!(
+                "new last check point will be less than or equal to {}",
+                last_cpindex + length_max as u32 - 1
+            );
+            let mut index = 1;
+            let mut check_point_opt = None;
+            // Q. Why don't check from bigger to smaller?
+            // A. We have to make sure if all check points are matched.
+            //    To avoid that a bad peer sends us only start checkpoints and last points are correct.
+            while index < length_max {
+                let map = peers_with_data
+                    .values()
+                    .map(|(_cpindex, check_points)| check_points.get(index).cloned())
+                    .fold(HashMap::new(), |mut map, cp_opt| {
+                        if let Some(cp) = cp_opt {
+                            map.entry(cp).and_modify(|count| *count += 1).or_insert(1);
+                        }
+                        map
+                    });
+                let count_max = map.values().max().cloned().unwrap_or(0);
+                if count_max >= required_peers_count {
+                    let mut cp_opt = None;
+                    for (cp, count) in map {
+                        if count == count_max {
+                            cp_opt = Some(cp);
+                            break;
+                        }
+                    }
+                    let cp = cp_opt.expect("checked: must be found");
+                    if count_max != peers_with_data.len() {
+                        peers_with_data.retain(|_, (_, check_points)| {
+                            check_points
+                                .get(index)
+                                .map(|tmp| *tmp == cp)
+                                .unwrap_or(false)
+                        });
+                    }
+                    check_point_opt = Some((index, cp));
+                } else {
+                    break;
+                }
+                index += 1;
+            }
+            check_point_opt
+        };
+        if let Some((index, check_point)) = check_point_opt {
+            let new_last_cpindex = last_cpindex + index as u32;
+            info!(
+                "finalize {} new check points, stop at index {}, value {:#x}",
+                index, new_last_cpindex, check_point
+            );
+            let (_, check_points) = peers_with_data.into_values().next().expect("always exists");
+            self.storage
+                .update_check_points(last_cpindex + 1, &check_points[1..=index]);
+            self.storage.update_max_check_point_index(new_last_cpindex);
+        } else {
+            info!("no check point is found which could be finalized");
         }
     }
 

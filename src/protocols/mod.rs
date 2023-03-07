@@ -31,3 +31,5 @@ pub const LAST_N_BLOCKS: BlockNumber = 100;
 pub const GET_BLOCKS_PROOF_LIMIT: usize = 1000;
 // Copy from ckb/util/light-client-protocol-server
 pub const GET_TRANSACTIONS_PROOF_LIMIT: usize = 1000;
+// Copy from ckb/sync
+pub const CHECK_POINT_INTERVAL: BlockNumber = 2000;

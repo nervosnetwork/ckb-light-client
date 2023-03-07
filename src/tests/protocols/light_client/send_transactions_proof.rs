@@ -10,7 +10,7 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{light_client::constant::FETCH_HEADER_TX_TOKEN, FetchInfo, Peers, StatusCode},
+    protocols::{light_client::constant::FETCH_HEADER_TX_TOKEN, FetchInfo, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -109,7 +109,7 @@ async fn test_send_txs_proof_ok() {
     };
 
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .tx_hashes(
@@ -246,7 +246,7 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
     };
 
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .tx_hashes(tx_hashes.clone().pack())
@@ -376,7 +376,7 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
     };
 
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .tx_hashes(tx_hashes.clone().pack())
@@ -431,7 +431,7 @@ async fn test_send_txs_proof_is_empty() {
     };
 
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .build();
@@ -459,7 +459,7 @@ async fn test_send_headers_txs_request() {
     let peer_index = PeerIndex::new(3);
 
     let peers = {
-        let peers = Arc::new(Peers::new(Default::default()));
+        let peers = chain.create_peers();
         peers.fetching_headers().insert(
             h256!("0xaa22").pack(),
             FetchInfo::new(111, 3344, false, false),

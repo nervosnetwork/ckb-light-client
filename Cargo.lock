@@ -727,6 +727,7 @@ dependencies = [
  "ckb-chain-spec",
  "ckb-constant",
  "ckb-error",
+ "ckb-hash",
  "ckb-jsonrpc-types",
  "ckb-launcher",
  "ckb-merkle-mountain-range",

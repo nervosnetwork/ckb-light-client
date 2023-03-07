@@ -18,6 +18,7 @@ use ckb_types::{
 use crate::{
     protocols::{
         FilterProtocol, LastState, LightClientProtocol, Peers, ProveRequest, SyncProtocol,
+        CHECK_POINT_INTERVAL,
     },
     storage::Storage,
     tests::{ALWAYS_SUCCESS_BIN, ALWAYS_SUCCESS_SCRIPT},
@@ -69,6 +70,16 @@ pub(crate) trait ChainExt {
     fn client_storage(&self) -> &Storage;
 
     fn consensus(&self) -> &Consensus;
+
+    fn create_peers(&self) -> Arc<Peers> {
+        let max_outbound_peers = 1;
+        let peers = Peers::new(
+            max_outbound_peers,
+            CHECK_POINT_INTERVAL,
+            self.client_storage().get_last_check_point(),
+        );
+        Arc::new(peers)
+    }
 
     fn create_light_client_protocol(&self, peers: Arc<Peers>) -> LightClientProtocol {
         let storage = self.client_storage().to_owned();

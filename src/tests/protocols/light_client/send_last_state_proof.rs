@@ -8,7 +8,7 @@ use ckb_types::{
 use log::debug;
 
 use crate::{
-    protocols::{light_client::prelude::*, LastState, Peers, ProveRequest, ProveState, StatusCode},
+    protocols::{light_client::prelude::*, LastState, ProveRequest, ProveState, StatusCode},
     tests::{
         prelude::*,
         utils::{setup, MockChain, MockNetworkContext},
@@ -34,7 +34,7 @@ async fn peer_state_is_not_found() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
-    let peers = Arc::new(Peers::default());
+    let peers = chain.create_peers();
     let mut protocol = chain.create_light_client_protocol(peers);
 
     let data = {
@@ -58,7 +58,7 @@ async fn no_matched_request() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -90,7 +90,7 @@ async fn update_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -174,7 +174,7 @@ async fn unknown_proof() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -247,7 +247,7 @@ async fn headers_should_be_sorted() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -333,7 +333,7 @@ async fn valid_proof_with_boundary_not_in_last_n() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -428,7 +428,7 @@ async fn valid_proof_with_boundary_in_last_n() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -523,7 +523,7 @@ async fn valid_proof_with_no_matched_sample() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -652,7 +652,7 @@ async fn valid_proof_with_prove_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -782,7 +782,7 @@ async fn valid_proof_with_reorg_blocks() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -925,7 +925,7 @@ async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -1034,7 +1034,7 @@ async fn invalid_parent_chain_root_for_non_genesis_blocks() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -1331,7 +1331,7 @@ async fn test_send_last_state_proof(param: TestParameter) {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -1690,7 +1690,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
     let peer_index = PeerIndex::new(1);
     let downloading_matched_block = H256(rand::random());
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers

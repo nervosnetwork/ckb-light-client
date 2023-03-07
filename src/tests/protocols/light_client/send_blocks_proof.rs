@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
     core::BlockNumber, h256, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
 };
 
 use crate::{
-    protocols::{LastState, Peers, ProveRequest, ProveState, StatusCode},
+    protocols::{LastState, ProveRequest, ProveState, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -18,7 +16,7 @@ async fn peer_state_is_not_found() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
-    let peers = Arc::new(Peers::default());
+    let peers = chain.create_peers();
     let mut protocol = chain.create_light_client_protocol(peers);
 
     let data = {
@@ -42,7 +40,7 @@ async fn no_matched_request() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -69,7 +67,7 @@ async fn last_state_is_changed() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -162,7 +160,7 @@ async fn unexpected_response() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -268,7 +266,7 @@ async fn get_blocks_with_chunks() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
@@ -618,7 +616,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
         peers
