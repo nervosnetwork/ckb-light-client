@@ -1609,9 +1609,9 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                let require_update = item.value().state.require_new_last_state(before_ts);
-                if require_update {
-                    Some(*item.key())
+                let (peer_index, peer) = item.pair();
+                if peer.state.require_new_last_state(before_ts) {
+                    Some(*peer_index)
                 } else {
                     None
                 }
@@ -1623,9 +1623,9 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                let require_update = item.value().state.require_new_last_state_proof();
-                if require_update {
-                    Some(*item.key())
+                let (peer_index, peer) = item.pair();
+                if peer.state.require_new_last_state_proof() {
+                    Some(*peer_index)
                 } else {
                     None
                 }
@@ -1639,12 +1639,13 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                item.value().state.get_prove_state().and_then(|state| {
+                let (peer_index, peer) = item.pair();
+                peer.state.get_prove_state().and_then(|state| {
                     let proved_number = state.get_last_header().header().number();
                     let check_points = &item.value().check_points;
                     if check_points.if_require_next_check_point(proved_number) {
                         let next_check_point_number = check_points.number_of_next_check_point();
-                        Some((*item.key(), next_check_point_number))
+                        Some((*peer_index, next_check_point_number))
                     } else {
                         None
                     }
@@ -1660,7 +1661,8 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                item.value().state.get_prove_state().and_then(|state| {
+                let (peer_index, peer) = item.pair();
+                peer.state.get_prove_state().and_then(|state| {
                     let latest_block_filter_hashes = &item.value().latest_block_filter_hashes;
                     let check_point_number = latest_block_filter_hashes.get_check_point_number();
                     let finalized_check_point_number =
@@ -1669,7 +1671,7 @@ impl Peers {
                         let proved_number = state.get_last_header().header().number();
                         let last_number = latest_block_filter_hashes.get_last_number();
                         if last_number < proved_number {
-                            Some((*item.key(), last_number + 1))
+                            Some((*peer_index, last_number + 1))
                         } else {
                             None
                         }
@@ -1691,21 +1693,21 @@ impl Peers {
             .inner
             .iter()
             .filter_map(|item| {
-                item.value().state.get_prove_state().and_then(|_| {
+                let (peer_index, peer) = item.pair();
+                peer.state.get_prove_state().and_then(|_| {
                     let latest_block_filter_hashes = &item.value().latest_block_filter_hashes;
                     let check_point_number = latest_block_filter_hashes.get_check_point_number();
                     if finalized_check_point_number == check_point_number {
-                        Some((*item.key(), latest_block_filter_hashes.get_hashes()))
+                        Some((*peer_index, latest_block_filter_hashes.get_hashes()))
                     } else {
                         None
                     }
                 })
             })
             .collect::<HashMap<_, _>>();
-        let mut hashes = Vec::new();
         let required_peers_count = self.required_peers_count();
         if peers_with_data.len() < required_peers_count {
-            return hashes;
+            return Vec::new();
         }
         let length_max = {
             let mut hashes_sizes = peers_with_data
@@ -1715,39 +1717,40 @@ impl Peers {
             hashes_sizes.sort();
             hashes_sizes[required_peers_count - 1]
         };
-        let mut index = 0;
-        while index < length_max {
+        let mut result = Vec::new();
+        for index in 0..length_max {
             let map = peers_with_data
                 .values()
-                .map(|hashes| hashes.get(index).cloned())
+                .map(|hashes| hashes.get(index))
                 .fold(HashMap::new(), |mut map, hash_opt| {
                     if let Some(h) = hash_opt {
-                        map.entry(h).and_modify(|count| *count += 1).or_insert(1);
+                        *map.entry(h.clone()).or_default() += 1;
                     }
                     map
                 });
             let count_max = map.values().max().cloned().unwrap_or(0);
             if count_max >= required_peers_count {
-                let mut hash_opt = None;
-                for (hash, count) in map {
-                    if count == count_max {
-                        hash_opt = Some(hash);
-                        break;
-                    }
-                }
+                let hash_opt =
+                    map.into_iter().find_map(
+                        |(hash, count)| {
+                            if count == count_max {
+                                Some(hash)
+                            } else {
+                                None
+                            }
+                        },
+                    );
                 let hash = hash_opt.expect("checked: must be found");
                 if count_max != peers_with_data.len() {
-                    peers_with_data.retain(|_, hashes| {
-                        hashes.get(index).map(|tmp| *tmp == hash).unwrap_or(false)
-                    });
+                    peers_with_data
+                        .retain(|_, hashes| matches!(hashes.get(index), Some(tmp) if *tmp == hash));
                 }
-                hashes.push(hash);
+                result.push(hash);
             } else {
                 break;
             }
-            index += 1;
         }
-        hashes
+        result
     }
 
     pub(crate) fn could_request_more_block_filters(
@@ -1780,12 +1783,12 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                let peer = &item.value();
+                let (peer_index, peer) = item.pair();
                 peer.state
                     .when_sent_request()
                     .and_then(|when_sent| {
                         if now > when_sent + MESSAGE_TIMEOUT {
-                            Some(*item.key())
+                            Some(*peer_index)
                         } else {
                             None
                         }
@@ -1793,7 +1796,7 @@ impl Peers {
                     .or_else(|| {
                         peer.get_blocks_proof_request().and_then(|req| {
                             if now > req.when_sent + MESSAGE_TIMEOUT {
-                                Some(*item.key())
+                                Some(*peer_index)
                             } else {
                                 None
                             }
@@ -1802,7 +1805,7 @@ impl Peers {
                     .or_else(|| {
                         peer.get_blocks_request().and_then(|req| {
                             if now > req.when_sent + MESSAGE_TIMEOUT {
-                                Some(*item.key())
+                                Some(*peer_index)
                             } else {
                                 None
                             }
@@ -1811,7 +1814,7 @@ impl Peers {
                     .or_else(|| {
                         peer.get_txs_proof_request().and_then(|req| {
                             if now > req.when_sent + MESSAGE_TIMEOUT {
-                                Some(*item.key())
+                                Some(*peer_index)
                             } else {
                                 None
                             }
@@ -1827,15 +1830,11 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                item.value().state.get_prove_state().map(|_| {
-                    let check_points = &item.value().check_points;
-                    (
-                        *item.key(),
-                        (
-                            check_points.get_start_index(),
-                            check_points.get_check_points(),
-                        ),
-                    )
+                let (peer_index, peer) = item.pair();
+                peer.state.get_prove_state().map(|_| {
+                    let start_index = peer.check_points.get_start_index();
+                    let check_points = peer.check_points.get_check_points();
+                    (*peer_index, (start_index, check_points))
                 })
             })
             .collect()
@@ -1845,10 +1844,10 @@ impl Peers {
         self.inner
             .iter()
             .filter_map(|item| {
-                item.value()
-                    .state
+                let (peer_index, peer) = item.pair();
+                peer.state
                     .get_prove_state()
-                    .map(|state| (*item.key(), state.to_owned()))
+                    .map(|state| (*peer_index, state.to_owned()))
             })
             .collect()
     }
@@ -1858,16 +1857,14 @@ impl Peers {
         header: &VerifiableHeader,
     ) -> Option<(PeerIndex, ProveState)> {
         self.inner.iter().find_map(|item| {
-            item.value()
-                .state
-                .get_prove_state()
-                .and_then(|prove_state| {
-                    if prove_state.is_same_as(header) {
-                        Some((*item.key(), prove_state.clone()))
-                    } else {
-                        None
-                    }
-                })
+            let (peer_index, peer) = item.pair();
+            peer.state.get_prove_state().and_then(|prove_state| {
+                if prove_state.is_same_as(header) {
+                    Some((*peer_index, prove_state.clone()))
+                } else {
+                    None
+                }
+            })
         })
     }
 

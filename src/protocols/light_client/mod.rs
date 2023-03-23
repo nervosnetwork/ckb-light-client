@@ -622,60 +622,56 @@ impl LightClientProtocol {
             return;
         }
         // Find a new check point to finalized.
-        let check_point_opt = {
-            let length_max = {
-                let mut check_points_sizes = peers_with_data
-                    .values()
-                    .map(|(_cpindex, check_points)| check_points.len())
-                    .collect::<Vec<_>>();
-                check_points_sizes.sort();
-                check_points_sizes[required_peers_count - 1]
-            };
-            trace!(
-                "new last check point will be less than or equal to {}",
-                last_cpindex + length_max as u32 - 1
-            );
-            let mut index = 1;
-            let mut check_point_opt = None;
-            // Q. Why don't check from bigger to smaller?
-            // A. We have to make sure if all check points are matched.
-            //    To avoid that a bad peer sends us only start checkpoints and last points are correct.
-            while index < length_max {
-                let map = peers_with_data
-                    .values()
-                    .map(|(_cpindex, check_points)| check_points.get(index).cloned())
-                    .fold(HashMap::new(), |mut map, cp_opt| {
-                        if let Some(cp) = cp_opt {
-                            map.entry(cp).and_modify(|count| *count += 1).or_insert(1);
-                        }
-                        map
-                    });
-                let count_max = map.values().max().cloned().unwrap_or(0);
-                if count_max >= required_peers_count {
-                    let mut cp_opt = None;
-                    for (cp, count) in map {
-                        if count == count_max {
-                            cp_opt = Some(cp);
-                            break;
-                        }
-                    }
-                    let cp = cp_opt.expect("checked: must be found");
-                    if count_max != peers_with_data.len() {
-                        peers_with_data.retain(|_, (_, check_points)| {
-                            check_points
-                                .get(index)
-                                .map(|tmp| *tmp == cp)
-                                .unwrap_or(false)
+        let check_point_opt =
+            {
+                let length_max = {
+                    let mut check_points_sizes = peers_with_data
+                        .values()
+                        .map(|(_cpindex, check_points)| check_points.len())
+                        .collect::<Vec<_>>();
+                    check_points_sizes.sort();
+                    check_points_sizes[required_peers_count - 1]
+                };
+                trace!(
+                    "new last check point will be less than or equal to {}",
+                    last_cpindex + length_max as u32 - 1
+                );
+                let mut check_point_opt = None;
+                // Q. Why don't check from bigger to smaller?
+                // A. We have to make sure if all check points are matched.
+                //    To avoid that a bad peer sends us only start checkpoints and last points are correct.
+                for index in 1..length_max {
+                    let map = peers_with_data
+                        .values()
+                        .map(|(_cpindex, check_points)| check_points.get(index))
+                        .fold(HashMap::new(), |mut map, cp_opt| {
+                            if let Some(cp) = cp_opt {
+                                *map.entry(cp.clone()).or_default() += 1;
+                            }
+                            map
                         });
+                    let count_max = map.values().max().cloned().unwrap_or(0);
+                    if count_max >= required_peers_count {
+                        let cp_opt = map.into_iter().find_map(|(cp, count)| {
+                            if count == count_max {
+                                Some(cp)
+                            } else {
+                                None
+                            }
+                        });
+                        let cp = cp_opt.expect("checked: must be found");
+                        if count_max != peers_with_data.len() {
+                            peers_with_data.retain(|_, (_, check_points)| {
+                            matches!(check_points.get(index), Some(tmp) if *tmp == cp)
+                        });
+                        }
+                        check_point_opt = Some((index, cp));
+                    } else {
+                        break;
                     }
-                    check_point_opt = Some((index, cp));
-                } else {
-                    break;
                 }
-                index += 1;
-            }
-            check_point_opt
-        };
+                check_point_opt
+            };
         if let Some((index, check_point)) = check_point_opt {
             let new_last_cpindex = last_cpindex + index as u32;
             info!(
