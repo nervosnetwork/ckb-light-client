@@ -5,7 +5,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  RUST_TOOLCHAIN: 1.66.0
+  RUST_TOOLCHAIN: 1.67.1
 jobs:
   release:
     name: Build & Release
