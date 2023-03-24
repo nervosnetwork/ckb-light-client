@@ -1,5 +1,7 @@
-#![allow(dead_code)]
-use std::{fmt, time::Duration};
+use std::{fmt, sync::Arc, time::Duration};
+
+use ckb_network::{CKBProtocolContext, PeerIndex};
+use log::{debug, error, trace, warn};
 
 use super::BAD_MESSAGE_BAN_TIME;
 
@@ -14,6 +16,7 @@ use super::BAD_MESSAGE_BAN_TIME;
 ///   - 5xx: Local errors - The client failed to process a response.
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum StatusCode {
     /// OK
     OK = 200,
@@ -25,10 +28,12 @@ pub enum StatusCode {
     /// Unexpected light-client protocol message.
     UnexpectedProtocolMessage = 401,
 
-    /// The peer state is not found.
-    PeerStateIsNotFound = 411,
+    /// The peer is not found.
+    PeerIsNotFound = 411,
     /// The last state sent from server is invalid.
     InvalidLastState = 412,
+    /// The peer state is not correct for transition.
+    IncorrectLastState = 413,
 
     /// Receives a response but the peer isn't waiting for a response.
     PeerIsNotOnProcess = 421,
@@ -55,10 +60,27 @@ pub enum StatusCode {
     /// Reorg headers for a last state proof is invalid.
     InvalidReorgHeaders = 452,
 
+    // Errors for block filter protocol.
+    /// Check points is empty.
+    CheckPointsIsEmpty = 471,
+    /// Check points is unaligned.
+    CheckPointsIsUnaligned = 472,
+    /// Check points is unexpected.
+    CheckPointsIsUnexpected = 473,
+    /// Block filter hashes is empty.
+    BlockFilterHashesIsEmpty = 481,
+    /// Block filter hashes is unexpected.
+    BlockFilterHashesIsUnexpected = 482,
+    /// Block filter data is unexpected.
+    BlockFilterDataIsUnexpected = 483,
+
     /// Throws an internal error.
     InternalError = 500,
     /// Throws an error from the network.
     Network = 501,
+
+    /// Throws an error that could be ignored.
+    Ignore = 599,
 }
 
 /// Process message status.
@@ -128,12 +150,13 @@ impl Status {
 
     /// Whether the code is `OK` or not.
     pub fn is_ok(&self) -> bool {
-        self.code == StatusCode::OK || self.code == StatusCode::RequireRecheck
+        let code = self.code();
+        code == StatusCode::OK || code == StatusCode::RequireRecheck
     }
 
     /// Whether the session should be banned.
     pub fn should_ban(&self) -> Option<Duration> {
-        let code = self.code as u16;
+        let code = self.code() as u16;
         if (400..500).contains(&code) {
             Some(BAD_MESSAGE_BAN_TIME)
         } else {
@@ -143,12 +166,46 @@ impl Status {
 
     /// Whether a warning log should be output.
     pub fn should_warn(&self) -> bool {
-        let code = self.code as u16;
+        let code = self.code() as u16;
         (500..600).contains(&code)
     }
 
     /// Returns the status code.
     pub fn code(&self) -> StatusCode {
         self.code
+    }
+
+    pub fn process(
+        &self,
+        nc: Arc<dyn CKBProtocolContext + Sync>,
+        index: PeerIndex,
+        protocol: &str,
+        message: &str,
+    ) {
+        if let Some(ban_time) = self.should_ban() {
+            error!(
+                "{}Protocol.received {} from {}, result {}, ban {:?}",
+                protocol, message, index, self, ban_time
+            );
+            nc.ban_peer(index, ban_time, self.to_string());
+        } else if self.should_warn() {
+            warn!(
+                "{}Protocol.received {} from {}, result {}",
+                protocol, message, index, self
+            );
+        } else if self.is_ok() {
+            trace!(
+                "{}Protocol.received {} from {}, result {}",
+                protocol,
+                message,
+                index,
+                self
+            );
+        } else {
+            debug!(
+                "{}Protocol.received {} from {}, result {}",
+                protocol, message, index, self
+            );
+        }
     }
 }

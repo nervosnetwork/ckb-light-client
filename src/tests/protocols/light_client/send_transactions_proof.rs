@@ -10,10 +10,7 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{
-        light_client::constant::FETCH_HEADER_TX_TOKEN, FetchInfo, LastState, Peers, ProveRequest,
-        ProveState, StatusCode,
-    },
+    protocols::{light_client::constant::FETCH_HEADER_TX_TOKEN, FetchInfo, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -112,13 +109,7 @@ async fn test_send_txs_proof_ok() {
     };
 
     let peers = {
-        let last_state = LastState::new(last_header.clone().into());
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
-        let peers = Arc::new(Peers::default());
-        peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .tx_hashes(
@@ -130,6 +121,10 @@ async fn test_send_txs_proof_ok() {
                     .pack(),
             )
             .build();
+        peers.add_peer(peer_index);
+        peers
+            .mock_prove_state(peer_index, last_header.into())
+            .unwrap();
         peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
         for tx_hash in &missing_tx_hashes {
             peers
@@ -251,17 +246,15 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
     };
 
     let peers = {
-        let last_state = LastState::new(last_header.clone().into());
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
-        let peers = Arc::new(Peers::default());
-        peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .tx_hashes(tx_hashes.clone().pack())
             .build();
+        peers.add_peer(peer_index);
+        peers
+            .mock_prove_state(peer_index, last_header.into())
+            .unwrap();
         peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
         peers
     };
@@ -383,17 +376,15 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
     };
 
     let peers = {
-        let last_state = LastState::new(last_header.clone().into());
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
-        let peers = Arc::new(Peers::default());
-        peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .tx_hashes(tx_hashes.clone().pack())
             .build();
+        peers.add_peer(peer_index);
+        peers
+            .mock_prove_state(peer_index, last_header.into())
+            .unwrap();
         peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
         peers
     };
@@ -440,16 +431,14 @@ async fn test_send_txs_proof_is_empty() {
     };
 
     let peers = {
-        let last_state = LastState::new(last_header.clone().into());
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
-        let peers = Arc::new(Peers::default());
-        peers.add_peer(peer_index);
-        peers.commit_prove_state(peer_index, prove_state);
+        let peers = chain.create_peers();
         let txs_proof_request = packed::GetTransactionsProof::new_builder()
             .last_hash(last_header.header().calc_header_hash())
             .build();
+        peers.add_peer(peer_index);
+        peers
+            .mock_prove_state(peer_index, last_header.into())
+            .unwrap();
         peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
         peers
     };
@@ -470,7 +459,7 @@ async fn test_send_headers_txs_request() {
     let peer_index = PeerIndex::new(3);
 
     let peers = {
-        let peers = Arc::new(Peers::new(Default::default()));
+        let peers = chain.create_peers();
         peers.fetching_headers().insert(
             h256!("0xaa22").pack(),
             FetchInfo::new(111, 3344, false, false),
@@ -486,19 +475,14 @@ async fn test_send_headers_txs_request() {
             .fetching_txs()
             .insert(h256!("0xbb33").pack(), FetchInfo::new(111, 0, false, false));
 
-        peers.add_peer(peer_index);
-
         let tip_header = VerifiableHeader::new(
             chain.client_storage().get_tip_header().into_view(),
             Default::default(),
             None,
             Default::default(),
         );
-        let last_state = LastState::new(tip_header);
-        let request = ProveRequest::new(last_state, Default::default());
-        let prove_state =
-            ProveState::new_from_request(request, Default::default(), Default::default());
-        peers.commit_prove_state(peer_index, prove_state);
+        peers.add_peer(peer_index);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
 
@@ -524,7 +508,7 @@ async fn test_send_headers_txs_request() {
             .first_sent()
             > 0
     );
-    let peer_state = peers.get_state(&peer_index).unwrap();
-    assert!(peer_state.get_blocks_proof_request().is_some());
-    assert!(peer_state.get_txs_proof_request().is_some());
+    let peer = peers.get_peer(&peer_index).unwrap();
+    assert!(peer.get_blocks_proof_request().is_some());
+    assert!(peer.get_txs_proof_request().is_some());
 }

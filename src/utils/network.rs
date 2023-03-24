@@ -17,12 +17,12 @@ pub(crate) fn prove_or_download_matched_blocks(
     let last_hash = best_tip.calc_header_hash();
 
     loop {
-        if let Some(peer) = best_peers
+        if let Some(peer_index) = best_peers
             .iter()
-            .filter(|peer| {
+            .filter(|peer_index| {
                 peers
-                    .get_state(peer)
-                    .map(|state| state.get_blocks_proof_request().is_none())
+                    .get_peer(peer_index)
+                    .map(|peer| peer.get_blocks_proof_request().is_none())
                     .unwrap_or(false)
             })
             .collect::<Vec<_>>()
@@ -34,7 +34,7 @@ pub(crate) fn prove_or_download_matched_blocks(
             if !blocks_to_prove.is_empty() {
                 debug!(
                     "send get blocks proof request to peer: {}, count={}",
-                    peer,
+                    peer_index,
                     blocks_to_prove.len()
                 );
                 let content = packed::GetBlocksProof::new_builder()
@@ -45,10 +45,12 @@ pub(crate) fn prove_or_download_matched_blocks(
                     .set(content.clone())
                     .build()
                     .as_bytes();
-                peers.update_blocks_proof_request(*peer, Some(content));
-                if let Err(err) =
-                    nc.send_message(SupportProtocols::LightClient.protocol_id(), *peer, message)
-                {
+                peers.update_blocks_proof_request(*peer_index, Some(content));
+                if let Err(err) = nc.send_message(
+                    SupportProtocols::LightClient.protocol_id(),
+                    *peer_index,
+                    message,
+                ) {
                     let error_message =
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     error!("{}", error_message);
@@ -63,12 +65,12 @@ pub(crate) fn prove_or_download_matched_blocks(
     }
 
     loop {
-        if let Some(peer) = best_peers
+        if let Some(peer_index) = best_peers
             .iter()
-            .filter(|peer| {
+            .filter(|peer_index| {
                 peers
-                    .get_state(peer)
-                    .map(|state| state.get_blocks_request().is_none())
+                    .get_peer(peer_index)
+                    .map(|peer| peer.get_blocks_request().is_none())
                     .unwrap_or(false)
             })
             .collect::<Vec<_>>()
@@ -80,10 +82,10 @@ pub(crate) fn prove_or_download_matched_blocks(
             if !blocks_to_download.is_empty() {
                 debug!(
                     "send get blocks request to peer: {}, count={}",
-                    peer,
+                    peer_index,
                     blocks_to_download.len()
                 );
-                peers.update_blocks_request(*peer, Some(blocks_to_download.clone()));
+                peers.update_blocks_request(*peer_index, Some(blocks_to_download.clone()));
                 let content = packed::GetBlocks::new_builder()
                     .block_hashes(blocks_to_download.pack())
                     .build();
@@ -92,7 +94,7 @@ pub(crate) fn prove_or_download_matched_blocks(
                     .build()
                     .as_bytes();
                 if let Err(err) =
-                    nc.send_message(SupportProtocols::Sync.protocol_id(), *peer, message)
+                    nc.send_message(SupportProtocols::Sync.protocol_id(), *peer_index, message)
                 {
                     let error_message = format!("nc.send_message SyncMessage, error: {:?}", err);
                     error!("{}", error_message);

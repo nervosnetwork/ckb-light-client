@@ -1,12 +1,10 @@
-use std::sync::Arc;
-
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
     core::BlockNumber, h256, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
 };
 
 use crate::{
-    protocols::{LastState, Peers, ProveRequest, ProveState, StatusCode},
+    protocols::{LastState, ProveRequest, ProveState, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -18,7 +16,7 @@ async fn peer_state_is_not_found() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
-    let peers = Arc::new(Peers::default());
+    let peers = chain.create_peers();
     let mut protocol = chain.create_light_client_protocol(peers);
 
     let data = {
@@ -32,7 +30,7 @@ async fn peer_state_is_not_found() {
     let peer_index = PeerIndex::new(1);
     protocol.received(nc.context(), peer_index, data).await;
 
-    assert!(nc.banned_since(peer_index, StatusCode::PeerStateIsNotFound));
+    assert!(nc.banned_since(peer_index, StatusCode::PeerIsNotFound));
 }
 
 #[tokio::test]
@@ -42,8 +40,9 @@ async fn no_matched_request() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -68,8 +67,9 @@ async fn last_state_is_changed() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -95,9 +95,6 @@ async fn last_state_is_changed() {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -114,11 +111,17 @@ async fn last_state_is_changed() {
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
@@ -145,10 +148,8 @@ async fn last_state_is_changed() {
 
         assert!(nc.not_banned(peer_index));
 
-        let peer_state = protocol
-            .get_peer_state(&peer_index)
-            .expect("has peer state");
-        assert!(peer_state.get_blocks_proof_request().is_none());
+        let peer = protocol.get_peer(&peer_index).expect("has peer");
+        assert!(peer.get_blocks_proof_request().is_none());
     }
 }
 
@@ -159,8 +160,9 @@ async fn unexpected_response() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -187,9 +189,6 @@ async fn unexpected_response() {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -206,11 +205,17 @@ async fn unexpected_response() {
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
@@ -261,8 +266,9 @@ async fn get_blocks_with_chunks() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -290,9 +296,6 @@ async fn get_blocks_with_chunks() {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -309,11 +312,17 @@ async fn get_blocks_with_chunks() {
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
@@ -383,10 +392,8 @@ async fn get_blocks_with_chunks() {
             .collect::<Vec<_>>();
         assert_eq!(actual_block_hashes.as_slice(), block_hashes.as_slice());
 
-        let peer_state = protocol
-            .get_peer_state(&peer_index)
-            .expect("has peer state");
-        assert!(peer_state.get_blocks_proof_request().is_none());
+        let peer = protocol.get_peer(&peer_index).expect("has peer");
+        assert!(peer.get_blocks_proof_request().is_none());
     }
 }
 
@@ -609,8 +616,9 @@ async fn test_send_blocks_proof(param: TestParameter) {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -634,9 +642,6 @@ async fn test_send_blocks_proof(param: TestParameter) {
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
             let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index, last_state.clone());
             ProveRequest::new(last_state, content)
         };
         let last_state = LastState::new(prove_request.get_last_header().to_owned());
@@ -657,11 +662,17 @@ async fn test_send_blocks_proof(param: TestParameter) {
             &param.block_numbers,
             &param.missing_block_hashes,
         );
-        protocol.peers().update_last_state(peer_index, last_state);
         protocol
             .peers()
-            .update_prove_request(peer_index, Some(prove_request));
-        protocol.commit_prove_state(peer_index, prove_state);
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
         protocol
             .peers()
             .update_blocks_proof_request(peer_index, Some(content));
@@ -725,10 +736,8 @@ async fn test_send_blocks_proof(param: TestParameter) {
                 assert_eq!(content.block_hashes().as_slice(), block_hashes.as_slice());
             }
 
-            let peer_state = protocol
-                .get_peer_state(&peer_index)
-                .expect("has peer state");
-            assert!(peer_state.get_blocks_proof_request().is_none());
+            let peer = protocol.get_peer(&peer_index).expect("has peer");
+            assert!(peer.get_blocks_proof_request().is_none());
         } else {
             if param.missing_block_hashes != param.returned_missing_block_hashes
                 || param.block_numbers != param.returned_headers

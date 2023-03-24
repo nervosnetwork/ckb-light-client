@@ -11,7 +11,7 @@ use super::{
 pub(crate) struct SendBlocksProofProcess<'a> {
     message: packed::SendBlocksProofReader<'a>,
     protocol: &'a mut LightClientProtocol,
-    peer: PeerIndex,
+    peer_index: PeerIndex,
     nc: &'a dyn CKBProtocolContext,
 }
 
@@ -19,13 +19,13 @@ impl<'a> SendBlocksProofProcess<'a> {
     pub(crate) fn new(
         message: packed::SendBlocksProofReader<'a>,
         protocol: &'a mut LightClientProtocol,
-        peer: PeerIndex,
+        peer_index: PeerIndex,
         nc: &'a dyn CKBProtocolContext,
     ) -> Self {
         Self {
             message,
             protocol,
-            peer,
+            peer_index,
             nc,
         }
     }
@@ -34,18 +34,17 @@ impl<'a> SendBlocksProofProcess<'a> {
         let status = self.execute_internally();
         self.protocol
             .peers()
-            .update_blocks_proof_request(self.peer, None);
+            .update_blocks_proof_request(self.peer_index, None);
         status
     }
 
     fn execute_internally(&self) -> Status {
-        let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
+        let peer = return_if_failed!(self.protocol.get_peer(&self.peer_index));
 
-        let original_request = if let Some(original_request) = peer_state.get_blocks_proof_request()
-        {
+        let original_request = if let Some(original_request) = peer.get_blocks_proof_request() {
             original_request
         } else {
-            error!("peer {} isn't waiting for a proof", self.peer);
+            error!("peer {} isn't waiting for a proof", self.peer_index);
             return StatusCode::PeerIsNotOnProcess.into();
         };
 
@@ -57,14 +56,19 @@ impl<'a> SendBlocksProofProcess<'a> {
                 && self.message.headers().is_empty()
                 && self.message.missing_block_hashes().is_empty()
             {
-                return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
+                return_if_failed!(self
+                    .protocol
+                    .process_last_state(self.peer_index, last_header));
                 self.protocol
                     .peers()
-                    .mark_fetching_headers_timeout(self.peer);
+                    .mark_fetching_headers_timeout(self.peer_index);
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.
-                error!("peer {} send a proof with different last state", self.peer);
+                error!(
+                    "peer {} send a proof with different last state",
+                    self.peer_index
+                );
                 return StatusCode::UnexpectedResponse.into();
             }
         }
@@ -88,7 +92,7 @@ impl<'a> SendBlocksProofProcess<'a> {
             .into_iter()
             .collect::<Vec<_>>();
         if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
-            error!("peer {} send an unknown proof", self.peer);
+            error!("peer {} send an unknown proof", self.peer_index);
             return StatusCode::UnexpectedResponse.into();
         }
 
@@ -97,7 +101,7 @@ impl<'a> SendBlocksProofProcess<'a> {
             if !self.message.proof().is_empty() {
                 error!(
                     "peer {} send a proof when all blocks are missing",
-                    self.peer
+                    self.peer_index
                 );
                 return StatusCode::UnexpectedResponse.into();
             }
@@ -134,26 +138,26 @@ impl<'a> SendBlocksProofProcess<'a> {
                     .peers
                     .get_best_proved_peers(&last_header.header().data())
                     .into_iter()
-                    .filter_map(|peer| {
+                    .filter_map(|peer_index| {
                         self.protocol
                             .peers
-                            .get_state(&peer)
-                            .map(|state| (peer, state))
+                            .get_peer(&peer_index)
+                            .map(|peer| (peer_index, peer))
                     })
                     .collect();
 
-                if let Some((peer, _)) = best_peers
+                if let Some((peer_index, _)) = best_peers
                     .iter()
-                    .filter(|(_peer, peer_state)| peer_state.get_blocks_request().is_none())
+                    .filter(|(_peer_index, peer)| peer.get_blocks_request().is_none())
                     .collect::<Vec<_>>()
                     .choose(&mut rand::thread_rng())
                 {
                     self.protocol
                         .peers
-                        .update_blocks_request(*peer, Some(block_hashes.clone()));
+                        .update_blocks_request(*peer_index, Some(block_hashes.clone()));
                     debug!(
                         "send get blocks request to peer: {}, matched_count: {}",
-                        peer,
+                        peer_index,
                         block_hashes.len()
                     );
                     for hashes in
@@ -168,7 +172,7 @@ impl<'a> SendBlocksProofProcess<'a> {
                             .as_bytes();
                         if let Err(err) = self.nc.send_message(
                             SupportProtocols::Sync.protocol_id(),
-                            *peer,
+                            *peer_index,
                             message,
                         ) {
                             let error_message =

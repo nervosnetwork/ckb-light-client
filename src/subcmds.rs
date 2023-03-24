@@ -13,6 +13,7 @@ use crate::{
     error::{Error, Result},
     protocols::{
         FilterProtocol, LightClientProtocol, Peers, PendingTxs, RelayProtocol, SyncProtocol,
+        CHECK_POINT_INTERVAL,
     },
     service::Service,
     storage::Storage,
@@ -38,6 +39,7 @@ impl RunConfig {
         storage.init_genesis_block(consensus.genesis_block().data());
 
         let pending_txs = Arc::new(RwLock::new(PendingTxs::new(64)));
+        let max_outbound_peers = self.run_env.network.max_outbound_peers;
         let network_state = NetworkState::from_config(self.run_env.network)
             .map(|network_state| {
                 Arc::new(network_state.required_flags(
@@ -58,7 +60,11 @@ impl RunConfig {
             SupportProtocols::Filter.protocol_id(),
         ];
 
-        let peers = Arc::new(Peers::default());
+        let peers = Arc::new(Peers::new(
+            max_outbound_peers,
+            CHECK_POINT_INTERVAL,
+            storage.get_last_check_point(),
+        ));
         let sync_protocol = SyncProtocol::new(storage.clone(), Arc::clone(&peers));
         let relay_protocol = RelayProtocol::new(pending_txs.clone(), Arc::clone(&peers));
         let light_client: Box<dyn CKBProtocolHandler> = Box::new(LightClientProtocol::new(

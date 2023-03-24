@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
     core::{EpochNumberWithFraction, HeaderBuilder},
@@ -9,7 +7,7 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{LastState, Peers, ProveRequest, ProveState, StatusCode},
+    protocols::{LastState, ProveRequest, ProveState, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -21,7 +19,7 @@ async fn peer_state_is_not_found() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
-    let peers = Arc::new(Peers::default());
+    let peers = chain.create_peers();
     let mut protocol = chain.create_light_client_protocol(peers);
 
     let data = {
@@ -35,7 +33,7 @@ async fn peer_state_is_not_found() {
     let peer_index = PeerIndex::new(1);
     protocol.received(nc.context(), peer_index, data).await;
 
-    assert!(nc.banned_since(peer_index, StatusCode::PeerStateIsNotFound));
+    assert!(nc.banned_since(peer_index, StatusCode::PeerIsNotFound));
 }
 
 #[tokio::test]
@@ -45,8 +43,9 @@ async fn invalid_nonce() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -71,8 +70,9 @@ async fn invalid_chain_root() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -106,8 +106,9 @@ async fn initialize_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -166,8 +167,9 @@ async fn update_to_continuous_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -196,9 +198,14 @@ async fn update_to_continuous_last_state() {
             let last_state = LastState::new(last_header);
             protocol
                 .peers()
-                .update_last_state(peer_index, last_state.clone());
+                .update_last_state(peer_index, last_state.clone())
+                .unwrap();
             ProveRequest::new(last_state, content)
         };
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request.clone())
+            .unwrap();
         let prove_state = {
             let last_n_headers = (1..num)
                 .into_iter()
@@ -206,7 +213,9 @@ async fn update_to_continuous_last_state() {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request, Vec::new(), last_n_headers)
         };
-        protocol.commit_prove_state(peer_index, prove_state);
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
     }
 
     num += 1;
@@ -257,8 +266,9 @@ async fn update_to_noncontinuous_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -287,9 +297,14 @@ async fn update_to_noncontinuous_last_state() {
             let last_state = LastState::new(last_header);
             protocol
                 .peers()
-                .update_last_state(peer_index, last_state.clone());
+                .update_last_state(peer_index, last_state.clone())
+                .unwrap();
             ProveRequest::new(last_state, content)
         };
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request.clone())
+            .unwrap();
         let prove_state = {
             let last_n_headers = (1..num)
                 .into_iter()
@@ -297,7 +312,9 @@ async fn update_to_noncontinuous_last_state() {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request, Vec::new(), last_n_headers)
         };
-        protocol.commit_prove_state(peer_index, prove_state);
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
     }
 
     num += 2;
@@ -348,8 +365,9 @@ async fn update_to_continuous_but_forked_last_state() {
 
     let peer_index = PeerIndex::new(1);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
         peers
     };
     let mut protocol = chain.create_light_client_protocol(peers);
@@ -383,9 +401,14 @@ async fn update_to_continuous_but_forked_last_state() {
             let last_state = LastState::new(last_header);
             protocol
                 .peers()
-                .update_last_state(peer_index, last_state.clone());
+                .update_last_state(peer_index, last_state.clone())
+                .unwrap();
             ProveRequest::new(last_state, content)
         };
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request.clone())
+            .unwrap();
         let prove_state = {
             let last_n_headers = (1..num)
                 .into_iter()
@@ -393,7 +416,9 @@ async fn update_to_continuous_but_forked_last_state() {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request, Vec::new(), last_n_headers)
         };
-        protocol.commit_prove_state(peer_index, prove_state);
+        protocol
+            .commit_prove_state(peer_index, prove_state)
+            .unwrap();
     }
 
     let prev_last_header: VerifiableHeader = chain
@@ -466,7 +491,7 @@ async fn update_to_proved_last_state() {
     let peer_index = PeerIndex::new(1);
     let peer_index_proved = PeerIndex::new(2);
     let peers = {
-        let peers = Arc::new(Peers::default());
+        let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.add_peer(peer_index_proved);
         peers
@@ -483,18 +508,15 @@ async fn update_to_proved_last_state() {
         let peer_state = protocol
             .get_peer_state(&peer_index_proved)
             .expect("has peer state");
+        let last_header: VerifiableHeader = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored")
+            .into();
         let prove_request = {
-            let last_header: VerifiableHeader = snapshot
-                .get_verifiable_header_by_number(num)
-                .expect("block stored")
-                .into();
             let content = protocol
                 .build_prove_request_content(&peer_state, &last_header)
                 .expect("build prove request content");
-            let last_state = LastState::new(last_header);
-            protocol
-                .peers()
-                .update_last_state(peer_index_proved, last_state.clone());
+            let last_state = LastState::new(last_header.clone());
             ProveRequest::new(last_state, content)
         };
         let prove_state = {
@@ -504,7 +526,21 @@ async fn update_to_proved_last_state() {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
-        protocol.commit_prove_state(peer_index_proved, prove_state);
+        protocol
+            .peers()
+            .mock_prove_request(peer_index_proved, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(peer_index_proved, prove_state)
+            .unwrap();
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index_proved)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        assert!(prove_state.is_same_as(&last_header));
     }
 
     // Run the test.
@@ -523,6 +559,7 @@ async fn update_to_proved_last_state() {
         .as_bytes();
         let last_header: VerifiableHeader = last_header.into();
 
+        protocol.peers().request_last_state(peer_index).unwrap();
         protocol.received(nc.context(), peer_index, data).await;
 
         assert!(nc.sent_messages().borrow().is_empty());

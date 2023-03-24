@@ -22,7 +22,7 @@ use super::super::{
 pub(crate) struct SendLastStateProofProcess<'a> {
     message: packed::SendLastStateProofReader<'a>,
     protocol: &'a mut LightClientProtocol,
-    peer: PeerIndex,
+    peer_index: PeerIndex,
     nc: &'a dyn CKBProtocolContext,
 }
 
@@ -30,24 +30,24 @@ impl<'a> SendLastStateProofProcess<'a> {
     pub(crate) fn new(
         message: packed::SendLastStateProofReader<'a>,
         protocol: &'a mut LightClientProtocol,
-        peer: PeerIndex,
+        peer_index: PeerIndex,
         nc: &'a dyn CKBProtocolContext,
     ) -> Self {
         Self {
             message,
             protocol,
-            peer,
+            peer_index,
             nc,
         }
     }
 
     pub(crate) fn execute(self) -> Status {
-        let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer));
+        let peer_state = return_if_failed!(self.protocol.get_peer_state(&self.peer_index));
 
         let original_request = if let Some(original_request) = peer_state.get_prove_request() {
             original_request
         } else {
-            warn!("peer {} isn't waiting for a proof", self.peer);
+            warn!("peer {} isn't waiting for a proof", self.peer_index);
             return Status::ok();
         };
 
@@ -56,10 +56,19 @@ impl<'a> SendLastStateProofProcess<'a> {
         // Update the last state if the response contains a new one.
         if !original_request.is_same_as(&last_header) {
             if self.message.proof().is_empty() {
-                return_if_failed!(self.protocol.process_last_state(self.peer, last_header));
-                self.protocol.get_last_state_proof(self.nc, self.peer);
+                return_if_failed!(self
+                    .protocol
+                    .process_last_state(self.peer_index, last_header));
+                let is_sent =
+                    return_if_failed!(self.protocol.get_last_state_proof(self.nc, self.peer_index));
+                if !is_sent {
+                    debug!(
+                        "peer {} skip sending a request for last state proof",
+                        self.peer_index
+                    );
+                }
             } else {
-                warn!("peer {} send an unknown proof", self.peer);
+                warn!("peer {} send an unknown proof", self.peer_index);
             }
             return Status::ok();
         }
@@ -82,7 +91,7 @@ impl<'a> SendLastStateProofProcess<'a> {
             ));
         trace!(
             "peer {}: headers count: reorg: {}, sampled: {}, last_n: {}",
-            self.peer,
+            self.peer_index,
             reorg_count,
             sampled_count,
             last_n_count
@@ -101,7 +110,10 @@ impl<'a> SendLastStateProofProcess<'a> {
 
         // Check tau with epoch difficulties of samples.
         let failed_to_verify_tau = if original_request.if_skip_check_tau() {
-            trace!("peer {} skip checking TAU since the flag is set", self.peer);
+            trace!(
+                "peer {} skip checking TAU since the flag is set",
+                self.peer_index
+            );
             false
         } else if sampled_count != 0 {
             let start_header = &headers[reorg_count];
@@ -119,7 +131,7 @@ impl<'a> SendLastStateProofProcess<'a> {
         } else {
             trace!(
                 "peer {} skip checking TAU since no sampled headers",
-                self.peer
+                self.peer_index
             );
             false
         };
@@ -172,19 +184,20 @@ impl<'a> SendLastStateProofProcess<'a> {
                 let mut prove_request =
                     ProveRequest::new(LastState::new(last_header), content.clone());
                 prove_request.skip_check_tau();
-                self.protocol
+                return_if_failed!(self
+                    .protocol
                     .peers()
-                    .update_prove_request(self.peer, Some(prove_request));
+                    .update_prove_request(self.peer_index, prove_request));
 
                 let message = packed::LightClientMessage::new_builder()
                     .set(content)
                     .build();
-                self.nc.reply(self.peer, &message);
+                self.nc.reply(self.peer_index, &message);
 
                 let errmsg = "failed to verify TAU";
                 return StatusCode::RequireRecheck.with_context(errmsg);
             } else {
-                warn!("peer {}, build prove request failed", self.peer);
+                warn!("peer {}, build prove request failed", self.peer_index);
             }
         } else {
             let reorg_last_headers = headers[..reorg_count]
@@ -247,9 +260,9 @@ impl<'a> SendLastStateProofProcess<'a> {
                 panic!("long fork detected");
             }
 
-            let long_fork_detected = !self
+            let long_fork_detected = !return_if_failed!(self
                 .protocol
-                .commit_prove_state(self.peer, prove_state.clone());
+                .commit_prove_state(self.peer_index, prove_state.clone()));
 
             if long_fork_detected {
                 let last_header = prove_state.get_last_header();
@@ -260,27 +273,28 @@ impl<'a> SendLastStateProofProcess<'a> {
                     let mut prove_request =
                         ProveRequest::new(LastState::new(last_header.clone()), content.clone());
                     prove_request.long_fork_detected();
-                    self.protocol
+                    return_if_failed!(self
+                        .protocol
                         .peers()
-                        .update_prove_request(self.peer, Some(prove_request));
+                        .update_prove_request(self.peer_index, prove_request));
 
                     let message = packed::LightClientMessage::new_builder()
                         .set(content)
                         .build();
-                    self.nc.reply(self.peer, &message);
+                    self.nc.reply(self.peer_index, &message);
 
                     let errmsg = "long fork detected";
                     return StatusCode::RequireRecheck.with_context(errmsg);
                 } else {
                     warn!(
                         "peer {}, build prove request from genesis failed",
-                        self.peer
+                        self.peer_index
                     );
                 }
             }
         }
 
-        debug!("block proof verify passed for peer: {}", self.peer);
+        debug!("block proof verify passed for peer: {}", self.peer_index);
         Status::ok()
     }
 }
