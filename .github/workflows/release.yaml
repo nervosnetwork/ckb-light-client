@@ -80,7 +80,7 @@ jobs:
       run: |
         pkgname="ckb-light-client_${{ steps.get_version.outputs.VERSION }}-${{ matrix.pkg_suffix }}.tar.gz"
         cp "target/release/ckb-light-client${{ matrix.bin_suffix }}" "ckb-light-client${{ matrix.bin_suffix }}"
-        tar czvf "${pkgname}" "ckb-light-client${{ matrix.bin_suffix }}"
+        tar czvf "${pkgname}" "ckb-light-client${{ matrix.bin_suffix }}" "config"
         echo ::set-output name=PKGNAME::${pkgname}
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v1
