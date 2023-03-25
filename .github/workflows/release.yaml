@@ -63,10 +63,18 @@ jobs:
       run: cargo build --release
     - if: matrix.os == 'macos-11'
       name: Build macos portable
-      run: cargo build --release --features portable
+      run: |
+        export OPENSSL_LIB_DIR=/usr/local/opt/openssl@1.1/lib
+        export OPENSSL_INCLUDE_DIR=/usr/local/opt/openssl@1.1/include
+        export OPENSSL_STATIC=1
+        cargo build --release --features portable
     - if: matrix.os == 'macos-12'
       name: Build macos
-      run: cargo build --release
+      run: |
+        export OPENSSL_LIB_DIR=/usr/local/opt/openssl@1.1/lib
+        export OPENSSL_INCLUDE_DIR=/usr/local/opt/openssl@1.1/include
+        export OPENSSL_STATIC=1
+        cargo build --release
     - if: matrix.os == 'windows-2019'
       name: Build windows
       run: cargo build --release
