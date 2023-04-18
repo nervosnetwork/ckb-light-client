@@ -18,9 +18,14 @@ mod verify;
 mod patches;
 
 use config::AppConfig;
+use env_logger::{Builder, Env, Target};
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    let mut builder = Builder::from_env(Env::default());
+    builder.target(Target::Stdout);
+    builder
+        .try_init()
+        .expect("env_logger builder init should be ok");
 
     log::info!("Starting ...");
 
