@@ -14,13 +14,13 @@ use ckb_types::{
     },
     packed::{self, Block, Byte32, CellOutput, Header, OutPoint, Script, Transaction},
     prelude::*,
+    utilities::{build_filter_data, calc_filter_hash, FilterDataProvider},
     H256, U256,
 };
 
 use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 
 use crate::error::Result;
-use crate::patches::{build_filter_data, calc_filter_hash, FilterDataProvider};
 use crate::protocols::Peers;
 
 pub const LAST_STATE_KEY: &str = "LAST_STATE";

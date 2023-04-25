@@ -1,4 +1,7 @@
-use std::collections::{hash_map::Entry, HashMap, HashSet};
+use std::{
+    collections::{hash_map::Entry, HashMap, HashSet},
+    sync::Arc,
+};
 
 use ckb_chain_spec::consensus::Consensus;
 use ckb_error::Error;
@@ -23,22 +26,27 @@ use crate::storage::StorageWithChainData;
 /// can not reuse the `ContextualTransactionVerifier` in ckb_verification crate which is used to verify cellbase also.
 pub struct ContextualTransactionVerifier<'a> {
     pub(crate) time_relative: TimeRelativeTransactionVerifier<'a, StorageWithChainData>,
-    pub(crate) capacity: CapacityVerifier<'a>,
-    pub(crate) script: ScriptVerifier<'a, StorageWithChainData>,
+    pub(crate) capacity: CapacityVerifier,
+    pub(crate) script: ScriptVerifier<StorageWithChainData>,
 }
 
 impl<'a> ContextualTransactionVerifier<'a> {
     /// Creates a new ContextualTransactionVerifier
     pub fn new(
-        rtx: &'a ResolvedTransaction,
+        rtx: &'a Arc<ResolvedTransaction>,
         consensus: &'a Consensus,
         swc: &'a StorageWithChainData,
         tx_env: &'a TxVerifyEnv,
     ) -> Self {
         ContextualTransactionVerifier {
-            time_relative: TimeRelativeTransactionVerifier::new(rtx, consensus, swc, tx_env),
-            script: ScriptVerifier::new(rtx, swc),
-            capacity: CapacityVerifier::new(rtx, consensus.dao_type_hash()),
+            time_relative: TimeRelativeTransactionVerifier::new(
+                Arc::clone(rtx),
+                consensus,
+                swc.clone(),
+                tx_env,
+            ),
+            script: ScriptVerifier::new(Arc::clone(rtx), swc.clone()),
+            capacity: CapacityVerifier::new(Arc::clone(rtx), consensus.dao_type_hash()),
         }
     }
 
@@ -59,7 +67,7 @@ pub fn verify_tx(
     let rtx = resolve_tx(swc, transaction)?;
     let (_, tip_header) = swc.storage().get_last_state();
     let tx_env = TxVerifyEnv::new_submit(&tip_header.into_view());
-    ContextualTransactionVerifier::new(&rtx, consensus, swc, &tx_env)
+    ContextualTransactionVerifier::new(&Arc::new(rtx), consensus, swc, &tx_env)
         .verify(consensus.max_block_cycles())
 }
 

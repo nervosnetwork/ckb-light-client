@@ -1,4 +1,4 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use ckb_chain::chain::ChainController;
@@ -11,9 +11,13 @@ use ckb_types::{
     core::{BlockExt, BlockNumber, BlockView, Capacity, HeaderView, TransactionView},
     packed,
     prelude::*,
-    utilities::{compact_to_difficulty, merkle_mountain_range::VerifiableHeader},
+    utilities::{
+        build_filter_data, calc_filter_hash, compact_to_difficulty,
+        merkle_mountain_range::VerifiableHeader, FilterDataProvider,
+    },
     U256,
 };
+use log::{error, info};
 
 use crate::{
     protocols::{
@@ -32,6 +36,34 @@ macro_rules! epoch {
         let (number, index, length) = $tuple;
         ckb_types::core::EpochNumberWithFraction::new(number, index, length)
     }};
+}
+
+struct FilterData {
+    inner: HashMap<packed::Byte32, TransactionView>,
+}
+
+impl FilterData {
+    fn new(genesis: &BlockView) -> Self {
+        let inner = genesis
+            .transactions()
+            .into_iter()
+            .map(|tx| (tx.hash(), tx))
+            .collect();
+        Self { inner }
+    }
+
+    fn extend(&mut self, block: &BlockView) {
+        let iter = block.transactions().into_iter().map(|tx| (tx.hash(), tx));
+        self.inner.extend(iter);
+    }
+}
+
+impl FilterDataProvider for &FilterData {
+    fn cell(&self, out_point: &packed::OutPoint) -> Option<packed::CellOutput> {
+        self.inner
+            .get(&out_point.tx_hash())
+            .and_then(|tx| tx.outputs().get(out_point.index().unpack()))
+    }
 }
 
 pub(crate) trait SnapshotExt {
@@ -63,6 +95,68 @@ pub(crate) trait SnapshotExt {
                 .set(content)
                 .build()
         })
+    }
+
+    fn get_block_filter_data(&self, num: BlockNumber) -> Option<packed::Bytes> {
+        (0..num)
+            .try_fold(None::<FilterData>, |provider_opt, curr_num| {
+                self.get_block_by_number(curr_num).map(|block_view| {
+                    let provider = if let Some(mut provider) = provider_opt {
+                        provider.extend(&block_view);
+                        provider
+                    } else {
+                        FilterData::new(&block_view)
+                    };
+                    Some(provider)
+                })
+            })
+            .and_then(|provider_opt| {
+                let mut provider = provider_opt.unwrap();
+                self.get_block_by_number(num).map(|block_view| {
+                    provider.extend(&block_view);
+                    let (block_filter_vec, missing_out_points) =
+                        build_filter_data(&provider, &block_view.transactions());
+                    if !missing_out_points.is_empty() {
+                        for out_point in missing_out_points {
+                            error!("Can't find input cell for out_point: {out_point:#x}");
+                        }
+                        panic!("block#{num} has missing out points!");
+                    }
+                    block_filter_vec.pack()
+                })
+            })
+    }
+
+    fn get_block_filter_hashes_until(&self, num: BlockNumber) -> Option<Vec<packed::Byte32>> {
+        (0..=num)
+            .try_fold(
+                (packed::Byte32::zero(), Vec::new(), None::<FilterData>),
+                |(prev_filter_hash, mut filter_hashes, provider_opt), curr_num| {
+                    self.get_block_by_number(curr_num).map(|block_view| {
+                        let provider = if let Some(mut provider) = provider_opt {
+                            provider.extend(&block_view);
+                            provider
+                        } else {
+                            FilterData::new(&block_view)
+                        };
+                        let (block_filter_vec, missing_out_points) =
+                            build_filter_data(&provider, &block_view.transactions());
+                        if !missing_out_points.is_empty() {
+                            for out_point in missing_out_points {
+                                error!("Can't find input cell for out_point: {out_point:#x}");
+                            }
+                            panic!("block#{curr_num} has missing out points!");
+                        }
+                        let block_filter_data = block_filter_vec.pack();
+                        let filter_hash =
+                            calc_filter_hash(&prev_filter_hash, &block_filter_data).pack();
+                        info!("block#{curr_num}'s filter hash is {filter_hash:#x}");
+                        filter_hashes.push(filter_hash.clone());
+                        (filter_hash, filter_hashes, Some(provider))
+                    })
+                },
+            )
+            .map(|(_, filter_hashes, _)| filter_hashes)
     }
 }
 

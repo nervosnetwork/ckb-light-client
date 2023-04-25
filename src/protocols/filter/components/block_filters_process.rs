@@ -4,12 +4,11 @@ use crate::utils::network::prove_or_download_matched_blocks;
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::core::BlockNumber;
+use ckb_types::utilities::calc_filter_hash;
 use ckb_types::{packed, prelude::*};
 use log::{info, trace, warn};
 use rand::seq::SliceRandom;
 use std::{cmp, sync::Arc};
-
-use crate::patches::calc_filter_hash;
 
 pub struct BlockFiltersProcess<'a> {
     message: packed::BlockFiltersReader<'a>,
