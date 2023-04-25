@@ -4,19 +4,11 @@ use crate::utils::network::prove_or_download_matched_blocks;
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::core::BlockNumber;
+use ckb_types::utilities::calc_filter_hash;
 use ckb_types::{packed, prelude::*};
 use log::{info, trace, warn};
 use rand::seq::SliceRandom;
 use std::{cmp, sync::Arc};
-
-#[cfg(not(test))]
-use ckb_types::utilities::calc_filter_hash;
-
-// TODO Use real block filter hashes in unit tests.
-#[cfg(test)]
-fn calc_filter_hash(_: &packed::Byte32, _: &packed::Bytes) -> [u8; 32] {
-    Default::default()
-}
 
 pub struct BlockFiltersProcess<'a> {
     message: packed::BlockFiltersReader<'a>,
