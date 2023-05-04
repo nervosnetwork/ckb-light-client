@@ -12,9 +12,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-18.04, ubuntu-22.04, macos-11, macos-12, windows-2019 ]
+        os: [ ubuntu-20.04, ubuntu-22.04, macos-11, macos-12, windows-2019 ]
         include:
-          - os: ubuntu-18.04
+          - os: ubuntu-20.04
             bin_suffix:
             pkg_suffix: x86_64-linux-portable
           - os: ubuntu-22.04
@@ -44,7 +44,7 @@ jobs:
         echo "LIBCLANG_PATH=$($HOME)/scoop/apps/llvm/current/bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
         echo "$env:USERPROFILE\scoop\shims" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
         scoop install llvm yasm
-    - if: matrix.os == 'ubuntu-18.04'
+    - if: matrix.os == 'ubuntu-20.04'
       name: Build linux portable
       run: |
         export PWD_DIR=$(pwd)
