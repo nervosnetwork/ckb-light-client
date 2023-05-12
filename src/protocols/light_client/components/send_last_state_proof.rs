@@ -238,7 +238,22 @@ impl<'a> SendLastStateProofProcess<'a> {
                     } else if reorg_count == 0 {
                         new_last_headers
                     } else {
-                        unreachable!("no previous prove state but has reorg blocks");
+                        // If this branch is reached, the follow conditions must be satisfied:
+                        // - No previous prove state.
+                        // - `reorg_count > 0`
+                        //
+                        // If there is no previous prove state, why it requires reorg?
+                        // So we consider that the peer is malicious.
+                        //
+                        // TODO This branch should be unreachable.
+                        warn!(
+                            "peer {}: no previous prove state but has reorg blocks, \
+                            reorg: {reorg_count}, sampled: {sampled_count}, last_n_real: {last_n_count}, \
+                            last_n_param: {last_n_blocks}, original_request: {original_request}",
+                            self.peer_index,
+                        );
+                        let errmsg = "no previous prove state but has reorg blocks";
+                        return StatusCode::InvalidReorgHeaders.with_context(errmsg);
                     }
                 }
             };
