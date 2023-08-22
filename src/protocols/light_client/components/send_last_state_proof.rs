@@ -487,16 +487,23 @@ impl EpochDifficultyTrend {
         }
     }
 
-    // Calculate the limit of total difficulty.
-    pub(crate) fn calculate_total_difficulty_limit(
+    // Check the limit of total difficulty.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn check_total_difficulty_limit(
         &self,
-        start_epoch_difficulty: &U256,
+        limit: EstimatedLimit,
+        n: u64,
+        k: u64,
+        actual: &U256,
+        start: &U256,
         tau: u64,
-        details: &EpochDifficultyTrendDetails,
-    ) -> U256 {
-        let mut curr = start_epoch_difficulty.clone();
+        unaligned: &U256,
+    ) -> Result<(), String> {
+        let details = self.split_epochs(limit, n, k).remove_last_epoch();
+        let mut curr = start.clone();
         let mut total = U256::zero();
         let tau_u256 = U256::from(tau);
+        let check_max = matches!(limit, EstimatedLimit::Max);
         for group in &[details.start, details.end] {
             match group {
                 EpochCountGroupByTrend::Decreased(epochs_count) => {
@@ -510,7 +517,20 @@ impl EpochDifficultyTrend {
                                 state: {}, trend: {:?}, details: {:?}",
                                 total, curr, index, epochs_count, tau, state, self, details
                             );
-                        })
+                        });
+                        if total >= *actual {
+                            if check_max {
+                                debug!("check total difficulty: not greater than upper limit (short-circuit)");
+                                return Ok(());
+                            } else {
+                                let errmsg = format!(
+                                    "failed since total difficulty ({actual:#x}) is less than \
+                                    the lower limit (short-circuit at {total:#x}) with \
+                                    start epoch difficulty {start:#x}, n: {n}, k: {k}"
+                                );
+                                return Err(errmsg);
+                            }
+                        }
                     }
                 }
                 EpochCountGroupByTrend::Increased(epochs_count) => {
@@ -524,12 +544,45 @@ impl EpochDifficultyTrend {
                                 state: {}, trend: {:?}, details: {:?}",
                                 total, curr, index, epochs_count, tau, state, self, details
                             );
-                        })
+                        });
+                        if total >= *actual {
+                            if check_max {
+                                debug!("check total difficulty: not greater than upper limit (short-circuit)");
+                                return Ok(());
+                            } else {
+                                let errmsg = format!(
+                                    "failed since total difficulty ({actual:#x}) is less than \
+                                    the lower limit (short-circuit at {total:#x}) with \
+                                    start epoch difficulty {start:#x}, n: {n}, k: {k}"
+                                );
+                                return Err(errmsg);
+                            }
+                        }
                     }
                 }
             }
         }
-        total
+        if check_max {
+            if &total + unaligned >= *actual {
+                debug!("check total difficulty: not greater than upper limit (fully-calculated)");
+                Ok(())
+            } else {
+                let errmsg = format!(
+                    "failed since total difficulty ({actual:#x}) is greater than the upper limit
+                    ({total:#x}+{unaligned:#x}) with start epoch difficulty {start:#x}, n: {n}, k: {k}"
+                );
+                Err(errmsg)
+            }
+        } else if &total + unaligned <= *actual {
+            debug!("check total difficulty: not less than lower limit (fully-calculated)");
+            Ok(())
+        } else {
+            let errmsg = format!(
+                    "failed since total difficulty ({actual:#x}) is less than the lower limit
+                    ({total:#x}+{unaligned:#x}) with start epoch difficulty {start:#x}, n: {n}, k: {k}"
+                );
+            Err(errmsg)
+        }
     }
 }
 
@@ -962,34 +1015,14 @@ pub(crate) fn verify_total_difficulty(
             // `n / 2 >= 1` was checked since the above branch.
             let n = epochs_switch_count;
             let diff = &start_epoch_difficulty;
-            let aligned_difficulty_min = {
-                let details = epoch_difficulty_trend
-                    .split_epochs(EstimatedLimit::Min, n, k)
-                    .remove_last_epoch();
-                epoch_difficulty_trend.calculate_total_difficulty_limit(diff, tau, &details)
-            };
-            let aligned_difficulty_max = {
-                let details = epoch_difficulty_trend
-                    .split_epochs(EstimatedLimit::Max, n, k)
-                    .remove_last_epoch();
-                epoch_difficulty_trend.calculate_total_difficulty_limit(diff, tau, &details)
-            };
-            let total_difficulity_min = &unaligned_difficulty_calculated + &aligned_difficulty_min;
-            let total_difficulity_max = &unaligned_difficulty_calculated + &aligned_difficulty_max;
-            if total_difficulty < total_difficulity_min || total_difficulty > total_difficulity_max
-            {
-                let errmsg = format!(
-                    "failed since total difficulty ({:#x}) isn't in the range ({:#x}+[{:#x},{:#x}]) \
-                    during epochs ([{:#},{:#}])",
-                    total_difficulty,
-                    unaligned_difficulty_calculated,
-                    aligned_difficulty_min,
-                    aligned_difficulty_max,
-                    start_epoch,
-                    end_epoch
-                );
-                return Err(errmsg);
-            }
+            let total = &total_difficulty;
+            let unaligned = &unaligned_difficulty_calculated;
+            let limit = EstimatedLimit::Min;
+            epoch_difficulty_trend
+                .check_total_difficulty_limit(limit, n, k, total, diff, tau, unaligned)?;
+            let limit = EstimatedLimit::Max;
+            epoch_difficulty_trend
+                .check_total_difficulty_limit(limit, n, k, total, diff, tau, unaligned)?;
         }
     }
 
