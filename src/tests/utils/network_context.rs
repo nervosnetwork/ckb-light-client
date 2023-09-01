@@ -223,4 +223,8 @@ impl CKBProtocolContext for MockProtocolContext {
     fn protocol_id(&self) -> ProtocolId {
         self.protocol.protocol_id()
     }
+
+    fn ckb2023(&self) -> bool {
+        unimplemented!();
+    }
 }

@@ -935,7 +935,7 @@ fn rpc() {
     let rpc = TransactionRpcImpl {
         pending_txs: Arc::new(RwLock::new(PendingTxs::new(10))),
         swc,
-        consensus: Consensus::default(),
+        consensus: Arc::new(Consensus::default()),
     };
     let fetched_txs: Vec<H256> = [h256!("0xbb11"), h256!("0xbb77"), h256!("0xbb88")]
         .into_iter()

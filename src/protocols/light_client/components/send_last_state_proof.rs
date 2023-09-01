@@ -9,7 +9,7 @@ use ckb_types::{
     prelude::*,
     utilities::{
         compact_to_difficulty,
-        merkle_mountain_range::{MMRProof, VerifiableHeader},
+        merkle_mountain_range::{HeaderDigest as _, MMRProof, VerifiableHeader},
     },
     U256,
 };

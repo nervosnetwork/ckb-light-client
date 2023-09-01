@@ -382,7 +382,7 @@ pub struct BlockFilterRpcImpl {
 pub struct TransactionRpcImpl {
     pub(crate) pending_txs: Arc<RwLock<PendingTxs>>,
     pub(crate) swc: StorageWithChainData,
-    pub(crate) consensus: Consensus,
+    pub(crate) consensus: Arc<Consensus>,
 }
 
 pub struct ChainRpcImpl {
@@ -1171,7 +1171,7 @@ impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
-        let cycles = verify_tx(tx.clone(), &self.swc, &self.consensus)
+        let cycles = verify_tx(tx.clone(), &self.swc, Arc::clone(&self.consensus))
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.pending_txs
             .write()
@@ -1325,7 +1325,7 @@ impl Service {
         let transaction_rpc_impl = TransactionRpcImpl {
             pending_txs,
             swc,
-            consensus,
+            consensus: Arc::new(consensus),
         };
         let net_rpc_impl = NetRpcImpl {
             network_controller,

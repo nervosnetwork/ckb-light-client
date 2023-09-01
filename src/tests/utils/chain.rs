@@ -5,7 +5,7 @@ use ckb_chain::chain::{ChainController, ChainService};
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_jsonrpc_types::JsonBytes;
 use ckb_launcher::SharedBuilder;
-use ckb_network::{DefaultExitHandler, Flags, NetworkController, NetworkService, NetworkState};
+use ckb_network::{Flags, NetworkController, NetworkService, NetworkState};
 use ckb_resource::Resource;
 use ckb_shared::Shared;
 use ckb_types::{core, prelude::*};
@@ -145,7 +145,6 @@ fn dummy_network(shared: &Shared) -> NetworkController {
             "test".to_string(),
             Flags::all(),
         ),
-        DefaultExitHandler::default(),
     )
     .start(shared.async_handle())
     .expect("Start network service failed")

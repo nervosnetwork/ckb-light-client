@@ -5,7 +5,9 @@ use std::{
     sync::Arc,
 };
 
-use ckb_traits::{CellDataProvider, HeaderProvider};
+use ckb_traits::{
+    CellDataProvider, ExtensionProvider, HeaderFields, HeaderFieldsProvider, HeaderProvider,
+};
 use ckb_types::{
     bytes::Bytes,
     core::{
@@ -1136,6 +1138,18 @@ impl HeaderProvider for StorageWithChainData {
     }
 }
 
+impl HeaderFieldsProvider for StorageWithChainData {
+    fn get_header_fields(&self, hash: &Byte32) -> Option<HeaderFields> {
+        self.get_header(hash).map(|header| HeaderFields {
+            hash: header.hash(),
+            number: header.number(),
+            epoch: header.epoch(),
+            timestamp: header.timestamp(),
+            parent_hash: header.parent_hash(),
+        })
+    }
+}
+
 impl CellDataProvider for StorageWithChainData {
     fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
         self.storage.get_cell_data(out_point)
@@ -1149,6 +1163,12 @@ impl CellDataProvider for StorageWithChainData {
 impl CellProvider for StorageWithChainData {
     fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
         self.storage.cell(out_point, eager_load)
+    }
+}
+
+impl ExtensionProvider for StorageWithChainData {
+    fn get_block_extension(&self, _hash: &Byte32) -> Option<packed::Bytes> {
+        todo!("New feature in CKB2023, introduced from \"RFC 0050: VM Syscalls 3\"")
     }
 }
 
