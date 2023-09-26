@@ -155,7 +155,7 @@ fn test_split_epochs() {
 }
 
 #[test]
-fn test_calculate_total_difficulty_limit() {
+fn test_check_total_difficulty_limit() {
     let tau = 2;
     let testcases = [
         // Unchanged
@@ -172,7 +172,16 @@ fn test_calculate_total_difficulty_limit() {
         for n in n_min..=(n_min + 10) {
             for limit in [EstimatedLimit::Min, EstimatedLimit::Max] {
                 let details = trend.split_epochs(limit, n, k).remove_last_epoch();
-                let actual = trend.calculate_total_difficulty_limit(&diff_start, tau, &details);
+                let unaligned = U256::zero();
+                let actual = trend.check_total_difficulty_limit(
+                    limit,
+                    n,
+                    k,
+                    &diff_end,
+                    &diff_start,
+                    tau,
+                    &unaligned,
+                );
                 let expected = {
                     let start_epochs_count = details.start.epochs_count();
                     let end_epochs_count = details.end.epochs_count();
@@ -188,6 +197,7 @@ fn test_calculate_total_difficulty_limit() {
                                 curr *= tau;
                                 total += &curr;
                             }
+                            diff_end >= total
                         }
                         EstimatedLimit::Max => {
                             for _ in 0..start_epochs_count {
@@ -198,15 +208,18 @@ fn test_calculate_total_difficulty_limit() {
                                 curr /= tau;
                                 total += &curr;
                             }
+                            diff_end <= total
                         }
                     }
-                    total
                 };
                 assert_eq!(
-                    actual, expected,
-                    "{:#x} -> {:#x} (tau: {}, n: {}, k: {}, {:?}) \
-                    total difficulty expect {:#x} but got {:#x}",
-                    diff_start, diff_end, tau, n, k, limit, expected, actual,
+                    actual.is_ok(),
+                    expected,
+                    "{diff_start:#x} -> {diff_end:#x} (tau: {tau}, n: {n}, k: {k}, {limit:?}) \
+                    total difficulty expect {} but got {} since {}",
+                    expected,
+                    actual.is_ok(),
+                    actual.unwrap_err(),
                 );
             }
         }
