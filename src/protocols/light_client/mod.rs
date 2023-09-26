@@ -222,9 +222,10 @@ impl LightClientProtocol {
             if let Some((peer_index_copied_from, prove_state)) =
                 self.peers().find_if_a_header_is_proved(last_header)
             {
-                info!(
+                trace!(
                     "peer {}: copy prove state from peer {}",
-                    peer_index, peer_index_copied_from
+                    peer_index,
+                    peer_index_copied_from
                 );
                 self.peers().update_prove_state(peer_index, prove_state)?;
                 return Ok(false);
@@ -683,7 +684,7 @@ impl LightClientProtocol {
                 .update_check_points(last_cpindex + 1, &check_points[1..=index]);
             self.storage.update_max_check_point_index(new_last_cpindex);
         } else {
-            info!("no check point is found which could be finalized");
+            trace!("no check point is found which could be finalized");
         }
     }
 

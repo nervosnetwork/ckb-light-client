@@ -81,6 +81,18 @@ impl<'a> SendLastStateProofProcess<'a> {
             .collect::<Vec<VerifiableHeader>>();
         let last_n_blocks = self.protocol.last_n_blocks() as usize;
 
+        trace!(
+            "peer {}: last_number: {}, last_hash: {:#x}, headers_count: {}, last_n_config: {last_n_blocks}",
+            self.peer_index,
+            last_header.header().number(),
+            last_header.header().hash(),
+            headers.len(),
+        );
+
+        if log_enabled!(Level::Trace) {
+            print_headers(&headers);
+        }
+
         // Check if the response is match the request.
         let (reorg_count, sampled_count, last_n_count) =
             return_if_failed!(check_if_response_is_matched(
@@ -695,7 +707,7 @@ pub(crate) fn check_if_response_is_matched(
             headers[reorg_count + sampled_count].total_difficulty();
 
         if log_enabled!(Level::Trace) {
-            output_debug_messages(prev_request, headers, &first_last_n_total_difficulty);
+            print_difficulties_distribution(prev_request, headers, &first_last_n_total_difficulty);
         }
 
         let mut difficulties: Vec<U256> = prev_request
@@ -785,7 +797,17 @@ pub(crate) fn check_if_response_is_matched(
     Ok((reorg_count, sampled_count, last_n_count))
 }
 
-fn output_debug_messages(
+fn print_headers(headers: &[VerifiableHeader]) {
+    debug!("all headers in response:");
+    for h in headers {
+        let number = h.header().number();
+        let hash = h.header().number();
+        debug!(">>> header {number:9}: {hash:#x}");
+    }
+    debug!("all headers in response finished.");
+}
+
+fn print_difficulties_distribution(
     prev_request: &packed::GetLastStateProof,
     headers: &[VerifiableHeader],
     last_n_start: &U256,
