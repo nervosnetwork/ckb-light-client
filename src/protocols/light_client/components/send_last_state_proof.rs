@@ -854,7 +854,7 @@ fn print_headers(headers: &[VerifiableHeader]) {
     debug!("all headers in response:");
     for h in headers {
         let number = h.header().number();
-        let hash = h.header().number();
+        let hash = h.header().hash();
         debug!(">>> header {number:9}: {hash:#x}");
     }
     debug!("all headers in response finished.");
