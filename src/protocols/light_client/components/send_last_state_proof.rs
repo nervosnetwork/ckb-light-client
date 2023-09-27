@@ -244,7 +244,7 @@ impl<'a> SendLastStateProofProcess<'a> {
                                 .iter()
                                 .skip(old_last_headers_len.saturating_sub(required_count))
                                 .map(ToOwned::to_owned)
-                                .chain(new_last_headers.into_iter())
+                                .chain(new_last_headers)
                                 .collect::<Vec<_>>()
                         }
                     } else if reorg_count == 0 {

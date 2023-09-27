@@ -1329,14 +1329,12 @@ impl Peers {
         for mut pair in self.inner.iter_mut() {
             pair.value_mut().add_block(&block_hash);
         }
-        matched_blocks
-            .get_mut(&block_hash.unpack())
-            .map(|mut value| {
-                if value.0 {
-                    value.1 = Some(block);
-                }
-                value.0
-            })
+        matched_blocks.get_mut(&block_hash.unpack()).map(|value| {
+            if value.0 {
+                value.1 = Some(block);
+            }
+            value.0
+        })
     }
 
     pub(crate) fn add_header(&self, block_hash: &Byte32) -> bool {
@@ -1391,7 +1389,7 @@ impl Peers {
         block_hashes: &[Byte32],
     ) {
         for block_hash in block_hashes {
-            if let Some(mut value) = matched_blocks.get_mut(&block_hash.unpack()) {
+            if let Some(value) = matched_blocks.get_mut(&block_hash.unpack()) {
                 value.0 = true;
             }
         }
