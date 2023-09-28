@@ -244,7 +244,7 @@ impl<'a> SendLastStateProofProcess<'a> {
                                 .iter()
                                 .skip(old_last_headers_len.saturating_sub(required_count))
                                 .map(ToOwned::to_owned)
-                                .chain(new_last_headers.into_iter())
+                                .chain(new_last_headers)
                                 .collect::<Vec<_>>()
                         }
                     } else if reorg_count == 0 {
@@ -854,7 +854,7 @@ fn print_headers(headers: &[VerifiableHeader]) {
     debug!("all headers in response:");
     for h in headers {
         let number = h.header().number();
-        let hash = h.header().number();
+        let hash = h.header().hash();
         debug!(">>> header {number:9}: {hash:#x}");
     }
     debug!("all headers in response finished.");
