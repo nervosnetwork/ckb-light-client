@@ -53,6 +53,7 @@ jobs:
         os: [ ubuntu-latest, macos-latest, windows-2019 ]
     steps:
     - uses: actions/checkout@v2
+    - uses: taiki-e/install-action@nextest
     - if: matrix.os == 'windows-2019'
       name: Windows Dependencies
       run: |
@@ -65,10 +66,10 @@ jobs:
       run: cargo build
     - if: matrix.os != 'macos-latest'
       name: UnitTest
-      run: cargo test
+      run: make test
     - if: matrix.os == 'macos-latest'
       name: UnitTest
-      run: cargo test --features portable
+      run: make test-portable
   code_coverage:
     name: Code Coverage
     needs: [ test ]

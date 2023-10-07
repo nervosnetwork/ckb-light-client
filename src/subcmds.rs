@@ -3,10 +3,11 @@ use std::sync::{Arc, RwLock};
 use ckb_async_runtime::new_global_runtime;
 use ckb_chain_spec::ChainSpec;
 use ckb_network::{
-    CKBProtocol, CKBProtocolHandler, DefaultExitHandler, ExitHandler, Flags, NetworkService,
-    NetworkState, SupportProtocols,
+    tokio, CKBProtocol, CKBProtocolHandler, Flags, NetworkService, NetworkState, SupportProtocols,
 };
 use ckb_resource::Resource;
+use ckb_stop_handler::{broadcast_exit_signals, wait_all_ckb_services_exit};
+use log::debug;
 
 use crate::{
     config::RunConfig,
@@ -97,8 +98,7 @@ impl RunConfig {
             ),
         ];
 
-        let (handle, _stop_handler) = new_global_runtime();
-        let exit_handler = DefaultExitHandler::default();
+        let (mut handle, mut handle_stop_rx, _stop_handler) = new_global_runtime();
 
         let network_controller = NetworkService::new(
             Arc::clone(&network_state),
@@ -109,7 +109,6 @@ impl RunConfig {
                 clap::crate_version!().to_owned(),
                 Flags::DISCOVERY,
             ),
-            exit_handler.clone(),
         )
         .start(&handle)
         .map_err(|err| {
@@ -120,16 +119,24 @@ impl RunConfig {
         let service = Service::new(&self.run_env.rpc.listen_address);
         let rpc_server = service.start(network_controller, storage, peers, pending_txs, consensus);
 
-        let exit_handler_clone = exit_handler.clone();
         ctrlc::set_handler(move || {
-            exit_handler_clone.notify_exit();
+            broadcast_exit_signals();
         })
         .map_err(|err| {
             let errmsg = format!("failed to set Ctrl-C handler since {}", err);
             Error::runtime(errmsg)
         })?;
-        exit_handler.wait_for_exit();
+
+        wait_all_ckb_services_exit();
+
+        handle.drop_guard();
         rpc_server.close();
+
+        tokio::task::block_in_place(|| {
+            debug!("Waiting all tokio tasks finished ...");
+            handle_stop_rx.blocking_recv();
+        });
+
         Ok(())
     }
 }

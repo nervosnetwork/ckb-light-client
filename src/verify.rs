@@ -13,7 +13,7 @@ use ckb_types::{
         Cycle, DepType, TransactionView,
     },
     packed::{OutPoint, OutPointVec},
-    prelude::Entity,
+    prelude::{Entity, IntoHeaderView},
 };
 use ckb_verification::{
     CapacityVerifier, NonContextualTransactionVerifier, ScriptVerifier,
@@ -24,29 +24,34 @@ use crate::storage::StorageWithChainData;
 
 /// Light client can only verify non-cellbase transaction,
 /// can not reuse the `ContextualTransactionVerifier` in ckb_verification crate which is used to verify cellbase also.
-pub struct ContextualTransactionVerifier<'a> {
-    pub(crate) time_relative: TimeRelativeTransactionVerifier<'a, StorageWithChainData>,
+pub struct ContextualTransactionVerifier {
+    pub(crate) time_relative: TimeRelativeTransactionVerifier<StorageWithChainData>,
     pub(crate) capacity: CapacityVerifier,
     pub(crate) script: ScriptVerifier<StorageWithChainData>,
 }
 
-impl<'a> ContextualTransactionVerifier<'a> {
+impl ContextualTransactionVerifier {
     /// Creates a new ContextualTransactionVerifier
     pub fn new(
-        rtx: &'a Arc<ResolvedTransaction>,
-        consensus: &'a Consensus,
-        swc: &'a StorageWithChainData,
-        tx_env: &'a TxVerifyEnv,
+        rtx: Arc<ResolvedTransaction>,
+        consensus: Arc<Consensus>,
+        swc: &StorageWithChainData,
+        tx_env: Arc<TxVerifyEnv>,
     ) -> Self {
         ContextualTransactionVerifier {
             time_relative: TimeRelativeTransactionVerifier::new(
-                Arc::clone(rtx),
-                consensus,
+                Arc::clone(&rtx),
+                Arc::clone(&consensus),
                 swc.clone(),
-                tx_env,
+                Arc::clone(&tx_env),
             ),
-            script: ScriptVerifier::new(Arc::clone(rtx), swc.clone()),
-            capacity: CapacityVerifier::new(Arc::clone(rtx), consensus.dao_type_hash()),
+            script: ScriptVerifier::new(
+                Arc::clone(&rtx),
+                swc.clone(),
+                Arc::clone(&consensus),
+                Arc::clone(&tx_env),
+            ),
+            capacity: CapacityVerifier::new(Arc::clone(&rtx), consensus.dao_type_hash()),
         }
     }
 
@@ -60,14 +65,14 @@ impl<'a> ContextualTransactionVerifier<'a> {
 pub fn verify_tx(
     transaction: TransactionView,
     swc: &StorageWithChainData,
-    consensus: &Consensus,
+    consensus: Arc<Consensus>,
 ) -> Result<Cycle, Error> {
-    NonContextualTransactionVerifier::new(&transaction, consensus).verify()?;
+    NonContextualTransactionVerifier::new(&transaction, &consensus).verify()?;
 
     let rtx = resolve_tx(swc, transaction)?;
     let (_, tip_header) = swc.storage().get_last_state();
     let tx_env = TxVerifyEnv::new_submit(&tip_header.into_view());
-    ContextualTransactionVerifier::new(&Arc::new(rtx), consensus, swc, &tx_env)
+    ContextualTransactionVerifier::new(Arc::new(rtx), Arc::clone(&consensus), swc, Arc::new(tx_env))
         .verify(consensus.max_block_cycles())
 }
 

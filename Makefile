@@ -5,6 +5,12 @@ GRCOV_EXCL_START = ^\s*((log::)?(trace|debug|info|warn|error)|(debug_)?assert(_e
 GRCOV_EXCL_STOP  = ^\s*\)(;)?$$
 GRCOV_EXCL_LINE = \s*((log::)?(trace|debug|info|warn|error)|(debug_)?assert(_eq|_ne|_error_eq))!\(.*\)(;)?$$
 
+test:
+	cargo nextest run --hide-progress-bar --success-output immediate --failure-output immediate
+
+test-portable:
+	cargo nextest run --features portable --hide-progress-bar --success-output immediate --failure-output immediate
+
 coverage-clean:
 	rm -rf "${CARGO_TARGET_DIR}/*.profraw" "${GRCOV_OUTPUT}" "${GRCOV_OUTPUT:.info=}"
 
