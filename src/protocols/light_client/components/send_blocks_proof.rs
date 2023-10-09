@@ -34,7 +34,7 @@ impl<'a> SendBlocksProofProcess<'a> {
         let status = self.execute_internally();
         self.protocol
             .peers()
-            .update_blocks_proof_request(self.peer_index, None);
+            .update_blocks_proof_request(self.peer_index, None, false);
         status
     }
 
@@ -118,7 +118,7 @@ impl<'a> SendBlocksProofProcess<'a> {
             ));
 
             // Get blocks
-            {
+            if original_request.should_get_blocks() {
                 let block_hashes: Vec<packed::Byte32> =
                     headers.iter().map(|header| header.hash()).collect();
                 {

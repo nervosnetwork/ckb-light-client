@@ -124,7 +124,7 @@ async fn last_state_is_changed() {
             .unwrap();
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some(content));
+            .update_blocks_proof_request(peer_index, Some(content), true);
     }
 
     num += 1;
@@ -218,7 +218,7 @@ async fn unexpected_response() {
             .unwrap();
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some(content));
+            .update_blocks_proof_request(peer_index, Some(content), true);
     }
 
     // Run the test.
@@ -325,7 +325,7 @@ async fn get_blocks_with_chunks() {
             .unwrap();
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some(content));
+            .update_blocks_proof_request(peer_index, Some(content), true);
     }
 
     // Run the test.
@@ -675,7 +675,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
             .unwrap();
         protocol
             .peers()
-            .update_blocks_proof_request(peer_index, Some(content));
+            .update_blocks_proof_request(peer_index, Some(content), true);
     }
 
     // Run the test.
