@@ -45,7 +45,7 @@ pub(crate) fn prove_or_download_matched_blocks(
                     .set(content.clone())
                     .build()
                     .as_bytes();
-                peers.update_blocks_proof_request(*peer_index, Some(content));
+                peers.update_blocks_proof_request(*peer_index, Some(content), true);
                 if let Err(err) = nc.send_message(
                     SupportProtocols::LightClient.protocol_id(),
                     *peer_index,

@@ -750,7 +750,7 @@ impl LightClientProtocol {
                         .as_bytes();
 
                     self.peers
-                        .update_blocks_proof_request(*peer_index, Some(content));
+                        .update_blocks_proof_request(*peer_index, Some(content), false);
                     if let Err(err) = nc.send_message(
                         SupportProtocols::LightClient.protocol_id(),
                         *peer_index,

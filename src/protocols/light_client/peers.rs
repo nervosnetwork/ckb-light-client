@@ -145,6 +145,7 @@ pub(crate) struct ProveState {
 pub(crate) struct BlocksProofRequest {
     content: packed::GetBlocksProof,
     when_sent: u64,
+    should_get_blocks: bool,
 }
 
 #[derive(Clone)]
@@ -394,8 +395,16 @@ impl ProveState {
 }
 
 impl BlocksProofRequest {
-    pub(crate) fn new(content: packed::GetBlocksProof, when_sent: u64) -> Self {
-        Self { content, when_sent }
+    pub(crate) fn new(
+        content: packed::GetBlocksProof,
+        when_sent: u64,
+        should_get_blocks: bool,
+    ) -> Self {
+        Self {
+            content,
+            when_sent,
+            should_get_blocks,
+        }
     }
 
     pub(crate) fn last_hash(&self) -> Byte32 {
@@ -429,6 +438,10 @@ impl BlocksProofRequest {
         } else {
             false
         }
+    }
+
+    pub(crate) fn should_get_blocks(&self) -> bool {
+        self.should_get_blocks
     }
 }
 
@@ -1480,10 +1493,12 @@ impl Peers {
         &self,
         index: PeerIndex,
         request: Option<packed::GetBlocksProof>,
+        should_get_blocks: bool,
     ) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
-            peer.blocks_proof_request =
-                request.map(|content| BlocksProofRequest::new(content, unix_time_as_millis()));
+            peer.blocks_proof_request = request.map(|content| {
+                BlocksProofRequest::new(content, unix_time_as_millis(), should_get_blocks)
+            });
         }
     }
     pub(crate) fn update_blocks_request(&self, index: PeerIndex, hashes: Option<Vec<Byte32>>) {
