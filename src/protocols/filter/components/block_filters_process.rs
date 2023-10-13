@@ -156,6 +156,17 @@ impl<'a> BlockFiltersProcess<'a> {
                     (finalized_check_point_hash, latest_block_filter_hashes)
                 } else {
                     let start_index = (start_number - finalized_check_point_number) as usize - 2;
+                    if start_index >= latest_block_filter_hashes.len() {
+                        info!(
+                            "ignoring, no enough data for block filter hashes, \
+                            finalized number: {finalized_check_point_number}, \
+                            finalized index: {finalized_check_point_index}, \
+                            start number: {start_number}, start index: {start_index}, \
+                            filter hashes length {}",
+                            latest_block_filter_hashes.len()
+                        );
+                        return Status::ok();
+                    }
                     let parent_hash = latest_block_filter_hashes[start_index].clone();
                     latest_block_filter_hashes.drain(..=start_index);
                     (parent_hash, latest_block_filter_hashes)

@@ -727,7 +727,6 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     );
 }
 
-#[should_panic(expected = "index out of bounds: the len is 0 but the index is")]
 #[tokio::test(flavor = "multi_thread")]
 async fn test_block_filter_without_enough_hashes() {
     setup();
