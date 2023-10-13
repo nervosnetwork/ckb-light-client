@@ -39,7 +39,12 @@ pub struct Peers {
     //   - Include at the next cached check point.
     cached_block_filter_hashes: RwLock<(u32, Vec<packed::Byte32>)>,
 
+    #[cfg(not(test))]
     max_outbound_peers: u32,
+
+    #[cfg(test)]
+    max_outbound_peers: RwLock<u32>,
+
     check_point_interval: BlockNumber,
     start_check_point: (u32, packed::Byte32),
 }
@@ -1105,6 +1110,9 @@ impl Peers {
         check_point_interval: BlockNumber,
         start_check_point: (u32, packed::Byte32),
     ) -> Self {
+        #[cfg(test)]
+        let max_outbound_peers = RwLock::new(max_outbound_peers);
+
         Self {
             inner: Default::default(),
             last_headers: Default::default(),
@@ -1231,8 +1239,19 @@ impl Peers {
         &self.matched_blocks
     }
 
+    #[cfg(not(test))]
     pub(crate) fn get_max_outbound_peers(&self) -> u32 {
         self.max_outbound_peers
+    }
+
+    #[cfg(test)]
+    pub(crate) fn get_max_outbound_peers(&self) -> u32 {
+        *self.max_outbound_peers.read().expect("poisoned")
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_max_outbound_peers(&self, max_outbound_peers: u32) {
+        *self.max_outbound_peers.write().expect("poisoned") = max_outbound_peers;
     }
 
     pub(crate) fn add_peer(&self, index: PeerIndex) {
