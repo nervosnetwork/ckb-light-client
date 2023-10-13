@@ -6,7 +6,7 @@ use ckb_network::{CKBProtocolContext, PeerIndex};
 use ckb_types::core::BlockNumber;
 use ckb_types::utilities::calc_filter_hash;
 use ckb_types::{packed, prelude::*};
-use log::{info, trace, warn};
+use log::{debug, info, trace, warn};
 use rand::seq::SliceRandom;
 use std::{cmp, sync::Arc};
 
@@ -56,8 +56,16 @@ impl<'a> BlockFiltersProcess<'a> {
 
         let block_filters = self.message.to_entity();
         let start_number: BlockNumber = block_filters.start_number().unpack();
+        let filters_count = block_filters.filters().len();
+        let blocks_count = block_filters.block_hashes().len();
+
+        debug!(
+            "recieved block filters: start number: {start_number}, \
+            filters count: {filters_count}, blocks count: {blocks_count}."
+        );
 
         let min_filtered_block_number = self.filter.storage.get_min_filtered_block_number();
+        debug!("current min filtered block number: {min_filtered_block_number}");
         if min_filtered_block_number + 1 != start_number {
             info!(
                 "ignoring, the start_number of block_filters message {} is not continuous with min_filtered_block_number: {}",
@@ -72,9 +80,6 @@ impl<'a> BlockFiltersProcess<'a> {
             }
             return Status::ok();
         }
-
-        let filters_count = block_filters.filters().len();
-        let blocks_count = block_filters.block_hashes().len();
 
         if filters_count != blocks_count {
             let error_message = format!(
