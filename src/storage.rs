@@ -33,6 +33,21 @@ const MIN_FILTERED_BLOCK_NUMBER: &str = "MIN_FILTERED_NUMBER";
 const LAST_N_HEADERS_KEY: &str = "LAST_N_HEADERS";
 const MAX_CHECK_POINT_INDEX: &str = "MAX_CHECK_POINT_INDEX";
 
+pub struct HeaderWithExtension {
+    pub header: Header,
+    pub extension: Option<packed::Bytes>,
+}
+
+impl HeaderWithExtension {
+    fn to_vec(&self) -> Vec<u8> {
+        let mut vec = self.header.as_slice().to_vec();
+        if let Some(extension) = self.extension.as_ref() {
+            vec.extend_from_slice(extension.as_slice());
+        }
+        vec
+    }
+}
+
 pub struct ScriptStatus {
     pub script: Script,
     pub script_type: ScriptType,
@@ -508,26 +523,27 @@ impl Storage {
         self.get_matched_blocks(Direction::Reverse)
     }
 
-    pub fn add_fetched_header(&self, header: &Header) {
+    pub fn add_fetched_header(&self, hwe: &HeaderWithExtension) {
         let mut batch = self.batch();
-        let block_hash = header.calc_header_hash();
+        let block_hash = hwe.header.calc_header_hash();
         batch
-            .put(Key::BlockHash(&block_hash).into_vec(), header.as_slice())
+            .put(Key::BlockHash(&block_hash).into_vec(), hwe.to_vec())
             .expect("batch put should be ok");
         batch
             .put(
-                Key::BlockNumber(header.raw().number().unpack()).into_vec(),
+                Key::BlockNumber(hwe.header.raw().number().unpack()).into_vec(),
                 block_hash.as_slice(),
             )
             .expect("batch put should be ok");
         batch.commit().expect("batch commit should be ok");
     }
-    pub fn add_fetched_tx(&self, tx: &Transaction, header: &Header) {
+
+    pub fn add_fetched_tx(&self, tx: &Transaction, hwe: &HeaderWithExtension) {
         let mut batch = self.batch();
-        let block_hash = header.calc_header_hash();
-        let block_number: u64 = header.raw().number().unpack();
+        let block_hash = hwe.header.calc_header_hash();
+        let block_number: u64 = hwe.header.raw().number().unpack();
         batch
-            .put(Key::BlockHash(&block_hash).into_vec(), header.as_slice())
+            .put(Key::BlockHash(&block_hash).into_vec(), hwe.to_vec())
             .expect("batch put should be ok");
         batch
             .put(
@@ -809,11 +825,12 @@ impl Storage {
             });
         if filter_matched {
             let block_hash = block.calc_header_hash();
+            let hwe = HeaderWithExtension {
+                header: block.header(),
+                extension: block.extension(),
+            };
             batch
-                .put(
-                    Key::BlockHash(&block_hash).into_vec(),
-                    block.header().as_slice(),
-                )
+                .put(Key::BlockHash(&block_hash).into_vec(), hwe.to_vec())
                 .expect("batch put should be ok");
             batch
                 .put(
@@ -1013,7 +1030,7 @@ impl Storage {
                     &self
                         .get(Key::BlockHash(&block_hash).into_vec())
                         .expect("db get should be ok")
-                        .expect("stored block hash / header mapping"),
+                        .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
                 )
                 .expect("stored header should be OK");
                 (tx, header)
@@ -1037,7 +1054,7 @@ impl CellProvider for Storage {
                 &self
                     .get(Key::BlockHash(&block_hash).into_vec())
                     .expect("db get should be ok")
-                    .expect("stored block hash / header mapping"),
+                    .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
             )
             .expect("stored header should be OK")
             .into_view();
@@ -1085,7 +1102,13 @@ impl CellDataProvider for Storage {
 impl HeaderProvider for Storage {
     fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
         self.get(Key::BlockHash(hash).into_vec())
-            .map(|v| v.map(|v| Header::from_slice(&v).expect("stored Header").into_view()))
+            .map(|v| {
+                v.map(|v| {
+                    Header::from_slice(&v[..Header::TOTAL_SIZE])
+                        .expect("stored Header")
+                        .into_view()
+                })
+            })
             .expect("db get should be ok")
     }
 }
@@ -1161,8 +1184,23 @@ impl CellProvider for StorageWithChainData {
 }
 
 impl ExtensionProvider for StorageWithChainData {
-    fn get_block_extension(&self, _hash: &Byte32) -> Option<packed::Bytes> {
-        todo!("New feature in CKB2023, introduced from \"RFC 0050: VM Syscalls 3\"")
+    fn get_block_extension(&self, hash: &Byte32) -> Option<packed::Bytes> {
+        self.storage
+            .get(Key::BlockHash(hash).into_vec())
+            .map(|v| {
+                v.map(|v| {
+                    if v.len() > Header::TOTAL_SIZE {
+                        Some(
+                            packed::Bytes::from_slice(&v[Header::TOTAL_SIZE..])
+                                .expect("stored block extension"),
+                        )
+                    } else {
+                        None
+                    }
+                })
+            })
+            .expect("db get should be ok")
+            .flatten()
     }
 }
 
@@ -1210,7 +1248,7 @@ pub enum CellType {
 /// | 64           | CellTypeScript     | TxHash                   |
 /// | 96           | TxLockScript       | TxHash                   |
 /// | 128          | TxTypeScript       | TxHash                   |
-/// | 160          | BlockHash          | Header                   |
+/// | 160          | BlockHash          | HeaderWithExtension      |
 /// | 192          | BlockNumber        | BlockHash                |
 /// | 208          | CheckPointIndex    | BlockFilterHash          |
 /// | 224          | Meta               | Meta                     |
@@ -1232,7 +1270,7 @@ pub enum Key<'a> {
 pub enum Value<'a> {
     Transaction(BlockNumber, TxIndex, &'a Transaction),
     TxHash(&'a Byte32),
-    Header(&'a Header),
+    HeaderWithExtension(&'a HeaderWithExtension),
     BlockHash(&'a Byte32),
     BlockFilterHash(&'a Byte32),
     Meta(Vec<u8>),
@@ -1322,7 +1360,7 @@ impl<'a> From<Value<'a>> for Vec<u8> {
                 encoded
             }
             Value::TxHash(tx_hash) => tx_hash.as_slice().into(),
-            Value::Header(header) => header.as_slice().into(),
+            Value::HeaderWithExtension(hwe) => hwe.to_vec(),
             Value::BlockHash(block_hash) => block_hash.as_slice().into(),
             Value::BlockFilterHash(block_filter_hash) => block_filter_hash.as_slice().into(),
             Value::Meta(meta_value) => meta_value,

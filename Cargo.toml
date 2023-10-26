@@ -9,21 +9,21 @@ homepage = "https://github.com/nervosnetwork/ckb-light-client"
 repository = "https://github.com/nervosnetwork/ckb-light-client"
 
 [dependencies]
-ckb-app-config    = "0.111.0"
-ckb-async-runtime = "0.111.0"
-ckb-stop-handler  = "0.111.0"
-ckb-constant      = "0.111.0"
-ckb-types         = "0.111.0"
-ckb-network       = "0.111.0"
-ckb-jsonrpc-types = "0.111.0"
-ckb-error         = "0.111.0"
-ckb-script        = "0.111.0"
-ckb-chain-spec    = "0.111.0"
-ckb-traits        = "0.111.0"
-ckb-resource      = "0.111.0"
-ckb-verification  = "0.111.0"
-ckb-systemtime    = "0.111.0"
-ckb-hash          = "0.111.0"
+ckb-app-config    = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-async-runtime = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-stop-handler  = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-constant      = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-types         = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-network       = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-jsonrpc-types = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-error         = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-script        = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-chain-spec    = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-traits        = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-resource      = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-verification  = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-systemtime    = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
+ckb-hash          = { git = "https://github.com/quake/ckb", branch = "quake/light-client-extension" }
 ckb-merkle-mountain-range = "0.5.1"
 golomb-coded-set = "0.2.0"
 rocksdb = { package = "ckb-rocksdb", version ="=0.20.0", features = ["snappy"], default-features = false }

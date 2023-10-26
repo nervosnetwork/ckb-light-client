@@ -6,6 +6,8 @@ use ckb_types::{
 };
 use log::{debug, error};
 
+use crate::{protocols::light_client::components::verify_extra_hash, storage::HeaderWithExtension};
+
 use super::{
     super::{LightClientProtocol, Status, StatusCode},
     verify_mmr_proof,
@@ -116,6 +118,29 @@ impl<'a> SendTransactionsProofProcess<'a> {
             // Check PoW for blocks
             return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
+            // Check extra hash for blocks
+            let is_v1 = self.message.has_extra_fields() && self.message.count_extra_fields() >= 2;
+            let extensions = if is_v1 {
+                let message_v1 =
+                    packed::SendTransactionsProofV1Reader::new_unchecked(self.message.as_slice());
+                let uncle_hashes: Vec<_> = message_v1
+                    .blocks_uncles_hash()
+                    .iter()
+                    .map(|uncle_hashes| uncle_hashes.to_entity())
+                    .collect();
+
+                let extensions: Vec<_> = message_v1
+                    .blocks_extension()
+                    .iter()
+                    .map(|extension| extension.to_entity().to_opt())
+                    .collect();
+
+                return_if_failed!(verify_extra_hash(&headers, &uncle_hashes, &extensions));
+                extensions
+            } else {
+                vec![None; headers.len()]
+            };
+
             // Verify the proof
             return_if_failed!(verify_mmr_proof(
                 self.protocol.mmr_activated_epoch(),
@@ -155,15 +180,21 @@ impl<'a> SendTransactionsProofProcess<'a> {
             }
             debug!("verify SendBlocksProof ok");
 
-            for filtered_block in filtered_blocks {
+            for (filtered_block, extension) in filtered_blocks.into_iter().zip(extensions.iter()) {
                 let header = filtered_block.header().into_view();
                 for tx in filtered_block.transactions() {
                     if self
                         .protocol
                         .peers()
-                        .add_transaction(&tx.calc_tx_hash(), &header.hash())
+                        .remove_fetching_transaction(&tx.calc_tx_hash(), &header.hash())
                     {
-                        self.protocol.storage().add_fetched_tx(&tx, &header.data());
+                        self.protocol.storage().add_fetched_tx(
+                            &tx,
+                            &HeaderWithExtension {
+                                header: header.data(),
+                                extension: extension.as_ref().cloned(),
+                            },
+                        );
                     }
                 }
             }

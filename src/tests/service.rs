@@ -22,7 +22,7 @@ use crate::{
         ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, SetScriptsCommand, Status,
         TransactionRpc, TransactionRpcImpl, TransactionWithStatus, TxStatus,
     },
-    storage::{self, StorageWithChainData},
+    storage::{self, HeaderWithExtension, StorageWithChainData},
     tests::utils::{create_peers, new_storage},
 };
 
@@ -728,8 +728,13 @@ fn rpc() {
         .into_iter()
         .map(|nonce| {
             let header = Header::new_builder().nonce(nonce.pack()).build();
-            storage.add_fetched_header(&header);
-            header.calc_header_hash().unpack()
+            let hash = header.calc_header_hash().unpack();
+            let extension = (nonce + 1).to_le_bytes().to_vec().pack();
+            storage.add_fetched_header(&HeaderWithExtension {
+                header: header,
+                extension: Some(extension),
+            });
+            hash
         })
         .collect();
 
@@ -961,7 +966,13 @@ fn rpc() {
             let tx = TransactionBuilder::default()
                 .header_dep(header_dep.pack())
                 .build();
-            storage.add_fetched_tx(&tx.data(), &Header::default());
+            storage.add_fetched_tx(
+                &tx.data(),
+                &&HeaderWithExtension {
+                    header: Header::default(),
+                    extension: None,
+                },
+            );
             tx.hash().unpack()
         })
         .collect();
