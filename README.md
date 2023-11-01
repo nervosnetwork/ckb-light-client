@@ -10,13 +10,13 @@ A CKB light client based on [RFC 44] and [RFC 45].
 [GitHub Actions]: https://github.com/nervosnetwork/ckb-light-client/workflows/CI/badge.svg
 [Codecov]: https://img.shields.io/codecov/c/gh/nervosnetwork/ckb-light-client/develop
 
-## How to connect testnet
+## How to run
 
-1. Run your own full node, this is an optional step, you may use the public testnet bootnodes instead.
+1. Run your own full node, this is an optional step, you may use the public bootnodes instead.
 
 Download ckb [v0.106.0 or above](https://github.com/nervosnetwork/ckb/releases/tag/v0.106.0), init and run ckb in a new folder:
 ```
-ckb init -c testnet
+ckb init -c mainnet
 ckb run
 ```
 
@@ -35,11 +35,11 @@ cargo build --release
 
 3. Run light client
 
-Copy the `ckb-light-client` binary and `config/testnet.toml` to a new folder, if you want to connect to the full node you just build in step 1, modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
+Copy the `ckb-light-client` binary and `config/mainnet.toml` to a new folder, if you want to connect to the full node you just build in step 1, modify the `bootnodes` section's peer address to full node peer's ip (should be 127.0.0.1 if you run the full node on localhost) and peer id.
 
 Start light client:
 ```
-RUST_LOG=info,ckb_light_client=info ./ckb-light-client run --config-file ./testnet.toml
+RUST_LOG=info,ckb_light_client=info ./ckb-light-client run --config-file ./mainnet.toml
 ```
 
 ## RPC
