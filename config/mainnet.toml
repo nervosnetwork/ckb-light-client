@@ -1,0 +1,77 @@
+# chain = "mainnet"
+# chain = "testnet"
+# chain = "your_path_to/dev.toml"
+chain = "mainnet"
+
+[store]
+path = "data/store"
+
+[network]
+path = "data/network"
+
+listen_addresses = ["/ip4/0.0.0.0/tcp/8118"]
+### Specify the public and routable network addresses
+# public_addresses = []
+
+# Node connects to nodes listed here to discovery other peers when there's no local stored peers.
+# When chain.spec is changed, this usually should also be changed to the bootnodes in the new chain.
+bootnodes = [
+  # Hangzhou, Asia
+  "/ip4/47.110.15.57/tcp/8114/p2p/QmXS4Kbc9HEeykHUTJCm2tNmqghbvWyYpUp6BtE5b6VrAU",
+  # Tokyo, Asia
+  "/ip4/47.245.31.79/tcp/8114/p2p/QmUaSuEdXNGJEKvkE4rCn3cwBrpRFUm5TsouF4M3Sjursv",
+  # Mumbai, Asia
+  "/ip4/13.234.144.148/tcp/8114/p2p/QmbT7QimcrcD5k2znoJiWpxoESxang6z1Gy9wof1rT1LKR",
+  # Tokyo, Asia
+  "/ip4/104.208.105.55/tcp/8114/p2p/QmejugEABNzAofqRhci7HAipLFvoyYKRacd272jNtnQBTE",
+  # Seoul, Asia
+  "/ip4/34.64.120.143/tcp/8114/p2p/QmejEJEbDcGGMp4D6WtftMMVLkR1ZuBfMgyLFDMJymkDt6",
+  # Virginia, North America
+  "/ip4/3.218.170.86/tcp/8114/p2p/QmShw2vtVt49wJagc1zGQXGS6LkQTcHxnEV3xs6y8MAmQN",
+  # Los Angeles, North America
+  "/ip4/35.236.107.161/tcp/8114/p2p/QmSRj57aa9sR2AiTvMyrEea8n1sEM1cDTrfb2VHVJxnGuu",
+  # Texas, North America
+  "/ip4/23.101.191.12/tcp/8114/p2p/QmexvXVDiRt2FBGptgK4gBJusWyyTEEaHeuCAa35EPNkZS",
+  # Toronto, North America
+  "/ip4/20.151.143.237/tcp/8114/p2p/QmNsGNQjYA6iP472bNnNE2GR31kCYBifhY1XcaUxRjZ1py",
+  # Frankfurt, Europe
+  "/ip4/52.59.155.249/tcp/8114/p2p/QmRHqhSGMGm5FtnkW8D6T83X7YwaiMAZXCXJJaKzQEo3rb",
+  # Frankfurt, Europe
+  "/ip4/20.52.236.172/tcp/8114/p2p/QmZgcFN3c7zpyzzxn9KNGsQpEyf4D7eCgrmNCnAeCWicw3",
+  # Paris, Europe
+  "/ip4/13.37.172.80/tcp/8114/p2p/QmXJg4iKbQzMpLhX75RyDn89Mv7N2H8vLePBR7kgZf6hYk",
+  # Warsaw, Europe
+  "/ip4/34.118.49.255/tcp/8114/p2p/QmeCzzVmSAU5LNYAeXhdJj8TCq335aJMqUxcvZXERBWdgS",
+  # Victoria, Oceania
+  "/ip4/40.115.75.216/tcp/8114/p2p/QmW3P1WYtuz9hitqctKnRZua2deHXhNePNjvtc9Qjnwp4q",
+  # Santiago, South America
+  "/ip4/34.176.239.95/tcp/8114/p2p/QmQoWrmuFauCn3zZ2mYYKAciG9opTbjzC2wVEfWveZNDt8"
+]
+
+### Whitelist-only mode
+# whitelist_only = false
+### Whitelist peers connecting from the given IP addresses
+# whitelist_peers = []
+
+### Enable `SO_REUSEPORT` feature to reuse port on Linux, not supported on other OS yet
+# reuse_port_on_linux = true
+
+max_peers = 125
+max_outbound_peers = 8
+# 2 minutes
+ping_interval_secs = 120
+# 20 minutes
+ping_timeout_secs = 1200
+connect_outbound_interval_secs = 15
+# If set to true, try to register upnp
+upnp = false
+# If set to true, network service will add discovered local address to peer store, it's helpful for private net development
+discovery_local_address = false
+# If set to true, random cleanup when there are too many inbound nodes
+# Ensure that itself can continue to serve as a bootnode node
+bootnode_mode = false
+
+[rpc]
+# Light client rpc is designed for self hosting, exposing to public network is not recommended and may cause security issues.
+# By default RPC only binds to localhost, thus it only allows accessing from the same machine.
+listen_address = "127.0.0.1:9000"
