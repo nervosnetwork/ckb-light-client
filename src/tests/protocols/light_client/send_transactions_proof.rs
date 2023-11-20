@@ -10,7 +10,10 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{light_client::constant::FETCH_HEADER_TX_TOKEN, FetchInfo, StatusCode},
+    protocols::{
+        light_client::constant::{FETCH_HEADER_TX_TOKEN, REFRESH_PEERS_TOKEN},
+        FetchInfo, StatusCode,
+    },
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -487,6 +490,10 @@ async fn test_send_headers_txs_request() {
     };
 
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
+
+    assert_eq!(peers.get_headers_to_fetch().len(), 1);
+    assert_eq!(peers.get_txs_to_fetch().len(), 1);
+
     protocol.notify(nc.context(), FETCH_HEADER_TX_TOKEN).await;
 
     assert!(nc.not_banned(peer_index));
@@ -511,4 +518,13 @@ async fn test_send_headers_txs_request() {
     let peer = peers.get_peer(&peer_index).unwrap();
     assert!(peer.get_blocks_proof_request().is_some());
     assert!(peer.get_txs_proof_request().is_some());
+
+    assert_eq!(peers.get_headers_to_fetch().len(), 0);
+    assert_eq!(peers.get_txs_to_fetch().len(), 0);
+
+    protocol.disconnected(nc.context(), peer_index).await;
+    protocol.notify(nc.context(), REFRESH_PEERS_TOKEN).await;
+
+    assert_eq!(peers.get_txs_to_fetch().len(), 0);
+    assert_eq!(peers.get_headers_to_fetch().len(), 0);
 }
