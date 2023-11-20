@@ -1260,6 +1260,8 @@ impl Peers {
     }
 
     pub(crate) fn remove_peer(&self, index: PeerIndex) {
+        self.mark_fetching_headers_timeout(index);
+        self.mark_fetching_txs_timeout(index);
         self.inner.remove(&index);
     }
 

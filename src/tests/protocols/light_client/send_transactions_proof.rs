@@ -525,6 +525,6 @@ async fn test_send_headers_txs_request() {
     protocol.disconnected(nc.context(), peer_index).await;
     protocol.notify(nc.context(), REFRESH_PEERS_TOKEN).await;
 
-    assert_eq!(peers.get_txs_to_fetch().len(), 0);
-    assert_eq!(peers.get_headers_to_fetch().len(), 0);
+    assert_eq!(peers.get_txs_to_fetch().len(), 1);
+    assert_eq!(peers.get_headers_to_fetch().len(), 1);
 }

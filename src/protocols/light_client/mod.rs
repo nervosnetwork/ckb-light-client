@@ -6,7 +6,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use ckb_chain_spec::consensus::Consensus;
-use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
+use ckb_constant::{
+    hardfork::{mainnet, testnet},
+    sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER,
+};
 use ckb_network::{
     async_trait, bytes::Bytes, CKBProtocolContext, CKBProtocolHandler, PeerIndex, SupportProtocols,
 };
@@ -409,11 +412,11 @@ impl LightClientProtocol {
 
 impl LightClientProtocol {
     pub(crate) fn new(storage: Storage, peers: Arc<Peers>, consensus: Consensus) -> Self {
-        // TODO remove this hard code when mmr is activated on testnet
-        let mmr_activated_epoch = if consensus.is_public_chain() {
-            EpochNumber::MAX
-        } else {
-            0
+        // Ref: https://github.com/nervosnetwork/rfcs/blob/01f3bc64ef8f54c94c7b0dcf9d30c84b6c8418b0/rfcs/0044-ckb-light-client/0044-ckb-light-client.md#deployment
+        let mmr_activated_epoch = match consensus.id.as_str() {
+            mainnet::CHAIN_SPEC_NAME => 8648,
+            testnet::CHAIN_SPEC_NAME => 5676,
+            _ => 0,
         };
         Self {
             storage,
