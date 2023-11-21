@@ -16,14 +16,12 @@ listen_addresses = ["/ip4/0.0.0.0/tcp/8118"]
 # Node connects to nodes listed here to discovery other peers when there's no local stored peers.
 # When chain.spec is changed, this usually should also be changed to the bootnodes in the new chain.
 bootnodes = [
-  # Hangzhou, Asia
-  "/ip4/47.110.15.57/tcp/8114/p2p/QmXS4Kbc9HEeykHUTJCm2tNmqghbvWyYpUp6BtE5b6VrAU",
+  # Hongkong, Asia
+  "/ip4/16.163.82.218/tcp/8114/p2p/QmaZMemLXSsxKUrYNucjEbPxVX3rBKsGhWW2muWtWxUWyh",
   # Tokyo, Asia
-  "/ip4/47.245.31.79/tcp/8114/p2p/QmUaSuEdXNGJEKvkE4rCn3cwBrpRFUm5TsouF4M3Sjursv",
+  "/ip4/35.79.196.111/tcp/8114/p2p/QmYCRVonLfP18LSoz2WCHaXDorUYxuUMfhtcXK1TuZ1iwF",
   # Mumbai, Asia
   "/ip4/13.234.144.148/tcp/8114/p2p/QmbT7QimcrcD5k2znoJiWpxoESxang6z1Gy9wof1rT1LKR",
-  # Tokyo, Asia
-  "/ip4/104.208.105.55/tcp/8114/p2p/QmejugEABNzAofqRhci7HAipLFvoyYKRacd272jNtnQBTE",
   # Seoul, Asia
   "/ip4/34.64.120.143/tcp/8114/p2p/QmejEJEbDcGGMp4D6WtftMMVLkR1ZuBfMgyLFDMJymkDt6",
   # Virginia, North America
@@ -36,8 +34,8 @@ bootnodes = [
   "/ip4/20.151.143.237/tcp/8114/p2p/QmNsGNQjYA6iP472bNnNE2GR31kCYBifhY1XcaUxRjZ1py",
   # Frankfurt, Europe
   "/ip4/52.59.155.249/tcp/8114/p2p/QmRHqhSGMGm5FtnkW8D6T83X7YwaiMAZXCXJJaKzQEo3rb",
-  # Frankfurt, Europe
-  "/ip4/20.52.236.172/tcp/8114/p2p/QmZgcFN3c7zpyzzxn9KNGsQpEyf4D7eCgrmNCnAeCWicw3",
+  # London, Europe
+  "/ip4/3.10.216.39/tcp/8114/p2p/QmagxSv7GNwKXQE7mi1iDjFHghjUpbqjBgqSot7PmMJqHA",
   # Paris, Europe
   "/ip4/13.37.172.80/tcp/8114/p2p/QmXJg4iKbQzMpLhX75RyDn89Mv7N2H8vLePBR7kgZf6hYk",
   # Warsaw, Europe
@@ -45,7 +43,9 @@ bootnodes = [
   # Victoria, Oceania
   "/ip4/40.115.75.216/tcp/8114/p2p/QmW3P1WYtuz9hitqctKnRZua2deHXhNePNjvtc9Qjnwp4q",
   # Santiago, South America
-  "/ip4/34.176.239.95/tcp/8114/p2p/QmQoWrmuFauCn3zZ2mYYKAciG9opTbjzC2wVEfWveZNDt8"
+  "/ip4/34.176.239.95/tcp/8114/p2p/QmQoWrmuFauCn3zZ2mYYKAciG9opTbjzC2wVEfWveZNDt8",
+  # Capetown, Africa
+  "/ip4/13.245.217.98/tcp/8114/p2p/Qmf4t1SzFhRWuGcFcgs7r4pXvkACsz3FcaBMcmMKQMMpn7"
 ]
 
 ### Whitelist-only mode

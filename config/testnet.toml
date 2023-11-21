@@ -16,30 +16,30 @@ listen_addresses = ["/ip4/0.0.0.0/tcp/8118"]
 # Node connects to nodes listed here to discovery other peers when there's no local stored peers.
 # When chain.spec is changed, this usually should also be changed to the bootnodes in the new chain.
 bootnodes = [
-  # Hangzhou, Asia
-  "/ip4/47.111.169.36/tcp/8111/p2p/QmNQ4jky6uVqLDrPU7snqxARuNGWNLgSrTnssbRuy3ij2W",
   # Ohio, North America
   "/ip4/18.217.146.65/tcp/8111/p2p/QmT6DFfm18wtbJz3y4aPNn3ac86N4d4p4xtfQRRPf73frC",
   # Singapore, Asia
   "/ip4/18.136.60.221/tcp/8111/p2p/QmTt6HeNakL8Fpmevrhdna7J4NzEMf9pLchf1CXtmtSrwb",
   # London, Europe
   "/ip4/35.176.207.239/tcp/8111/p2p/QmSJTsMsMGBjzv1oBNwQU36VhQRxc2WQpFoRu1ZifYKrjZ",
-  # Virginia, North America
-  "/ip4/47.90.209.219/tcp/8111/p2p/QmRJKqD4gdp7mhC4cz8uMSdPEjXzBdN3J8pARJBvNPk3G3",
-  # Sydney, Australia
-  "/ip4/47.74.66.72/tcp/8111/p2p/QmPhgweKm2ciYq52LjtEDmKFqHxGcg2WQ8RLCayRRycanD",
-  # Frankfurt, Europe
-  "/ip4/47.254.175.152/tcp/8111/p2p/QmXw7RsAR9bghvW4LrjrVBEwTMbdnpTEdWEtZSVQFpUgqU",
-  # Tokyo, Asia
-  "/ip4/47.245.29.58/tcp/8111/p2p/QmYWiwxHasuyou5ztw5uQkHbhm6gs6RB84sbgYxZNGHgaW",
-  # Kualalumpu, Asia
-  "/ip4/47.254.234.14/tcp/8111/p2p/QmfUJGvgXRTM12rSFScXy9GyD3ssuLVSpvscP5nngbhNbU",
-  # California, North America
-  "/ip4/47.89.252.15/tcp/8111/p2p/QmRcUV32qumGrhkTXCWXrMhwGZLKZTmuFzLWacMpSZJ3n9",
-  # Hohhot, Asia
-  "/ip4/39.104.177.87/tcp/8111/p2p/QmQ27jbnww6deXQiv7SmYAUBPA1S3vGcqP9aRsXa4VaXEi",
   # Singapore, Asia
   "/ip4/13.228.149.113/tcp/8111/p2p/QmQoTR39rBkpZVgLApDGDoFnJ2YDBS9hYeiib1Z6aoAdEf",
+  # Bahrain, Asia
+  "/ip4/157.241.73.87/tcp/8111/p2p/QmSPkAyXqsWpRiS7HpHLTProVdhQWLKFHCXbRjaLpJj7ZL",
+  # Japan, Asia
+  "/ip4/4.241.132.26/tcp/8111/p2p/QmX5D6aJiAQ5Fxn4BfVqSn6zrgyuQM1oXVC9yvmzLuHXnx",
+  # Korea, Asia
+  "/ip4/52.147.120.180/tcp/8111/p2p/QmPcJY2gZLUm66szYA9QaG1P3rzwseWCMgbj6AyNCyW4G2",
+  # Hong Kong, Asia
+  "/ip4/18.167.196.121/tcp/8111/p2p/QmQMjFrNGaphzfHin3mbYybbJcFMDUihKAcknquYvm9J3W",
+  # Oregon, North America
+  "/ip4/34.216.103.183/tcp/8111/p2p/Qmd41MaByDprkC5gP1XBKgamZ9DTLNk37zbPgwtiWCzRV6",
+  # Canada, North America
+  "/ip4/3.98.152.180/tcp/8111/p2p/QmWVuW5KquiWDSqgMJRFW1xRtVqkYJrWz6S9NNk6fFn3wh",
+  # Frankfurt, Europe
+  "/ip4/18.192.147.65/tcp/8111/p2p/QmWcEhsMNRcfJit62EbKgzpgtAJZX1G3Ur4shXjcvLsYDb",
+  # Sydney, Oceania
+  "/ip4/13.236.13.195/tcp/8111/p2p/QmfUTZxsse7rFJTJfoUv8bbStoDLETxst5nJEpJozNuAnH"
 ]
 
 ### Whitelist-only mode
