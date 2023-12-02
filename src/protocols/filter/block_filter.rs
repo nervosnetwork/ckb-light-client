@@ -95,11 +95,13 @@ impl FilterProtocol {
         nc: Arc<dyn CKBProtocolContext + Sync>,
         immediately: bool,
     ) {
-        let start_number = self.storage.get_min_filtered_block_number() + 1;
+        let min_filtered_block_number = self.storage.get_min_filtered_block_number();
+        let start_number = min_filtered_block_number + 1;
         let (finalized_check_point_index, _) = self.storage.get_last_check_point();
-        let could_ask_more = self
-            .peers
-            .could_request_more_block_filters(finalized_check_point_index, start_number);
+        let could_ask_more = self.peers.could_request_more_block_filters(
+            finalized_check_point_index,
+            min_filtered_block_number,
+        );
         if log_enabled!(Level::Trace) {
             let finalized_check_point_number = self
                 .peers
@@ -113,9 +115,9 @@ impl FilterProtocol {
                 .calc_check_point_number(cached_check_point_index + 1);
             trace!(
                 "could request block filters from {} or not: {}, \
-                         finalized: index {}, number {}; \
-                         cached: index {}, number {}, length {}; \
-                         next cached: number {}",
+                finalized: index {}, number {}; \
+                cached: index {}, number {}, length {}; \
+                next cached: number {}",
                 start_number,
                 could_ask_more,
                 finalized_check_point_index,
