@@ -1138,8 +1138,14 @@ impl Peers {
         self.check_point_interval * BlockNumber::from(index)
     }
 
-    fn calc_best_check_point_index_not_greater_than(&self, number: BlockNumber) -> u32 {
-        (number / self.check_point_interval) as u32
+    fn calc_cached_check_point_index_when_sync_at(&self, number: BlockNumber) -> u32 {
+        // Examples of `input -> output`, denote `check_point_interval` as `i`:
+        // - [0] -> 0
+        // - [1, i] -> 0
+        // - [i+1, 2i] -> 1
+        // - ... ...
+        // - [ki+1, (k+1)i] -> k
+        (number.saturating_sub(1) / self.check_point_interval) as u32
     }
 
     pub(crate) fn last_headers(&self) -> &RwLock<Vec<HeaderView>> {
@@ -1605,7 +1611,7 @@ impl Peers {
 
     pub(crate) fn update_min_filtered_block_number(&self, min_filtered_block_number: BlockNumber) {
         let should_cached_check_point_index =
-            self.calc_best_check_point_index_not_greater_than(min_filtered_block_number);
+            self.calc_cached_check_point_index_when_sync_at(min_filtered_block_number + 1);
         let current_cached_check_point_index =
             self.cached_block_filter_hashes.read().expect("poisoned").0;
         if current_cached_check_point_index != should_cached_check_point_index {
@@ -1799,7 +1805,7 @@ impl Peers {
         min_filtered_block_number: BlockNumber,
     ) -> bool {
         let should_cached_check_point_index =
-            self.calc_best_check_point_index_not_greater_than(min_filtered_block_number);
+            self.calc_cached_check_point_index_when_sync_at(min_filtered_block_number + 1);
         if should_cached_check_point_index >= finalized_check_point_index {
             let finalized_check_point_number =
                 self.calc_check_point_number(finalized_check_point_index);
@@ -1807,7 +1813,7 @@ impl Peers {
                 .get_latest_block_filter_hashes(finalized_check_point_index)
                 .len();
             finalized_check_point_number + latest_block_filter_hashes_count as BlockNumber
-                >= min_filtered_block_number
+                >= min_filtered_block_number + 1
         } else {
             // Check:
             // - If cached block filter hashes is same check point as the required,

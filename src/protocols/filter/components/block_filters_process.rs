@@ -253,10 +253,10 @@ impl<'a> BlockFiltersProcess<'a> {
         self.filter
             .update_min_filtered_block_number(filtered_block_number);
 
-        let could_request_more_block_filters = self.filter.peers.could_request_more_block_filters(
-            finalized_check_point_index,
-            filtered_block_number + 1,
-        );
+        let could_request_more_block_filters = self
+            .filter
+            .peers
+            .could_request_more_block_filters(finalized_check_point_index, filtered_block_number);
         if could_request_more_block_filters {
             // send next batch GetBlockFilters message to a random best peer
             let best_peer = self
