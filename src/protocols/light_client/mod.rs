@@ -260,7 +260,7 @@ impl LightClientProtocol {
     ) -> Result<(), Status> {
         let mmr_activated_epoch = self.mmr_activated_epoch();
         for header in headers {
-            if !header.is_valid(mmr_activated_epoch) {
+            if !header.patched_is_valid(mmr_activated_epoch) {
                 let header = header.header();
                 let errmsg = format!(
                     "failed to verify chain root for block#{}, hash: {:#x}",
@@ -285,7 +285,7 @@ impl LightClientProtocol {
             return Err(StatusCode::InvalidNonce.with_context(errmsg));
         }
         // Check Chain Root
-        if !verifiable_header.is_valid(self.mmr_activated_epoch()) {
+        if !verifiable_header.patched_is_valid(self.mmr_activated_epoch()) {
             let errmsg = format!(
                 "failed to verify chain root for block#{}, hash: {:#x}",
                 header.number(),
@@ -414,8 +414,8 @@ impl LightClientProtocol {
     pub(crate) fn new(storage: Storage, peers: Arc<Peers>, consensus: Consensus) -> Self {
         // Ref: https://github.com/nervosnetwork/rfcs/blob/01f3bc64ef8f54c94c7b0dcf9d30c84b6c8418b0/rfcs/0044-ckb-light-client/0044-ckb-light-client.md#deployment
         let mmr_activated_epoch = match consensus.id.as_str() {
-            mainnet::CHAIN_SPEC_NAME => 8648,
-            testnet::CHAIN_SPEC_NAME => 5676,
+            mainnet::CHAIN_SPEC_NAME => 8651,
+            testnet::CHAIN_SPEC_NAME => 5711,
             _ => 0,
         };
         Self {
