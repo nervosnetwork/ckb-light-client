@@ -1,5 +1,10 @@
 use ckb_network::{CKBProtocolContext, PeerIndex};
-use ckb_types::{core::HeaderView, packed::LightClientMessage, prelude::*};
+use ckb_types::{
+    core::{EpochNumber, EpochNumberWithFraction, ExtraHashView, HeaderView},
+    packed::LightClientMessage,
+    prelude::*,
+    utilities::merkle_mountain_range::VerifiableHeader,
+};
 
 use super::{Status, StatusCode};
 
@@ -36,5 +41,46 @@ impl HeaderUtils for HeaderView {
         self.number() + 1 == child.number()
             && (self.is_genesis() || child.epoch().is_successor_of(self.epoch()))
             && self.hash() == child.parent_hash()
+    }
+}
+
+// TODO Remove patch after the upstream fixed.
+//
+// Ref: https://github.com/nervosnetwork/ckb/blob/v0.112.1/util/types/src/utilities/merkle_mountain_range.rs#L212-L241
+pub(crate) trait VerifiableHeaderPatch {
+    fn patched_is_valid(&self, mmr_activated_epoch_number: EpochNumber) -> bool;
+}
+
+impl VerifiableHeaderPatch for VerifiableHeader {
+    fn patched_is_valid(&self, mmr_activated_epoch_number: EpochNumber) -> bool {
+        let mmr_activated_epoch = EpochNumberWithFraction::new(mmr_activated_epoch_number, 0, 1);
+        let has_chain_root = self.header().epoch() > mmr_activated_epoch;
+        if has_chain_root {
+            if self.header().is_genesis() {
+                if !self.parent_chain_root().is_default() {
+                    return false;
+                }
+            } else {
+                let is_extension_beginning_with_chain_root_hash = self
+                    .extension()
+                    .map(|extension| {
+                        let actual_extension_data = extension.raw_data();
+                        let parent_chain_root_hash = self.parent_chain_root().calc_mmr_hash();
+                        actual_extension_data.starts_with(parent_chain_root_hash.as_slice())
+                    })
+                    .unwrap_or(false);
+                if !is_extension_beginning_with_chain_root_hash {
+                    return false;
+                }
+            }
+        }
+
+        let expected_extension_hash = self
+            .extension()
+            .map(|extension| extension.calc_raw_data_hash());
+        let extra_hash_view = ExtraHashView::new(self.uncles_hash(), expected_extension_hash);
+        let expected_extra_hash = extra_hash_view.extra_hash();
+        let actual_extra_hash = self.header().extra_hash();
+        expected_extra_hash == actual_extra_hash
     }
 }

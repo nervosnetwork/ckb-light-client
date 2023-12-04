@@ -920,6 +920,7 @@ async fn invalid_parent_chain_root_for_the_genesis_block() {
 }
 
 async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
+    setup();
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -934,8 +935,8 @@ async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
     protocol.set_mmr_activated_epoch(0);
     protocol.set_last_n_blocks(3);
 
-    let num = 1;
-    chain.mine_to(1);
+    let num = 10;
+    chain.mine_to(num + 1);
 
     let snapshot = chain.shared().snapshot();
 
@@ -971,9 +972,11 @@ async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
             let headers = (0..num)
                 .into_iter()
                 .map(|n| {
-                    if !should_passed && n == 0 {
+                    if !should_passed && n == num / 2 {
+                        // Set a wrong parent chain root:
+                        // - Use n's chain root as n's parent chain root
                         let parent_chain_root = snapshot
-                            .chain_root_mmr(1)
+                            .chain_root_mmr(n)
                             .get_root()
                             .expect("has chain root");
                         snapshot

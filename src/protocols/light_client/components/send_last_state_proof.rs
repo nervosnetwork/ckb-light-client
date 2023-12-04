@@ -1077,7 +1077,7 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
     raw_proof: packed::HeaderDigestVecReader,
     headers: T,
 ) -> Result<(), Status> {
-    if last_header.is_valid(mmr_activated_epoch) {
+    if last_header.patched_is_valid(mmr_activated_epoch) {
         trace!(
             "passed: verify extra hash for block-{} ({:#x})",
             last_header.header().number(),

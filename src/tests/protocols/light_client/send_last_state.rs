@@ -79,7 +79,7 @@ async fn invalid_chain_root() {
 
     let data = {
         let header = HeaderBuilder::default()
-            .epoch(EpochNumberWithFraction::new(1, 0, 10).pack())
+            .epoch(EpochNumberWithFraction::new(1, 1, 10).pack())
             .number(11u64.pack())
             .build();
         let last_header = packed::VerifiableHeader::new_builder()
