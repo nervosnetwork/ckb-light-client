@@ -54,6 +54,13 @@ impl<'a> BlockFiltersProcess<'a> {
             return Status::ok();
         };
 
+        let mut matched_blocks = self
+            .filter
+            .peers
+            .matched_blocks()
+            .write()
+            .expect("poisoned");
+
         let block_filters = self.message.to_entity();
         let start_number: BlockNumber = block_filters.start_number().unpack();
         let filters_count = block_filters.filters().len();
@@ -212,12 +219,6 @@ impl<'a> BlockFiltersProcess<'a> {
         let tip_header = self.filter.storage.get_tip_header();
         let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
 
-        let mut matched_blocks = self
-            .filter
-            .peers
-            .matched_blocks()
-            .write()
-            .expect("poisoned");
         if possible_match_blocks_len != 0 {
             let blocks = possible_match_blocks
                 .iter()
