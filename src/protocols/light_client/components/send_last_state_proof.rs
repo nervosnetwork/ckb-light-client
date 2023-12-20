@@ -150,10 +150,10 @@ impl<'a> SendLastStateProofProcess<'a> {
 
         // Check if headers are continuous.
         if reorg_count != 0 {
-            return_if_failed!(check_continuous_headers(&headers[..reorg_count - 1]));
+            return_if_failed!(check_continuous_headers(&headers[..reorg_count]));
         }
         return_if_failed!(check_continuous_headers(
-            &headers[reorg_count + sampled_count..]
+            &headers[(reorg_count + sampled_count)..]
         ));
 
         // Verify MMR proof
@@ -249,6 +249,30 @@ impl<'a> SendLastStateProofProcess<'a> {
                         }
                     } else if reorg_count == 0 {
                         new_last_headers
+                    } else if sampled_count == 0
+                        && check_continuous_headers(&headers[(reorg_count - 1)..=reorg_count])
+                            .is_ok()
+                    {
+                        // At the above part:
+                        // - `reorg_count != 0`, `headers[..reorg_count]` are checked.
+                        // - `headers[(reorg_count + sampled_count)..]` are always checked.
+                        // So, only check `reorg_count - 1` and `reorg_count` is enough to prove
+                        // all header are continuous.
+                        let required_count = last_n_blocks - last_n_count;
+                        let old_last_headers = &headers[..reorg_count];
+                        let old_last_headers_len = old_last_headers.len();
+                        let tmp_headers = old_last_headers
+                            .iter()
+                            .skip(old_last_headers_len.saturating_sub(required_count))
+                            .map(ToOwned::to_owned)
+                            .chain(new_last_headers)
+                            .collect::<Vec<_>>();
+                        debug!("peer {}: reorg but no enough blocks, so all headers should be continuous, \
+                            reorg: {reorg_count}, sampled: {sampled_count}, last_n_calculate: {last_n_count}, \
+                            last_n_real: {}, last_n_param: {last_n_blocks}, original_request: {original_request}",
+                            self.peer_index, tmp_headers.len()
+                        );
+                        tmp_headers
                     } else {
                         // If this branch is reached, the follow conditions must be satisfied:
                         // - No previous prove state.
