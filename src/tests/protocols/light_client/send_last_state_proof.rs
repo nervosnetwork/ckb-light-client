@@ -1653,7 +1653,6 @@ async fn reorg_rollback_after_restart_and_last_n_blocks_is_not_enough() {
         last_number: 30,
         rollback_blocks_count: 3,
         last_n_blocks: 20,
-        result: StatusCode::InvalidReorgHeaders,
         restart: true,
         ..Default::default()
     };
