@@ -1648,6 +1648,19 @@ async fn reorg_rollback_5_blocks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn reorg_rollback_after_restart_and_last_n_blocks_is_not_enough() {
+    let param = ReorgTestParameter {
+        last_number: 30,
+        rollback_blocks_count: 3,
+        last_n_blocks: 20,
+        result: StatusCode::InvalidReorgHeaders,
+        restart: true,
+        ..Default::default()
+    };
+    test_with_reorg_blocks(param).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn reorg_detect_long_fork_turn_1() {
     let param = ReorgTestParameter {
         last_number: 30,
@@ -1682,6 +1695,8 @@ struct ReorgTestParameter {
     long_fork_detected: bool,
     expected_last_headers_count_opt: Option<BlockNumber>,
     result: StatusCode,
+    // Mock "restart" state: after restart, the first received "last state" is on a forked chain.
+    restart: bool,
 }
 
 async fn test_with_reorg_blocks(param: ReorgTestParameter) {
@@ -1832,6 +1847,11 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                 .build()
         });
         assert_eq!(chain.shared().snapshot().tip_number(), last_number);
+    }
+
+    if param.restart {
+        protocol.peers().mock_initialized(peer_index);
+        protocol.peers().request_last_state(peer_index).unwrap();
     }
 
     // Run the test.

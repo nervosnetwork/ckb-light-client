@@ -1286,6 +1286,13 @@ impl Peers {
     }
 
     #[cfg(test)]
+    pub(crate) fn mock_initialized(&self, index: PeerIndex) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            _ = peer.state.take();
+        }
+    }
+
+    #[cfg(test)]
     pub(crate) fn mock_prove_request(
         &self,
         index: PeerIndex,
