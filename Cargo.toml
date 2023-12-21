@@ -1,6 +1,6 @@
 [package]
 name = "ckb-light-client"
-version = "0.3.2"
+version = "0.3.3"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
 edition = "2021"
 license = "MIT"
