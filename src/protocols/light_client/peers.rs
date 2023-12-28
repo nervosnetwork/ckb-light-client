@@ -1723,7 +1723,9 @@ impl Peers {
                     if check_point_number == finalized_check_point_number {
                         let proved_number = state.get_last_header().header().number();
                         let last_number = latest_block_filter_hashes.get_last_number();
-                        if last_number < proved_number {
+                        if last_number < proved_number
+                            && proved_number - last_number < self.check_point_interval * 2
+                        {
                             Some((*peer_index, last_number + 1))
                         } else {
                             None
