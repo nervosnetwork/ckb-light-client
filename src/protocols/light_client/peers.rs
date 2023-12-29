@@ -1033,9 +1033,10 @@ impl PeerState {
     fn require_new_last_state(&self, before_ts: u64) -> bool {
         match self {
             Self::Initialized => true,
-            Self::Ready { ref last_state, .. } => last_state.update_ts() < before_ts,
-            Self::OnlyHasLastState { .. }
-            | Self::RequestFirstLastState { .. }
+            Self::OnlyHasLastState { ref last_state } | Self::Ready { ref last_state, .. } => {
+                last_state.update_ts() < before_ts
+            }
+            Self::RequestFirstLastState { .. }
             | Self::RequestFirstLastStateProof { .. }
             | Self::RequestNewLastState { .. }
             | Self::RequestNewLastStateProof { .. } => false,
