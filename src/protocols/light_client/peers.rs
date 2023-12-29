@@ -254,7 +254,6 @@ impl LastState {
         self.update_ts
     }
 
-    #[cfg(test)]
     pub(crate) fn is_same_as(&self, another: &Self) -> bool {
         if_verifiable_headers_are_same(&self.header, &another.header)
     }

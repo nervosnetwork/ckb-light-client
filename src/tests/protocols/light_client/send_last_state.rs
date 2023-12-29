@@ -215,8 +215,7 @@ async fn update_to_same_last_state() {
         let last_state_after = peer_state_after.get_last_state().expect("has last state");
 
         assert!(last_state_after.is_same_as(&last_state_before));
-        // TODO keep the update timestamp if the last state is not changed
-        assert_ne!(last_state_after.update_ts(), last_state_before.update_ts());
+        assert_eq!(last_state_after.update_ts(), last_state_before.update_ts());
     }
 }
 

@@ -33,32 +33,54 @@ impl<'a> SendLastStateProcess<'a> {
 
         let last_state = LastState::new(last_header);
 
-        return_if_failed!(self
-            .protocol
-            .peers()
-            .update_last_state(self.peer_index, last_state.clone()));
-
         if let Some(prev_last_state) = peer_state.get_last_state() {
-            trace!(
-                "peer {}: update last state from {} to {}",
-                self.peer_index,
-                prev_last_state,
-                last_state,
-            );
-            if prev_last_state.total_difficulty() < last_state.total_difficulty() {
-                if let Some(prove_state) = peer_state.get_prove_state() {
-                    if prove_state.is_parent_of(&last_state) {
-                        trace!("peer {}: new last state could be trusted", self.peer_index);
-                        let last_n_blocks = self.protocol.last_n_blocks() as usize;
-                        let child_prove_state = prove_state.new_child(last_state, last_n_blocks);
-                        return_if_failed!(self
-                            .protocol
-                            .update_prove_state_to_child(self.peer_index, child_prove_state));
+            if last_state.is_same_as(prev_last_state) {
+                trace!(
+                    "peer {}: receive the same last state as previous {}",
+                    self.peer_index,
+                    last_state,
+                );
+                // Do NOT update the timestamp for same last state,
+                // so it could be banned after timeout check.
+            } else {
+                trace!(
+                    "peer {}: update last state from {} to {}",
+                    self.peer_index,
+                    prev_last_state,
+                    last_state,
+                );
+
+                return_if_failed!(self
+                    .protocol
+                    .peers()
+                    .update_last_state(self.peer_index, last_state.clone()));
+
+                if prev_last_state.total_difficulty() < last_state.total_difficulty() {
+                    if let Some(prove_state) = peer_state.get_prove_state() {
+                        if prove_state.is_parent_of(&last_state) {
+                            trace!("peer {}: new last state could be trusted", self.peer_index);
+                            let last_n_blocks = self.protocol.last_n_blocks() as usize;
+                            let child_prove_state =
+                                prove_state.new_child(last_state, last_n_blocks);
+                            return_if_failed!(self
+                                .protocol
+                                .update_prove_state_to_child(self.peer_index, child_prove_state));
+                        }
                     }
                 }
             }
         } else {
-            trace!("peer {}: initialize last state", self.peer_index);
+            trace!(
+                "peer {}: initialize last state {}",
+                self.peer_index,
+                last_state
+            );
+
+            return_if_failed!(self
+                .protocol
+                .peers()
+                .update_last_state(self.peer_index, last_state));
+
             let is_sent =
                 return_if_failed!(self.protocol.get_last_state_proof(self.nc, self.peer_index));
             if !is_sent {
