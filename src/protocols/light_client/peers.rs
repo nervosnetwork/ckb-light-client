@@ -1857,6 +1857,15 @@ impl Peers {
                         }
                     })
                     .or_else(|| {
+                        peer.state.get_last_state().and_then(|state| {
+                            if now > state.update_ts + MESSAGE_TIMEOUT {
+                                Some(*peer_index)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .or_else(|| {
                         peer.get_blocks_proof_request().and_then(|req| {
                             if now > req.when_sent + MESSAGE_TIMEOUT {
                                 Some(*peer_index)
