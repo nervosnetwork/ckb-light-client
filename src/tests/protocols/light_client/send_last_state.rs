@@ -161,6 +161,66 @@ async fn initialize_last_state() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn update_to_same_last_state() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+
+    let num = 12;
+    chain.mine_to(num);
+
+    let snapshot = chain.shared().snapshot();
+    let last_header = snapshot
+        .get_verifiable_header_by_number(num)
+        .expect("block stored");
+    let data = {
+        let content = packed::SendLastState::new_builder()
+            .last_header(last_header)
+            .build();
+        packed::LightClientMessage::new_builder()
+            .set(content)
+            .build()
+    }
+    .as_bytes();
+
+    // Setup the test fixture:
+    // - Update last state.
+    {
+        protocol
+            .received(nc.context(), peer_index, data.clone())
+            .await;
+    }
+
+    // Run the test.
+    {
+        let peer_state_before = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state");
+        let last_state_before = peer_state_before.get_last_state().expect("has last state");
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(2000)).await;
+        protocol.received(nc.context(), peer_index, data).await;
+
+        let peer_state_after = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state");
+        let last_state_after = peer_state_after.get_last_state().expect("has last state");
+
+        assert!(last_state_after.is_same_as(&last_state_before));
+        // TODO keep the update timestamp if the last state is not changed
+        assert_ne!(last_state_after.update_ts(), last_state_before.update_ts());
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn update_to_continuous_last_state() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);

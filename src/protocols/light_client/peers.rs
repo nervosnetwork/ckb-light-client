@@ -249,6 +249,15 @@ impl LastState {
     pub(crate) fn header(&self) -> &HeaderView {
         self.as_ref().header()
     }
+
+    pub(crate) fn update_ts(&self) -> u64 {
+        self.update_ts
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_same_as(&self, another: &Self) -> bool {
+        if_verifiable_headers_are_same(&self.header, &another.header)
+    }
 }
 
 impl fmt::Display for ProveRequest {
@@ -1025,7 +1034,7 @@ impl PeerState {
     fn require_new_last_state(&self, before_ts: u64) -> bool {
         match self {
             Self::Initialized => true,
-            Self::Ready { ref last_state, .. } => last_state.update_ts < before_ts,
+            Self::Ready { ref last_state, .. } => last_state.update_ts() < before_ts,
             Self::OnlyHasLastState { .. }
             | Self::RequestFirstLastState { .. }
             | Self::RequestFirstLastStateProof { .. }
