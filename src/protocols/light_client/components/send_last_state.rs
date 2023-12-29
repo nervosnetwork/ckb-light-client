@@ -1,5 +1,7 @@
-use super::super::{LastState, LightClientProtocol, Status};
+use super::super::{LastState, LightClientProtocol, Status, StatusCode};
+use ckb_constant::sync::MAX_TIP_AGE;
 use ckb_network::{CKBProtocolContext, PeerIndex};
+use ckb_systemtime::unix_time_as_millis;
 use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
 use log::{debug, trace};
 
@@ -30,6 +32,7 @@ impl<'a> SendLastStateProcess<'a> {
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
         return_if_failed!(self.protocol.check_verifiable_header(&last_header));
+        return_if_failed!(check_last_state(&last_header));
 
         let last_state = LastState::new(last_header);
 
@@ -71,4 +74,17 @@ impl<'a> SendLastStateProcess<'a> {
 
         Status::ok()
     }
+}
+
+fn check_last_state(last_header: &VerifiableHeader) -> Result<(), Status> {
+    let now = unix_time_as_millis();
+    let timestamp = last_header.header().timestamp();
+    if now.saturating_sub(timestamp) > MAX_TIP_AGE {
+        let errmsg = format!(
+            "still in initial block download with a very high probability \
+            since {now} - {timestamp} > {MAX_TIP_AGE}",
+        );
+        return Err(StatusCode::PeerIsInIBD.with_context(errmsg));
+    }
+    Ok(())
 }

@@ -34,6 +34,8 @@ pub enum StatusCode {
     InvalidLastState = 412,
     /// The peer state is not correct for transition.
     IncorrectLastState = 413,
+    /// The peer is still in initial block download with a very high probability.
+    PeerIsInIBD = 414,
 
     /// Receives a response but the peer isn't waiting for a response.
     PeerIsNotOnProcess = 421,
