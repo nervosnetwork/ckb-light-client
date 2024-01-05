@@ -786,7 +786,7 @@ dependencies = [
 
 [[package]]
 name = "ckb-light-client"
-version = "0.3.3"
+version = "0.3.4"
 dependencies = [
  "anyhow",
  "ckb-app-config",
