@@ -1941,6 +1941,15 @@ impl Peers {
         })
     }
 
+    pub(crate) fn find_header_in_proved_state(&self, hash: &Byte32) -> Option<HeaderView> {
+        self.last_headers()
+            .read()
+            .expect("poisoned")
+            .iter()
+            .find(|header| header.hash().eq(hash))
+            .cloned()
+    }
+
     pub(crate) fn get_best_proved_peers(&self, best_tip: &packed::Header) -> Vec<PeerIndex> {
         self.get_all_prove_states()
             .into_iter()

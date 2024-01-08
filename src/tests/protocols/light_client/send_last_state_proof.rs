@@ -2023,3 +2023,204 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
         );
     }
 }
+
+// Multi peers are in same chain but have different last states.
+// And the higher one send proof to client before the lower one.
+#[tokio::test(flavor = "multi_thread")]
+async fn multi_peers_override_last_headers() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index_high = PeerIndex::new(1);
+    let peer_index_low = PeerIndex::new(2);
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(peer_index_high);
+        peers.add_peer(peer_index_low);
+        peers.request_last_state(peer_index_high).unwrap();
+        peers.request_last_state(peer_index_low).unwrap();
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    protocol.set_last_n_blocks(5);
+
+    let num = 30;
+    chain.mine_to(num);
+    let num_high = num;
+    let num_low = num - 5;
+
+    let snapshot = chain.shared().snapshot();
+
+    let sampled_numbers = vec![3, 7, 11, 15];
+    let boundary_number_high = num_high - protocol.last_n_blocks() + 1;
+    let boundary_number_low = num_low - protocol.last_n_blocks() + 1;
+
+    // Header only in the higher chain.
+    let header_hash_for_test = snapshot
+        .get_header_by_number((num_high + num_low) / 2)
+        .expect("block stored")
+        .hash();
+
+    // Setup the test fixture.
+    for (peer_index, num, boundary_number) in [
+        (peer_index_high, num_high, boundary_number_high),
+        (peer_index_low, num_low, boundary_number_low),
+    ] {
+        let prove_request = chain.build_prove_request(
+            0,
+            num,
+            &sampled_numbers,
+            boundary_number,
+            protocol.last_n_blocks(),
+        );
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+
+        protocol
+            .peers()
+            .update_last_state(peer_index, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+    }
+
+    // Received proof from higher chain.
+    {
+        let (peer_index, num, boundary_number) = (peer_index_high, num_high, boundary_number_high);
+
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+            let headers = sampled_numbers
+                .iter()
+                .map(|n| *n as BlockNumber)
+                .filter(|n| *n < first_last_n_number)
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.not_banned(peer_index));
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        let last_header: VerifiableHeader = last_header.into();
+        assert!(prove_state.is_same_as(&last_header));
+    }
+
+    // Run the test: check last headers which is stored in memory.
+    {
+        let last_headers = protocol
+            .peers()
+            .last_headers()
+            .read()
+            .expect("poisoned")
+            .clone();
+        assert_eq!(last_headers.len() as u64, protocol.last_n_blocks());
+        assert_eq!(last_headers.last().expect("checked").number(), num_high - 1);
+        assert!(protocol
+            .peers()
+            .find_header_in_proved_state(&header_hash_for_test)
+            .is_some());
+    }
+
+    // Received proof from lower chain.
+    {
+        let (peer_index, num, boundary_number) = (peer_index_low, num_low, boundary_number_low);
+
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let first_last_n_number = cmp::min(boundary_number, num - protocol.last_n_blocks());
+            let headers = sampled_numbers
+                .iter()
+                .map(|n| *n as BlockNumber)
+                .filter(|n| *n < first_last_n_number)
+                .chain((first_last_n_number..num).into_iter())
+                .map(|n| {
+                    snapshot
+                        .get_verifiable_header_by_number(n)
+                        .expect("block stored")
+                })
+                .collect::<Vec<_>>();
+            let proof = {
+                let last_number: BlockNumber = last_header.header().raw().number().unpack();
+                let numbers = headers
+                    .iter()
+                    .map(|header| header.header().raw().number().unpack())
+                    .collect::<Vec<BlockNumber>>();
+                chain.build_proof_by_numbers(last_number, &numbers)
+            };
+            let content = packed::SendLastStateProof::new_builder()
+                .last_header(last_header.clone())
+                .proof(proof)
+                .headers(headers.pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.not_banned(peer_index));
+
+        let prove_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state")
+            .get_prove_state()
+            .expect("has prove state")
+            .to_owned();
+        let last_header: VerifiableHeader = last_header.into();
+        assert!(prove_state.is_same_as(&last_header));
+    }
+
+    // Run the test: check last headers which is stored in memory, again.
+    {
+        let last_headers = protocol
+            .peers()
+            .last_headers()
+            .read()
+            .expect("poisoned")
+            .clone();
+        assert_eq!(last_headers.len() as u64, protocol.last_n_blocks());
+        assert_eq!(last_headers.last().expect("checked").number(), num_low - 1);
+        // TODO FIXME Last headers from a better chain are overrided by worse data.
+        assert!(protocol
+            .peers()
+            .find_header_in_proved_state(&header_hash_for_test)
+            .is_none());
+    }
+}

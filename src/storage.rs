@@ -1126,15 +1126,9 @@ impl StorageWithChainData {
 
 impl HeaderProvider for StorageWithChainData {
     fn get_header(&self, hash: &packed::Byte32) -> Option<HeaderView> {
-        self.storage.get_header(hash).or_else(|| {
-            self.peers
-                .last_headers()
-                .read()
-                .expect("poisoned")
-                .iter()
-                .find(|header| header.hash().eq(hash))
-                .cloned()
-        })
+        self.storage
+            .get_header(hash)
+            .or_else(|| self.peers.find_header_in_proved_state(hash))
     }
 }
 
