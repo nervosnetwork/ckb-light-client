@@ -910,6 +910,7 @@ impl PeerState {
                 let new_state = Self::RequestFirstLastState { when_sent };
                 Ok(new_state)
             }
+            Self::OnlyHasLastState { .. } => Ok(self),
             Self::Ready {
                 last_state,
                 prove_state,

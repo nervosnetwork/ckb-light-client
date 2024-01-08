@@ -304,7 +304,20 @@ async fn refresh_all_peers() {
 
         protocol.notify(nc.context(), REFRESH_PEERS_TOKEN).await;
 
-        // TODO FIXME A request `GetLastState` should be sent.
-        assert!(nc.sent_messages().borrow().is_empty());
+        let content = packed::GetLastState::new_builder()
+            .subscribe(true.pack())
+            .build();
+        let get_last_state_message = packed::LightClientMessage::new_builder()
+            .set(content)
+            .build()
+            .as_bytes();
+        assert_eq!(
+            nc.sent_messages().borrow().clone(),
+            vec![(
+                SupportProtocols::LightClient.protocol_id(),
+                peer_index,
+                get_last_state_message
+            )]
+        );
     }
 }
