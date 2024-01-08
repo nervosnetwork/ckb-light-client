@@ -1,6 +1,7 @@
 use std::sync::{Arc, RwLock};
 
 use ckb_chain_spec::consensus::Consensus;
+use ckb_network::PeerIndex;
 use ckb_types::{
     bytes::Bytes,
     core::{
@@ -10,11 +11,12 @@ use ckb_types::{
     h256,
     packed::{CellInput, CellOutputBuilder, Header, OutPoint, Script, ScriptBuilder},
     prelude::*,
+    utilities::merkle_mountain_range::VerifiableHeader,
     H256, U256,
 };
 
 use crate::{
-    protocols::{FetchInfo, PendingTxs},
+    protocols::{FetchInfo, LastState, PendingTxs, ProveRequest, ProveState},
     service::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, FetchStatus, Order,
         ScriptStatus, ScriptType, SearchKey, SearchKeyFilter, SetScriptsCommand, Status,
@@ -733,11 +735,27 @@ fn rpc() {
 
     // insert fetched headers
     let peers = create_peers();
-    peers
-        .last_headers()
-        .write()
-        .unwrap()
-        .push(extra_header.clone());
+    {
+        let peer_index = PeerIndex::new(3);
+        peers.add_peer(peer_index);
+        let tip_header = VerifiableHeader::new(
+            storage.get_tip_header().into_view(),
+            Default::default(),
+            None,
+            Default::default(),
+        );
+        let last_state = LastState::new(tip_header);
+        let request = ProveRequest::new(last_state.clone(), Default::default());
+        let prove_state = ProveState::new_from_request(
+            request.clone(),
+            Default::default(),
+            vec![extra_header.clone()],
+        );
+        peers.request_last_state(peer_index).unwrap();
+        peers.update_last_state(peer_index, last_state).unwrap();
+        peers.update_prove_request(peer_index, request).unwrap();
+        peers.update_prove_state(peer_index, prove_state).unwrap();
+    }
     peers.fetching_headers().insert(
         h256!("0xaa22").pack(),
         FetchInfo::new(1111, 3344, false, false),

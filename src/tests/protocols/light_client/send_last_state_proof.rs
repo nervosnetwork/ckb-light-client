@@ -2140,14 +2140,6 @@ async fn multi_peers_override_last_headers() {
 
     // Run the test: check last headers which is stored in memory.
     {
-        let last_headers = protocol
-            .peers()
-            .last_headers()
-            .read()
-            .expect("poisoned")
-            .clone();
-        assert_eq!(last_headers.len() as u64, protocol.last_n_blocks());
-        assert_eq!(last_headers.last().expect("checked").number(), num_high - 1);
         assert!(protocol
             .peers()
             .find_header_in_proved_state(&header_hash_for_test)
@@ -2209,18 +2201,9 @@ async fn multi_peers_override_last_headers() {
 
     // Run the test: check last headers which is stored in memory, again.
     {
-        let last_headers = protocol
-            .peers()
-            .last_headers()
-            .read()
-            .expect("poisoned")
-            .clone();
-        assert_eq!(last_headers.len() as u64, protocol.last_n_blocks());
-        assert_eq!(last_headers.last().expect("checked").number(), num_low - 1);
-        // TODO FIXME Last headers from a better chain are overrided by worse data.
         assert!(protocol
             .peers()
             .find_header_in_proved_state(&header_hash_for_test)
-            .is_none());
+            .is_some());
     }
 }

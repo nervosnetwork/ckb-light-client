@@ -20,8 +20,6 @@ use crate::protocols::{Status, StatusCode, MESSAGE_TIMEOUT};
 
 pub struct Peers {
     inner: DashMap<PeerIndex, Peer>,
-    // verified last N block headers
-    last_headers: RwLock<Vec<HeaderView>>,
     // The headers are fetching, the value is:
     fetching_headers: DashMap<Byte32, FetchInfo>,
     // The transactions are fetching, the value is:
@@ -1124,7 +1122,6 @@ impl Peers {
 
         Self {
             inner: Default::default(),
-            last_headers: Default::default(),
             fetching_headers: DashMap::new(),
             fetching_txs: DashMap::new(),
             matched_blocks: Default::default(),
@@ -1155,10 +1152,6 @@ impl Peers {
         // - ... ...
         // - [ki+1, (k+1)i] -> k
         (number.saturating_sub(1) / self.check_point_interval) as u32
-    }
-
-    pub(crate) fn last_headers(&self) -> &RwLock<Vec<HeaderView>> {
-        &self.last_headers
     }
 
     #[cfg(test)]
@@ -1365,7 +1358,6 @@ impl Peers {
         index: PeerIndex,
         state: ProveState,
     ) -> Result<(), Status> {
-        *self.last_headers.write().expect("poisoned") = state.get_last_headers().to_vec();
         if let Some(mut peer) = self.inner.get_mut(&index) {
             let has_reorg = !state.reorg_last_headers.is_empty();
             peer.state = peer.state.take().receive_last_state_proof(state)?;
@@ -1942,12 +1934,17 @@ impl Peers {
     }
 
     pub(crate) fn find_header_in_proved_state(&self, hash: &Byte32) -> Option<HeaderView> {
-        self.last_headers()
-            .read()
-            .expect("poisoned")
-            .iter()
-            .find(|header| header.hash().eq(hash))
-            .cloned()
+        self.inner.iter().find_map(|item| {
+            let (_, peer) = item.pair();
+            peer.state.get_prove_state().and_then(|prove_state| {
+                // TODO Store last headers in an ordered hashmap could increase performance.
+                prove_state
+                    .get_last_headers()
+                    .iter()
+                    .find(|header| hash == &header.hash())
+                    .cloned()
+            })
+        })
     }
 
     pub(crate) fn get_best_proved_peers(&self, best_tip: &packed::Header) -> Vec<PeerIndex> {
