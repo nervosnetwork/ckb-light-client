@@ -852,11 +852,19 @@ impl LightClientProtocol {
         }
         let builder = packed::GetLastStateProof::new_builder()
             .last_hash(last_header.header().hash())
-            .start_hash(start_hash)
-            .start_number(start_number.pack())
             .last_n_blocks(last_n_blocks.pack());
         let content = if last_number - start_number <= last_n_blocks {
-            builder.difficulty_boundary(start_total_difficulty.pack())
+            let last_n_headers = self.storage.get_last_n_headers();
+
+            let (real_start_number, real_start_hash) = last_n_headers
+                .into_iter()
+                .find(|(num, _)| *num < start_number && last_number <= num + last_n_blocks)
+                .unwrap_or((start_number, start_hash));
+
+            builder
+                .start_hash(real_start_hash)
+                .start_number(real_start_number.pack())
+                .difficulty_boundary(start_total_difficulty.pack())
         } else {
             let (difficulty_boundary, difficulties) = sampling::sample_blocks(
                 start_number,
@@ -866,6 +874,8 @@ impl LightClientProtocol {
                 last_n_blocks,
             );
             builder
+                .start_hash(start_hash)
+                .start_number(start_number.pack())
                 .difficulty_boundary(difficulty_boundary.pack())
                 .difficulties(difficulties.into_iter().map(|inner| inner.pack()).pack())
         }
