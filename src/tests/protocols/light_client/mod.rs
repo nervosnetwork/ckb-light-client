@@ -1,4 +1,5 @@
 use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};
+use ckb_systemtime::{faketime, unix_time_as_millis};
 use ckb_types::{
     core::{BlockNumber, EpochNumberWithFraction, HeaderBuilder},
     packed,
@@ -8,10 +9,15 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{light_client::constant::GET_IDLE_BLOCKS_TOKEN, PeerState, BAD_MESSAGE_BAN_TIME},
+    protocols::{
+        light_client::constant::{
+            GET_IDLE_BLOCKS_TOKEN, REFRESH_PEERS_DURATION, REFRESH_PEERS_TOKEN,
+        },
+        PeerState, BAD_MESSAGE_BAN_TIME,
+    },
     tests::{
         prelude::*,
-        utils::{MockChain, MockNetworkContext},
+        utils::{setup, MockChain, MockNetworkContext},
     },
 };
 
@@ -224,4 +230,94 @@ async fn test_light_client_get_idle_matched_blocks() {
             )
         ]
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn refresh_all_peers() {
+    setup();
+
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+    let storage = chain.client_storage();
+
+    let mut num = 20;
+    chain.mine_to(num);
+
+    // Setup the storage.
+    {
+        let snapshot = chain.shared().snapshot();
+        let header = snapshot.get_header_by_number(num).expect("block stored");
+        let last_total_difficulty = U256::from(500u64);
+        storage.update_last_state(&last_total_difficulty, &header.data(), &[]);
+    }
+
+    num -= 5;
+
+    // A node, whose tip number is small than client, connect to the client.
+    {
+        let snapshot = chain.shared().snapshot();
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let content = packed::SendLastState::new_builder()
+                .last_header(last_header)
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+                .as_bytes()
+        };
+
+        let peer_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state");
+        assert!(peer_state.get_last_state().is_none());
+        assert!(nc.sent_messages().borrow().is_empty());
+
+        protocol.received(nc.context(), peer_index, data).await;
+
+        assert!(nc.not_banned(peer_index));
+
+        let peer_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state");
+        assert!(peer_state.get_last_state().is_some());
+        assert!(nc.sent_messages().borrow().is_empty());
+    }
+
+    // Referesh all peers.
+    {
+        let start_ts = unix_time_as_millis();
+        let timeout_ts = start_ts + REFRESH_PEERS_DURATION.as_millis() as u64 + 1;
+        let faketime_guard = faketime();
+        faketime_guard.set_faketime(timeout_ts);
+
+        protocol.notify(nc.context(), REFRESH_PEERS_TOKEN).await;
+
+        let content = packed::GetLastState::new_builder()
+            .subscribe(true.pack())
+            .build();
+        let get_last_state_message = packed::LightClientMessage::new_builder()
+            .set(content)
+            .build()
+            .as_bytes();
+        assert_eq!(
+            nc.sent_messages().borrow().clone(),
+            vec![(
+                SupportProtocols::LightClient.protocol_id(),
+                peer_index,
+                get_last_state_message
+            )]
+        );
+    }
 }

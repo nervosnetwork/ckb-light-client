@@ -51,6 +51,7 @@ ckb-shared      = "0.111.0"
 ckb-chain       = "0.111.0"
 ckb-tx-pool     = "0.111.0"
 ckb-store       = "0.111.0"
+ckb-systemtime  = { version = "0.111.0", features = ["enable_faketime"] }
 tempfile = "3.0"
 rand = "0.6"
 serde_json = "1.0"
