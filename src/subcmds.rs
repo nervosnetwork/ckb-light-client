@@ -67,7 +67,8 @@ impl RunConfig {
             storage.get_last_check_point(),
         ));
         let sync_protocol = SyncProtocol::new(storage.clone(), Arc::clone(&peers));
-        let relay_protocol = RelayProtocol::new(pending_txs.clone(), Arc::clone(&peers));
+        let relay_protocol_v2 = RelayProtocol::new(pending_txs.clone(), Arc::clone(&peers));
+        let relay_protocol_v3 = RelayProtocol::new(pending_txs.clone(), Arc::clone(&peers));
         let light_client: Box<dyn CKBProtocolHandler> = Box::new(LightClientProtocol::new(
             storage.clone(),
             Arc::clone(&peers),
@@ -83,7 +84,12 @@ impl RunConfig {
             ),
             CKBProtocol::new_with_support_protocol(
                 SupportProtocols::RelayV2,
-                Box::new(relay_protocol),
+                Box::new(relay_protocol_v2),
+                Arc::clone(&network_state),
+            ),
+            CKBProtocol::new_with_support_protocol(
+                SupportProtocols::RelayV3,
+                Box::new(relay_protocol_v3),
                 Arc::clone(&network_state),
             ),
             CKBProtocol::new_with_support_protocol(
