@@ -119,7 +119,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
             return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
             // Check extra hash for blocks
-            let is_v1 = self.message.has_extra_fields() && self.message.count_extra_fields() >= 2;
+            let is_v1 = self.message.count_extra_fields() >= 2;
             let extensions = if is_v1 {
                 let message_v1 =
                     packed::SendTransactionsProofV1Reader::new_unchecked(self.message.as_slice());
