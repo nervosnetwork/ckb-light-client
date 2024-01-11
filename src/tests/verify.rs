@@ -33,7 +33,9 @@ fn verify_valid_transaction() {
 
     let swc = StorageWithChainData::new(storage.to_owned(), chain.create_peers());
     let result = verify_tx(transaction.into_view(), &swc, consensus).unwrap();
-    assert_eq!(1682789, result);
+    // please note that the cycle (1682789) of this transaction displayed on the explorer is wrong
+    // it's fixed in https://github.com/nervosnetwork/ckb/pull/4218
+    assert_eq!(1691692, result);
 }
 
 #[test]
