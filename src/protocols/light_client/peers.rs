@@ -1386,13 +1386,17 @@ impl Peers {
         })
     }
 
-    pub(crate) fn add_header(&self, block_hash: &Byte32) -> bool {
+    pub(crate) fn remove_fetching_header(&self, block_hash: &Byte32) -> bool {
         self.fetching_headers.remove(block_hash).is_some()
     }
 
-    pub(crate) fn add_transaction(&self, tx_hash: &Byte32, block_hash: &Byte32) -> bool {
+    pub(crate) fn remove_fetching_transaction(
+        &self,
+        tx_hash: &Byte32,
+        block_hash: &Byte32,
+    ) -> bool {
         if self.fetching_txs.remove(tx_hash).is_some() {
-            self.add_header(block_hash);
+            self.remove_fetching_header(block_hash);
             true
         } else {
             false

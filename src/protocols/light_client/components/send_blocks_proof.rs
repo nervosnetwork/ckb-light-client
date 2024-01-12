@@ -1,7 +1,14 @@
 use ckb_network::{CKBProtocolContext, PeerIndex, SupportProtocols};
-use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
+use ckb_types::{
+    core::{ExtraHashView, HeaderView},
+    packed,
+    prelude::*,
+    utilities::merkle_mountain_range::VerifiableHeader,
+};
 use log::{debug, error};
 use rand::seq::SliceRandom;
+
+use crate::storage::HeaderWithExtension;
 
 use super::{
     super::{LightClientProtocol, Status, StatusCode},
@@ -109,6 +116,29 @@ impl<'a> SendBlocksProofProcess<'a> {
             // Check PoW for blocks
             return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
+            // Check extra hash for blocks
+            let is_v1 = self.message.count_extra_fields() >= 2;
+            let extensions = if is_v1 {
+                let message_v1 =
+                    packed::SendBlocksProofV1Reader::new_unchecked(self.message.as_slice());
+                let uncle_hashes: Vec<_> = message_v1
+                    .blocks_uncles_hash()
+                    .iter()
+                    .map(|uncle_hashes| uncle_hashes.to_entity())
+                    .collect();
+
+                let extensions: Vec<_> = message_v1
+                    .blocks_extension()
+                    .iter()
+                    .map(|extension| extension.to_entity().to_opt())
+                    .collect();
+
+                return_if_failed!(verify_extra_hash(&headers, &uncle_hashes, &extensions));
+                extensions
+            } else {
+                vec![None; headers.len()]
+            };
+
             // Verify the proof
             return_if_failed!(verify_mmr_proof(
                 self.protocol.mmr_activated_epoch(),
@@ -184,9 +214,14 @@ impl<'a> SendBlocksProofProcess<'a> {
                 }
             }
 
-            for header in headers {
-                if self.protocol.peers().add_header(&header.hash()) {
-                    self.protocol.storage().add_fetched_header(&header.data());
+            for (header, extension) in headers.into_iter().zip(extensions.into_iter()) {
+                if self.protocol.peers().remove_fetching_header(&header.hash()) {
+                    self.protocol
+                        .storage()
+                        .add_fetched_header(&HeaderWithExtension {
+                            header: header.data(),
+                            extension,
+                        });
                 }
             }
         }
@@ -195,4 +230,32 @@ impl<'a> SendBlocksProofProcess<'a> {
             .mark_fetching_headers_missing(&missing_block_hashes);
         Status::ok()
     }
+}
+
+pub(crate) fn verify_extra_hash(
+    headers: &[HeaderView],
+    uncle_hashes: &[packed::Byte32],
+    extensions: &[Option<packed::Bytes>],
+) -> Result<(), Status> {
+    if headers.len() != uncle_hashes.len() || headers.len() != extensions.len() {
+        return Err(StatusCode::InvalidProof.into());
+    }
+
+    for ((header, uncle_hash), extension) in headers
+        .iter()
+        .zip(uncle_hashes.iter())
+        .zip(extensions.iter())
+    {
+        let expected_extension_hash = extension
+            .as_ref()
+            .map(|extension| extension.calc_raw_data_hash());
+        let extra_hash_view = ExtraHashView::new(uncle_hash.clone(), expected_extension_hash);
+        let expected_extra_hash = extra_hash_view.extra_hash();
+        let actual_extra_hash = header.extra_hash();
+        if expected_extra_hash != actual_extra_hash {
+            return Err(StatusCode::InvalidProof.into());
+        }
+    }
+
+    Ok(())
 }
