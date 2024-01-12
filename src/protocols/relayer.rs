@@ -1,4 +1,3 @@
-use ckb_network::SupportProtocols;
 use ckb_network::{
     async_trait, bytes::Bytes, extract_peer_id, CKBProtocolContext, CKBProtocolHandler, PeerId,
     PeerIndex,
@@ -118,12 +117,7 @@ impl CKBProtocolHandler for RelayProtocol {
                     .tx_hashes(tx_hashes.pack())
                     .build();
                 let message = packed::RelayMessage::new_builder().set(content).build();
-                let protocol_id = if nc.ckb2023() {
-                    SupportProtocols::RelayV3.protocol_id()
-                } else {
-                    SupportProtocols::RelayV2.protocol_id()
-                };
-                if let Err(err) = nc.send_message(protocol_id, peer, message.as_bytes()) {
+                if let Err(err) = nc.send_message_to(peer, message.as_bytes()) {
                     warn!(
                         "RelayProtocol failed to send RelayTransactionHashes message to peer={} since {:?}",
                         peer, err
@@ -207,13 +201,6 @@ impl CKBProtocolHandler for RelayProtocol {
             CHECK_PENDING_TXS_TOKEN => {
                 // we check pending txs every 2 seconds, if the timestamp of the pending txs is updated in the last minute
                 // and connected relay protocol peers is empty, we try to open the protocol and broadcast the pending txs
-
-                let protocol_id = if nc.ckb2023() {
-                    SupportProtocols::RelayV3.protocol_id()
-                } else {
-                    SupportProtocols::RelayV2.protocol_id()
-                };
-
                 if self
                     .pending_txs
                     .read()
@@ -223,7 +210,7 @@ impl CKBProtocolHandler for RelayProtocol {
                 {
                     let p2p_control = nc.p2p_control().expect("p2p_control should be exist");
                     for peer in self.connected_peers.get_peers_index() {
-                        if let Err(err) = p2p_control.open_protocol(peer, protocol_id) {
+                        if let Err(err) = p2p_control.open_protocol(peer, nc.protocol_id()) {
                             warn!(
                                 "RelayProtocol failed to open protocol to peer={} since {:?}",
                                 peer, err
@@ -246,9 +233,7 @@ impl CKBProtocolHandler for RelayProtocol {
                                 let message =
                                     packed::RelayMessage::new_builder().set(content).build();
 
-                                if let Err(err) =
-                                    nc.send_message(protocol_id, peer, message.as_bytes())
-                                {
+                                if let Err(err) = nc.send_message_to(peer, message.as_bytes()) {
                                     warn!(
                                         "RelayProtocol failed to send RelayTransactionHashes message to peer={} since {:?}",
                                         peer, err
@@ -266,7 +251,7 @@ impl CKBProtocolHandler for RelayProtocol {
                                 let _ = nc
                                     .p2p_control()
                                     .expect("p2p_control should be exist")
-                                    .close_protocol(peer, protocol_id);
+                                    .close_protocol(peer, nc.protocol_id());
                             }
                         }
                     }
