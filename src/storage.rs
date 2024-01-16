@@ -313,11 +313,16 @@ impl Storage {
                 if scripts.is_empty() {
                     return;
                 }
-                should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
-                let mut min_filtered_block_number = self.get_min_filtered_block_number();
+                let min_script_block_number = scripts.iter().map(|ss| ss.block_number).min();
+                should_filter_genesis_block = min_script_block_number == Some(0);
+                // min_block_number should be the min of all scripts' block_number when storage's filter_scripts is empty
+                min_block_number = if self.is_filter_scripts_empty() {
+                    min_script_block_number
+                } else {
+                    min_script_block_number.map(|n| n.min(self.get_min_filtered_block_number()))
+                };
 
                 for ss in scripts {
-                    min_filtered_block_number = min_filtered_block_number.min(ss.block_number);
                     let key = [
                         key_prefix.as_ref(),
                         ss.script.as_slice(),
@@ -331,7 +336,6 @@ impl Storage {
                         .put(key, ss.block_number.to_be_bytes())
                         .expect("batch put should be ok");
                 }
-                min_block_number = Some(min_filtered_block_number);
             }
             SetScriptsCommand::Delete => {
                 if scripts.is_empty() {
@@ -571,6 +575,7 @@ impl Storage {
             .map(|data| u64::from_le_bytes(data.as_ref().try_into().unwrap()))
             .unwrap_or_default()
     }
+
     pub fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
         let key = Key::Meta(MIN_FILTERED_BLOCK_NUMBER).into_vec();
         let value = block_number.to_le_bytes();
