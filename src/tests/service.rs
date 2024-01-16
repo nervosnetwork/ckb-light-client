@@ -1488,3 +1488,53 @@ fn test_set_scripts_command() {
     let scripts = rpc.get_scripts().unwrap();
     assert_eq!(scripts.len(), 1);
 }
+
+#[test]
+fn test_set_scripts_partial_min_filtered_block_number_bug() {
+    let storage = new_storage("set_scripts_partial_min_filtered_block_number_bug");
+    let peers = create_peers();
+    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers));
+    let rpc = BlockFilterRpcImpl { swc };
+
+    storage.update_min_filtered_block_number(42);
+    rpc.set_scripts(
+        vec![
+            ScriptStatus {
+                script: Script::new_builder()
+                    .args(Bytes::from("abc").pack())
+                    .build()
+                    .into(),
+                script_type: ScriptType::Lock,
+                block_number: 1234.into(),
+            },
+            ScriptStatus {
+                script: Script::new_builder()
+                    .args(Bytes::from("xyz").pack())
+                    .build()
+                    .into(),
+                script_type: ScriptType::Type,
+                block_number: 5678.into(),
+            },
+        ],
+        Some(SetScriptsCommand::Partial),
+    )
+    .unwrap();
+    // min_filtered_block_number should be minimum block_number of scripts when storage scripts is empty
+    assert_eq!(storage.get_min_filtered_block_number(), 1234,);
+
+    rpc.set_scripts(
+        vec![ScriptStatus {
+            script: Script::new_builder()
+                .args(Bytes::from("123").pack())
+                .build()
+                .into(),
+            script_type: ScriptType::Lock,
+            block_number: 12345.into(),
+        }],
+        Some(SetScriptsCommand::Partial),
+    )
+    .unwrap();
+
+    // min_filtered_block_number should be same as before when storage scripts is not empty
+    assert_eq!(storage.get_min_filtered_block_number(), 1234,);
+}
