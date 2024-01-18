@@ -777,7 +777,10 @@ fn rpc() {
 
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
 
-    let rpc = ChainRpcImpl { swc };
+    let rpc = ChainRpcImpl {
+        swc,
+        consensus: Arc::new(Consensus::default()),
+    };
     let header = rpc
         .get_header(pre_block.header().hash().unpack())
         .unwrap()
