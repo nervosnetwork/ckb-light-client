@@ -665,6 +665,7 @@ impl Storage {
         let block_number: BlockNumber = block.header().raw().number().unpack();
         let mut filter_matched = false;
         let mut batch = self.batch();
+        let mut txs: HashMap<Byte32, (u32, Transaction)> = HashMap::new();
         block
             .transactions()
             .into_iter()
@@ -675,11 +676,14 @@ impl Storage {
                     .into_iter()
                     .enumerate()
                     .for_each(|(input_index, input)| {
+                        let previous_tx_hash = input.previous_output().tx_hash();
                         if let Some((
                             generated_by_block_number,
                             generated_by_tx_index,
                             previous_tx,
-                        )) = self.get_transaction(&input.previous_output().tx_hash())
+                        )) = self.get_transaction(&previous_tx_hash).or(txs
+                            .get(&previous_tx_hash)
+                            .map(|(tx_index, tx)| (block_number, *tx_index, tx.clone())))
                         {
                             let previous_output_index = input.previous_output().index().unpack();
                             if let Some(previous_output) =
@@ -827,6 +831,8 @@ impl Storage {
                             }
                         }
                     });
+
+                txs.insert(tx.calc_tx_hash(), (tx_index as u32, tx));
             });
         if filter_matched {
             let block_hash = block.calc_header_hash();
