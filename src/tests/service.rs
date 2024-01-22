@@ -1538,3 +1538,114 @@ fn test_set_scripts_partial_min_filtered_block_number_bug() {
     // min_filtered_block_number should be same as before when storage scripts is not empty
     assert_eq!(storage.get_min_filtered_block_number(), 1234,);
 }
+
+#[test]
+fn test_chain_txs_in_same_block_bug() {
+    let storage = new_storage("chain_txs_in_same_block_bug");
+    let swc = StorageWithChainData::new(storage.clone(), create_peers());
+    let rpc = BlockFilterRpcImpl { swc };
+
+    // setup test data
+    let lock_script1 = ScriptBuilder::default()
+        .code_hash(H256(rand::random()).pack())
+        .hash_type(ScriptHashType::Data.into())
+        .args(Bytes::from(b"lock_script1".to_vec()).pack())
+        .build();
+
+    let lock_script2 = ScriptBuilder::default()
+        .code_hash(H256(rand::random()).pack())
+        .hash_type(ScriptHashType::Data.into())
+        .args(Bytes::from(b"lock_script2".to_vec()).pack())
+        .build();
+
+    let tx00 = TransactionBuilder::default()
+        .output(
+            CellOutputBuilder::default()
+                .capacity(capacity_bytes!(222).pack())
+                .lock(lock_script1.clone())
+                .build(),
+        )
+        .output(
+            CellOutputBuilder::default()
+                .capacity(capacity_bytes!(333).pack())
+                .lock(lock_script1.clone())
+                .build(),
+        )
+        .output_data(Default::default())
+        .output_data(Default::default())
+        .build();
+
+    let block0 = BlockBuilder::default()
+        .transaction(tx00.clone())
+        .header(
+            HeaderBuilder::default()
+                .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
+                .number(0.pack())
+                .build(),
+        )
+        .build();
+    storage.init_genesis_block(block0.data());
+    storage.update_filter_scripts(
+        vec![
+            storage::ScriptStatus {
+                script: lock_script1.clone(),
+                script_type: storage::ScriptType::Lock,
+                block_number: 0,
+            },
+            storage::ScriptStatus {
+                script: lock_script2.clone(),
+                script_type: storage::ScriptType::Lock,
+                block_number: 0,
+            },
+        ],
+        Default::default(),
+    );
+
+    let tx10 = TransactionBuilder::default()
+        .output(
+            CellOutputBuilder::default()
+                .capacity(capacity_bytes!(100).pack())
+                .lock(lock_script2.clone())
+                .build(),
+        )
+        .output_data(Default::default())
+        .build();
+
+    let tx11 = TransactionBuilder::default()
+        .input(CellInput::new(OutPoint::new(tx10.hash(), 0), 0))
+        .output(
+            CellOutputBuilder::default()
+                .capacity(capacity_bytes!(100).pack())
+                .lock(lock_script2.clone())
+                .build(),
+        )
+        .output_data(Default::default())
+        .build();
+
+    let block1 = BlockBuilder::default()
+        .transaction(tx10)
+        .transaction(tx11)
+        .header(
+            HeaderBuilder::default()
+                .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
+                .number(1.pack())
+                .build(),
+        )
+        .build();
+    storage.filter_block(block1.data());
+    storage.update_block_number(1);
+
+    let cells_page_1 = rpc
+        .get_cells(
+            SearchKey {
+                script: lock_script2.into(),
+                ..Default::default()
+            },
+            Order::Asc,
+            150.into(),
+            None,
+        )
+        .unwrap();
+
+    assert_eq!(1, cells_page_1.objects.len());
+}
