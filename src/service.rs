@@ -380,7 +380,6 @@ pub struct BlockFilterRpcImpl {
 }
 
 pub struct TransactionRpcImpl {
-    pub(crate) pending_txs: Arc<RwLock<PendingTxs>>,
     pub(crate) swc: StorageWithChainData,
     pub(crate) consensus: Arc<Consensus>,
 }
@@ -1173,7 +1172,8 @@ impl TransactionRpc for TransactionRpcImpl {
         let tx = tx.into_view();
         let cycles = verify_tx(tx.clone(), &self.swc, Arc::clone(&self.consensus))
             .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
-        self.pending_txs
+        self.swc
+            .pending_txs()
             .write()
             .expect("pending_txs lock is poisoned")
             .push(tx.clone(), cycles);
@@ -1198,7 +1198,8 @@ impl TransactionRpc for TransactionRpcImpl {
         }
 
         if let Some((transaction, cycles, _)) = self
-            .pending_txs
+            .swc
+            .pending_txs()
             .read()
             .expect("pending_txs lock is poisoned")
             .get(&tx_hash.pack())
@@ -1314,11 +1315,10 @@ impl Service {
         consensus: Consensus,
     ) -> Server {
         let mut io_handler = IoHandler::new();
-        let swc = StorageWithChainData::new(storage, Arc::clone(&peers));
+        let swc = StorageWithChainData::new(storage, Arc::clone(&peers), Arc::clone(&pending_txs));
         let block_filter_rpc_impl = BlockFilterRpcImpl { swc: swc.clone() };
         let chain_rpc_impl = ChainRpcImpl { swc: swc.clone() };
         let transaction_rpc_impl = TransactionRpcImpl {
-            pending_txs,
             swc,
             consensus: Arc::new(consensus),
         };
