@@ -1,7 +1,8 @@
 use ckb_chain_spec::consensus::Consensus;
 use ckb_jsonrpc_types::{
-    BlockNumber, BlockView, Capacity, CellOutput, Cycle, HeaderView, JsonBytes, NodeAddress,
-    OutPoint, RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32, Uint64,
+    BlockNumber, BlockView, Capacity, CellOutput, Cycle, EstimateCycles, HeaderView, JsonBytes,
+    NodeAddress, OutPoint, RemoteNodeProtocol, Script, Transaction, TransactionView, Uint32,
+    Uint64,
 };
 use ckb_network::{extract_peer_id, NetworkController};
 use ckb_systemtime::unix_time_as_millis;
@@ -90,6 +91,9 @@ pub trait ChainRpc {
 
     #[rpc(name = "fetch_header")]
     fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>>;
+
+    #[rpc(name = "estimate_cycles")]
+    fn estimate_cycles(&self, tx: Transaction) -> Result<EstimateCycles>;
 }
 
 #[rpc(server)]
@@ -386,6 +390,7 @@ pub struct TransactionRpcImpl {
 
 pub struct ChainRpcImpl {
     pub(crate) swc: StorageWithChainData,
+    pub(crate) consensus: Arc<Consensus>,
 }
 
 pub struct NetRpcImpl {
@@ -1293,6 +1298,16 @@ impl ChainRpc for ChainRpcImpl {
             timestamp: now.into(),
         })
     }
+
+    fn estimate_cycles(&self, tx: Transaction) -> Result<EstimateCycles> {
+        let tx: packed::Transaction = tx.into();
+        let tx = tx.into_view();
+        let cycles = verify_tx(tx.clone(), &self.swc, Arc::clone(&self.consensus))
+            .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
+        Ok(EstimateCycles {
+            cycles: cycles.into(),
+        })
+    }
 }
 
 pub(crate) struct Service {
@@ -1316,12 +1331,13 @@ impl Service {
     ) -> Server {
         let mut io_handler = IoHandler::new();
         let swc = StorageWithChainData::new(storage, Arc::clone(&peers), Arc::clone(&pending_txs));
+        let consensus = Arc::new(consensus);
         let block_filter_rpc_impl = BlockFilterRpcImpl { swc: swc.clone() };
-        let chain_rpc_impl = ChainRpcImpl { swc: swc.clone() };
-        let transaction_rpc_impl = TransactionRpcImpl {
-            swc,
-            consensus: Arc::new(consensus),
+        let chain_rpc_impl = ChainRpcImpl {
+            swc: swc.clone(),
+            consensus: Arc::clone(&consensus),
         };
+        let transaction_rpc_impl = TransactionRpcImpl { swc, consensus };
         let net_rpc_impl = NetRpcImpl {
             network_controller,
             peers,
