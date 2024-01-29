@@ -23,10 +23,16 @@ pub(crate) struct RelayProtocol {
 }
 
 // a simple struct to store the pending transactions in memory with size limit
-pub(crate) struct PendingTxs {
+pub struct PendingTxs {
     txs: LinkedHashMap<packed::Byte32, (packed::Transaction, Cycle, HashSet<PeerId>)>,
     updated_at: Instant,
     limit: usize,
+}
+
+impl Default for PendingTxs {
+    fn default() -> Self {
+        Self::new(64)
+    }
 }
 
 impl PendingTxs {

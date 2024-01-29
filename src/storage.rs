@@ -23,7 +23,7 @@ use ckb_types::{
 use rocksdb::{prelude::*, Direction, IteratorMode, WriteBatch, DB};
 
 use crate::error::Result;
-use crate::protocols::Peers;
+use crate::protocols::{Peers, PendingTxs};
 
 pub const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
@@ -1128,15 +1128,24 @@ impl HeaderProvider for Storage {
 pub struct StorageWithChainData {
     storage: Storage,
     peers: Arc<Peers>,
+    pending_txs: Arc<RwLock<PendingTxs>>,
 }
 
 impl StorageWithChainData {
-    pub fn new(storage: Storage, peers: Arc<Peers>) -> Self {
-        Self { storage, peers }
+    pub fn new(storage: Storage, peers: Arc<Peers>, pending_txs: Arc<RwLock<PendingTxs>>) -> Self {
+        Self {
+            storage,
+            peers,
+            pending_txs,
+        }
     }
 
     pub fn storage(&self) -> &Storage {
         &self.storage
+    }
+
+    pub fn pending_txs(&self) -> &RwLock<PendingTxs> {
+        &self.pending_txs
     }
 
     pub(crate) fn matched_blocks(&self) -> &RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
@@ -1190,7 +1199,36 @@ impl CellDataProvider for StorageWithChainData {
 
 impl CellProvider for StorageWithChainData {
     fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
-        self.storage.cell(out_point, eager_load)
+        match self.storage.cell(out_point, eager_load) {
+            CellStatus::Live(cell_meta) => CellStatus::Live(cell_meta),
+            _ => {
+                if let Some((tx, _, _)) = self
+                    .pending_txs
+                    .read()
+                    .expect("poisoned")
+                    .get(&out_point.tx_hash())
+                {
+                    if let Some(cell_output) = tx.raw().outputs().get(out_point.index().unpack()) {
+                        let output_data = tx
+                            .raw()
+                            .outputs_data()
+                            .get(out_point.index().unpack())
+                            .expect("output_data's index should be same as output")
+                            .raw_data();
+                        let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
+                        return CellStatus::Live(CellMeta {
+                            out_point: out_point.clone(),
+                            cell_output,
+                            transaction_info: None,
+                            data_bytes: output_data.len() as u64,
+                            mem_cell_data: Some(output_data),
+                            mem_cell_data_hash: Some(output_data_data_hash),
+                        });
+                    }
+                }
+                CellStatus::Unknown
+            }
+        }
     }
 }
 

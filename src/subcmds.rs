@@ -39,7 +39,7 @@ impl RunConfig {
             .expect("build consensus should be OK");
         storage.init_genesis_block(consensus.genesis_block().data());
 
-        let pending_txs = Arc::new(RwLock::new(PendingTxs::new(64)));
+        let pending_txs = Arc::new(RwLock::new(PendingTxs::default()));
         let max_outbound_peers = self.run_env.network.max_outbound_peers;
         let network_state = NetworkState::from_config(self.run_env.network)
             .map(|network_state| {
