@@ -1,3 +1,4 @@
+use ckb_chain_spec::consensus::Consensus;
 use ckb_network::{
     async_trait, bytes::Bytes, extract_peer_id, CKBProtocolContext, CKBProtocolHandler, PeerId,
     PeerIndex,
@@ -20,6 +21,8 @@ pub(crate) struct RelayProtocol {
     opened_peers: HashMap<PeerIndex, Option<Instant>>,
     // Pending transactions which are waiting for relay
     pending_txs: Arc<RwLock<PendingTxs>>,
+    consensus: Consensus,
+    v3: bool,
 }
 
 // a simple struct to store the pending transactions in memory with size limit
@@ -79,11 +82,18 @@ impl PendingTxs {
 }
 
 impl RelayProtocol {
-    pub fn new(pending_txs: Arc<RwLock<PendingTxs>>, connected_peers: Arc<Peers>) -> Self {
+    pub fn new(
+        pending_txs: Arc<RwLock<PendingTxs>>,
+        connected_peers: Arc<Peers>,
+        consensus: Consensus,
+        v3: bool,
+    ) -> Self {
         Self {
             opened_peers: HashMap::new(),
             pending_txs,
             connected_peers,
+            consensus,
+            v3,
         }
     }
 }
@@ -102,6 +112,39 @@ impl CKBProtocolHandler for RelayProtocol {
         peer: PeerIndex,
         version: &str,
     ) {
+        let epoch = self
+            .connected_peers
+            .get_state(&peer)
+            .map(|peer_state| {
+                peer_state
+                    .get_prove_state()
+                    .map(|s| s.get_last_header().header().epoch().number())
+                    .unwrap_or_default()
+            })
+            .unwrap_or_default();
+
+        let ckb2023 = self
+            .consensus
+            .hardfork_switch
+            .ckb2023
+            .is_vm_version_2_and_syscalls_3_enabled(epoch);
+
+        if self.v3 && !ckb2023 {
+            debug!(
+                "RelayProtocol V3({}).connected peer={} is not ckb2023 enabled, ignore",
+                version, peer
+            );
+            return;
+        }
+
+        if !self.v3 && ckb2023 {
+            debug!(
+                "RelayProtocol V2({}).connected peer={} is ckb2023 enabled, ignore",
+                version, peer
+            );
+            return;
+        }
+
         debug!("RelayProtocol({}).connected peer={}", version, peer);
         if self
             .pending_txs
