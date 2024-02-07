@@ -12,6 +12,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::protocols::{Peers, BAD_MESSAGE_BAN_TIME};
+use crate::storage::Storage;
 
 const CHECK_PENDING_TXS_TOKEN: u64 = 0;
 
@@ -22,6 +23,7 @@ pub(crate) struct RelayProtocol {
     // Pending transactions which are waiting for relay
     pending_txs: Arc<RwLock<PendingTxs>>,
     consensus: Consensus,
+    storage: Storage,
     v3: bool,
 }
 
@@ -86,6 +88,7 @@ impl RelayProtocol {
         pending_txs: Arc<RwLock<PendingTxs>>,
         connected_peers: Arc<Peers>,
         consensus: Consensus,
+        storage: Storage,
         v3: bool,
     ) -> Self {
         Self {
@@ -93,6 +96,7 @@ impl RelayProtocol {
             pending_txs,
             connected_peers,
             consensus,
+            storage,
             v3,
         }
     }
@@ -118,8 +122,9 @@ impl CKBProtocolHandler for RelayProtocol {
             .map(|peer_state| {
                 peer_state
                     .get_prove_state()
-                    .map(|s| s.get_last_header().header().epoch().number())
-                    .unwrap_or_default()
+                    .map(|s| s.get_last_header().header().epoch())
+                    .unwrap_or_else(|| self.storage.get_last_state().1.raw().epoch().unpack())
+                    .number()
             })
             .unwrap_or_default();
 

@@ -71,12 +71,14 @@ impl RunConfig {
             pending_txs.clone(),
             Arc::clone(&peers),
             consensus.clone(),
+            storage.clone(),
             false,
         );
         let relay_protocol_v3 = RelayProtocol::new(
             pending_txs.clone(),
             Arc::clone(&peers),
             consensus.clone(),
+            storage.clone(),
             true,
         );
         let light_client: Box<dyn CKBProtocolHandler> = Box::new(LightClientProtocol::new(
