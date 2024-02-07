@@ -129,23 +129,24 @@ impl CKBProtocolHandler for RelayProtocol {
             .ckb2023
             .is_vm_version_2_and_syscalls_3_enabled(epoch);
 
+        debug!(
+            "RelayProtocol V{}({}).connected peer={}, epoch={}",
+            if self.v3 { '3' } else { '2' },
+            version,
+            peer,
+            epoch
+        );
+
         if self.v3 && !ckb2023 {
-            debug!(
-                "RelayProtocol V3({}).connected peer={} is not ckb2023 enabled, ignore",
-                version, peer
-            );
+            debug!("peer={} is not ckb2023 enabled, ignore", peer);
             return;
         }
 
         if !self.v3 && ckb2023 {
-            debug!(
-                "RelayProtocol V2({}).connected peer={} is ckb2023 enabled, ignore",
-                version, peer
-            );
+            debug!("peer={} is ckb2023 enabled, ignore", peer);
             return;
         }
 
-        debug!("RelayProtocol({}).connected peer={}", version, peer);
         if self
             .pending_txs
             .read()
