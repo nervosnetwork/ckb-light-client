@@ -1,3 +1,4 @@
+use ckb_chain_spec::consensus::Consensus;
 use ckb_network::{
     async_trait, bytes::Bytes, extract_peer_id, CKBProtocolContext, CKBProtocolHandler, PeerId,
     PeerIndex,
@@ -11,6 +12,7 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, Instant};
 
 use crate::protocols::{Peers, BAD_MESSAGE_BAN_TIME};
+use crate::storage::Storage;
 
 const CHECK_PENDING_TXS_TOKEN: u64 = 0;
 
@@ -20,6 +22,9 @@ pub(crate) struct RelayProtocol {
     opened_peers: HashMap<PeerIndex, Option<Instant>>,
     // Pending transactions which are waiting for relay
     pending_txs: Arc<RwLock<PendingTxs>>,
+    consensus: Consensus,
+    storage: Storage,
+    v3: bool,
 }
 
 // a simple struct to store the pending transactions in memory with size limit
@@ -79,11 +84,20 @@ impl PendingTxs {
 }
 
 impl RelayProtocol {
-    pub fn new(pending_txs: Arc<RwLock<PendingTxs>>, connected_peers: Arc<Peers>) -> Self {
+    pub fn new(
+        pending_txs: Arc<RwLock<PendingTxs>>,
+        connected_peers: Arc<Peers>,
+        consensus: Consensus,
+        storage: Storage,
+        v3: bool,
+    ) -> Self {
         Self {
             opened_peers: HashMap::new(),
             pending_txs,
             connected_peers,
+            consensus,
+            storage,
+            v3,
         }
     }
 }
@@ -102,7 +116,42 @@ impl CKBProtocolHandler for RelayProtocol {
         peer: PeerIndex,
         version: &str,
     ) {
-        debug!("RelayProtocol({}).connected peer={}", version, peer);
+        let epoch = self
+            .connected_peers
+            .get_state(&peer)
+            .map(|peer_state| {
+                peer_state
+                    .get_prove_state()
+                    .map(|s| s.get_last_header().header().epoch())
+                    .unwrap_or_else(|| self.storage.get_last_state().1.raw().epoch().unpack())
+                    .number()
+            })
+            .unwrap_or_default();
+
+        let ckb2023 = self
+            .consensus
+            .hardfork_switch
+            .ckb2023
+            .is_vm_version_2_and_syscalls_3_enabled(epoch);
+
+        debug!(
+            "RelayProtocol V{}({}).connected peer={}, epoch={}",
+            if self.v3 { '3' } else { '2' },
+            version,
+            peer,
+            epoch
+        );
+
+        if self.v3 && !ckb2023 {
+            debug!("peer={} is not ckb2023 enabled, ignore", peer);
+            return;
+        }
+
+        if !self.v3 && ckb2023 {
+            debug!("peer={} is ckb2023 enabled, ignore", peer);
+            return;
+        }
+
         if self
             .pending_txs
             .read()
