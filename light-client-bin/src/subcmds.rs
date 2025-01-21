@@ -129,6 +129,7 @@ impl RunConfig {
                 clap::crate_version!().to_owned(),
                 Flags::DISCOVERY,
             ),
+            // Usually native light-client only connects to peers through TCP
             TransportType::Tcp,
         )
         .start(&handle)
