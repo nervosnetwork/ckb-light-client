@@ -8,7 +8,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: full
-  RUST_TOOLCHAIN: 1.75.0
+  RUST_TOOLCHAIN: 1.81.0
 jobs:
   rustfmt:
     name: Checks / Format
@@ -32,8 +32,30 @@ jobs:
         run: |
           rustup toolchain install ${{ env.RUST_TOOLCHAIN }} --profile minimal --component clippy
           rustup override set ${{ env.RUST_TOOLCHAIN }}
+          # For wasm targets
+          rustup target add wasm32-unknown-unknown
       - name: Lint Check
         run: make clippy
+  test-wasm:
+    name: Tests / Build & Test (Wasm)
+    needs: [ rustfmt, clippy ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout the Repository
+        uses: actions/checkout@v4
+      - name: Setup nodejs
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install dependencies
+        run: |
+          cargo install wasm-pack
+      - name: Build
+        run: |
+          make build-wasm
+      - name: Run unit-tests with wasm-pack
+        run: |
+          make test-wasm
   test:
     name: Tests / Build & Test
     needs: [ rustfmt, clippy ]

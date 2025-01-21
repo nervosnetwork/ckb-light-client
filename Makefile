@@ -9,16 +9,26 @@ fmt:
 	cargo fmt --all --check
 
 clippy:
-	cargo clippy --workspace --locked -- --deny warnings
-
+	# cargo clippy --workspace --locked -- --deny warnings
+	# Run clippy for wasm targets
+	cargo clippy --target wasm32-unknown-unknown -p light-client-wasm -p ckb-light-client-lib -p light-client-db-common -p light-client-db-worker --locked -- --deny warnings
+	# Run clippy for native targets
+	cargo clippy -p ckb-light-client --locked -- --deny warnings
 build:
 	cargo build
 
+build-wasm:
+	npm install
+	npm run build -ws
+
 test:
-	cargo nextest run --hide-progress-bar --success-output immediate --failure-output immediate
+	cargo nextest run --hide-progress-bar --success-output immediate --failure-output immediate -p ckb-light-client-lib -p ckb-light-client
 
 test-portable:
-	cargo nextest run --features portable --hide-progress-bar --success-output immediate --failure-output immediate
+	cargo nextest run --features portable --hide-progress-bar --success-output immediate --failure-output immediate -p ckb-light-client-lib -p ckb-light-client
+
+test-wasm:
+	wasm-pack test --node ./wasm/light-client-db-common/
 
 coverage-clean:
 	rm -rf "${CARGO_TARGET_DIR}/*.profraw" "${GRCOV_OUTPUT}" "${GRCOV_OUTPUT:.info=}"
@@ -32,7 +42,7 @@ coverage-run-unittests:
 	rm -f "${COVERAGE_PROFRAW_DIR}/*.profraw"
 	RUSTFLAGS="${RUSTFLAGS} -Cinstrument-coverage" \
 		LLVM_PROFILE_FILE="${COVERAGE_PROFRAW_DIR}/unittests-%p-%m.profraw" \
-			cargo test --all
+			cargo test --workspace --exclude light-client-db-common --exclude light-client-db-worker --exclude light-client-wasm
 
 coverage-collect-data:
 	grcov "${COVERAGE_PROFRAW_DIR}" --binary-path "${CARGO_TARGET_DIR}/debug/" \

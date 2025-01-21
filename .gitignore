@@ -1,1 +1,9 @@
 /target/
+**/node_modules/**
+**/pkg/**
+/test
+/node_modules
+/yarn.lock
+/package-lock.json
+/.vscode
+/data

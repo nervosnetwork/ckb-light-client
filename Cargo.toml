@@ -1,70 +1,16 @@
-[package]
-name = "ckb-light-client"
-version = "0.4.1"
-authors = ["Nervos Core Dev <dev@nervos.org>"]
-edition = "2021"
-license = "MIT"
-description = "A CKB light client based on FlyClient."
-homepage = "https://github.com/nervosnetwork/ckb-light-client"
-repository = "https://github.com/nervosnetwork/ckb-light-client"
+[workspace]
+members = [
+    "light-client-lib",
+    "light-client-bin",
+    "./wasm/light-client-wasm",
+    "./wasm/light-client-db-worker",
+    "./wasm/light-client-db-common",
+]
 
-[dependencies]
-ckb-app-config    = "0.119.0"
-ckb-async-runtime = "0.119.0"
-ckb-stop-handler  = "0.119.0"
-ckb-constant      = "0.119.0"
-ckb-types         = "0.119.0"
-ckb-network       = "0.119.0"
-ckb-jsonrpc-types = "0.119.0"
-ckb-error         = "0.119.0"
-ckb-script        = "0.119.0"
-ckb-chain-spec    = "0.119.0"
-ckb-traits        = "0.119.0"
-ckb-resource      = "0.119.0"
-ckb-verification  = "0.119.0"
-ckb-systemtime    = "0.119.0"
-ckb-hash          = "0.119.0"
-ckb-merkle-mountain-range = "0.5.1"
-golomb-coded-set = "0.2.1"
-rocksdb = { package = "ckb-rocksdb", version ="=0.21.1", features = ["snappy"], default-features = false }
-numext-fixed-uint = { version = "0.1", features = ["support_rand", "support_heapsize", "support_serde"] }
-anyhow = "1.0.56"
-thiserror = "1.0.30"
-log = "0.4.14"
-env_logger = "0.9.0"
-clap = { version = "2.34.0", features = ["yaml"]  }
-serde = { version = "1.0.136", features = ["derive"] }
-toml = "0.5.8"
-ctrlc = { version = "3.2.1", features = ["termination"] }
-path-clean = "0.1.0"
-rand = "0.8.5"
-dashmap = "5.3"
-linked-hash-map = "0.5.6"
-jsonrpc-core = "18.0"
-jsonrpc-derive = "18.0"
-jsonrpc-http-server = "18.0"
-jsonrpc-server-utils = "18.0"
-governor = "0.6.3"
-
-[dev-dependencies]
-ckb-shared      = "0.119.0"
-ckb-chain       = "0.119.0"
-ckb-tx-pool     = "0.119.0"
-ckb-store       = "0.119.0"
-ckb-systemtime  = { version = "0.119.0", features = ["enable_faketime"] }
-tempfile = "3.0"
-rand = "0.6"
-serde_json = "1.0"
-tokio = { version = "1.20" }
-lazy_static = "1.3.0"
-
-[features]
-default = []
-portable = ["rocksdb/portable"]
-march-native = ["rocksdb/march-native"]
+resolver = "2"
+default-members = [
+    "light-client-bin"
+]
 
 [profile.release]
 overflow-checks = true
-
-[badges]
-maintenance = { status = "experimental" }

@@ -1,0 +1,50 @@
+[package]
+name = "ckb-light-client"
+version = "0.3.8"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+edition = "2021"
+license = "MIT"
+description = "A CKB light client based on FlyClient."
+homepage = "https://github.com/nervosnetwork/ckb-light-client"
+repository = "https://github.com/nervosnetwork/ckb-light-client"
+
+[dependencies]
+ckb-async-runtime = "0.121.0-rc1"
+ckb-chain-spec = "0.121.0-rc1"
+ckb-network = "0.121.0-rc1"
+ckb-stop-handler = "0.121.0-rc1"
+ckb-resource = "0.121.0-rc1"
+ckb-jsonrpc-types = "0.121.0-rc1"
+ckb-types = "0.121.0-rc1"
+ckb-traits = "0.121.0-rc1"
+ckb-systemtime = "0.121.0-rc1"
+
+ckb-light-client-lib = { path = "../light-client-lib" }
+clap = { version = "4", features = ["cargo"] }
+log = "0.4"
+ctrlc = { version = "3.2.1", features = ["termination"] }
+jsonrpc-core = "18.0"
+jsonrpc-derive = "18.0"
+jsonrpc-http-server = "18.0"
+jsonrpc-server-utils = "18.0"
+rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
+    "snappy",
+], default-features = false }
+env_logger = "0.11"
+anyhow = "1.0.56"
+
+[dev-dependencies]
+rand = "0.8"
+serde_json = "1.0"
+tempfile = "3.0"
+
+[features]
+default = []
+portable = ["rocksdb/portable"]
+march-native = ["rocksdb/march-native"]
+
+# [profile.release]
+# overflow-checks = true
+
+[badges]
+maintenance = { status = "experimental" }

@@ -10,6 +10,10 @@ A CKB light client based on [RFC 44] and [RFC 45].
 [GitHub Actions]: https://github.com/nervosnetwork/ckb-light-client/workflows/CI/badge.svg
 [Codecov]: https://img.shields.io/codecov/c/gh/nervosnetwork/ckb-light-client/develop
 
+## Wasm
+
+For browsers, please refer to README in `wasm` folder.
+
 ## How to run
 
 1. Run your own full node, this is an optional step, you may use the public bootnodes instead.

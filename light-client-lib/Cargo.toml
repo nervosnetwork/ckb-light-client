@@ -1,0 +1,77 @@
+[package]
+name = "ckb-light-client-lib"
+version = "0.3.8"
+authors = ["Nervos Core Dev <dev@nervos.org>"]
+edition = "2021"
+license = "MIT"
+description = "A CKB light client based on FlyClient."
+homepage = "https://github.com/nervosnetwork/ckb-light-client"
+repository = "https://github.com/nervosnetwork/ckb-light-client"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ckb-app-config = "0.121.0-rc1"
+ckb-constant = "0.121.0-rc1"
+ckb-types = "0.121.0-rc1"
+ckb-network = "0.121.0-rc1"
+ckb-jsonrpc-types = "0.121.0-rc1"
+ckb-error = "0.121.0-rc1"
+ckb-script = "0.121.0-rc1"
+ckb-chain-spec = "0.121.0-rc1"
+ckb-traits = "0.121.0-rc1"
+ckb-resource = "0.121.0-rc1"
+ckb-verification = "0.121.0-rc1"
+ckb-hash = "0.121.0-rc1"
+ckb-systemtime = "0.121.0-rc1"
+
+log = "0.4.14"
+path-clean = "0.1.0"
+rand = "0.8.5"
+dashmap = "5.3"
+linked-hash-map = "0.5.6"
+governor = "0.6.3"
+serde = { version = "1.0.136", features = ["derive"] }
+ckb-merkle-mountain-range = "0.5.1"
+golomb-coded-set = "0.2.1"
+numext-fixed-uint = { version = "0.1", features = [
+    "support_rand",
+    "support_heapsize",
+    "support_serde",
+] }
+
+anyhow = "1.0.56"
+thiserror = "1.0.30"
+toml = "0.5.8"
+tokio = { version = "1.20" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
+    "snappy",
+], default-features = false }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-time = "1.1.0"
+wasm-bindgen = "0.2.63"
+idb = "0.6"
+serde-wasm-bindgen = "0.6.5"
+light-client-db-common = { path = "../wasm/light-client-db-common" }
+web-sys = "0.3.72"
+console_error_panic_hook = { version = "0.1.7" }
+serde_json = "1.0.134"
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test = "0.3.45"
+
+[dev-dependencies]
+ckb-shared = "0.121.0-rc1"
+ckb-chain = "0.121.0-rc1"
+ckb-tx-pool = "0.121.0-rc1"
+ckb-store = "0.121.0-rc1"
+ckb-systemtime = { version = "0.121.0-rc1", features = ["enable_faketime"] }
+tempfile = "3.0"
+rand = "0.8"
+serde_json = "1.0"
+lazy_static = "1.3.0"
+env_logger = "0.11"
