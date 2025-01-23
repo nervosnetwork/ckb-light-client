@@ -49,8 +49,9 @@ class LightClient {
      * Start the light client.
      * @param networkSetting Network setting for light-client-wasm. You can specify config if you are using mainnet or testnet. You must provide config and spec if you are using devnet.
      * @param logLevel Log Level for light-client-db-worker and light-client-wasm
+     * @param transportType Specify transport type. `ws` stands for non-secure WebSocket, while `wss` stands for WebSocket over SSL.
      */
-    async start(networkSetting: NetworkSetting, networkSecretKey: Hex, logLevel: "trace" | "debug" | "info" | "error" = "info") {
+    async start(networkSetting: NetworkSetting, networkSecretKey: Hex, logLevel: "trace" | "debug" | "info" | "error" = "info", transportType: "ws" | "wss" = "ws") {
         this.dbWorker.postMessage({
             inputBuffer: this.inputBuffer,
             outputBuffer: this.outputBuffer,
@@ -62,7 +63,8 @@ class LightClient {
             networkFlag: networkSetting,
             logLevel: logLevel,
             traceLogBuffer: this.traceLogBuffer,
-            networkSecretKey: bytesFrom(networkSecretKey)
+            networkSecretKey: bytesFrom(networkSecretKey),
+            transportType
         } as LightClientWorkerInitializeOptions);
         await new Promise<void>((res, rej) => {
             this.dbWorker.onmessage = () => res();

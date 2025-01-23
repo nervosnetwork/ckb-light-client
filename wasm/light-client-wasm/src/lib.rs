@@ -34,8 +34,8 @@ use wasm_bindgen::prelude::*;
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_jsonrpc_types::{JsonBytes, Transaction};
 use ckb_network::{
-    extract_peer_id, CKBProtocol, CKBProtocolHandler, Flags, NetworkController, NetworkService,
-    NetworkState, SupportProtocols,
+    extract_peer_id, network::TransportType, CKBProtocol, CKBProtocolHandler, Flags,
+    NetworkController, NetworkService, NetworkState, SupportProtocols,
 };
 use ckb_resource::Resource;
 use ckb_stop_handler::broadcast_exit_signals;
@@ -79,11 +79,20 @@ enum NetworkSetting {
     DevNet { spec: String, config: String },
 }
 
+#[derive(Deserialize, Debug)]
+enum WasmTransportType {
+    #[serde(rename = "ws")]
+    Ws,
+    #[serde(rename = "wss")]
+    Wss,
+}
+
 #[wasm_bindgen]
 pub async fn light_client(
     network_setting: JsValue,
     log_level: String,
     network_secret_key: JsValue,
+    wasm_transport_type: JsValue,
 ) -> Result<(), JsValue> {
     if !status(0b0) {
         return Err(JsValue::from_str("Can't start twice"));
@@ -94,6 +103,12 @@ pub async fn light_client(
     ));
     let network_flag: NetworkSetting = serde_wasm_bindgen::from_value(network_setting)?;
 
+    let wasm_transport_type: WasmTransportType =
+        serde_wasm_bindgen::from_value(wasm_transport_type)?;
+    debug!(
+        "Starting with wasm transport type = {:?}",
+        wasm_transport_type
+    );
     let mut config = match &network_flag {
         NetworkSetting::TestNet { config } => config
             .as_ref()
@@ -217,6 +232,10 @@ pub async fn light_client(
             "0.1.0".to_owned(),
             Flags::DISCOVERY,
         ),
+        match wasm_transport_type {
+            WasmTransportType::Ws => TransportType::Ws,
+            WasmTransportType::Wss => TransportType::Wss,
+        },
     )
     .start(&handle)
     .map_err(|err| {

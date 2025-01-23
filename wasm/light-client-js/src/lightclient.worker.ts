@@ -8,7 +8,7 @@ onmessage = async (evt) => {
     if (!loaded) {
         const data = evt.data as LightClientWorkerInitializeOptions;
         wasmModule.set_shared_array(data.inputBuffer, data.outputBuffer);
-        await wasmModule.light_client(data.networkFlag, data.logLevel, data.networkSecretKey);
+        await wasmModule.light_client(data.networkFlag, data.logLevel, data.networkSecretKey, data.transportType);
         self.postMessage({});
         loaded = true;
         return;

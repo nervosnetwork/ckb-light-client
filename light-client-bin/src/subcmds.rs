@@ -3,7 +3,8 @@ use std::sync::{Arc, RwLock};
 use ckb_async_runtime::new_global_runtime;
 use ckb_chain_spec::ChainSpec;
 use ckb_network::{
-    tokio, CKBProtocol, CKBProtocolHandler, Flags, NetworkService, NetworkState, SupportProtocols,
+    network::TransportType, tokio, CKBProtocol, CKBProtocolHandler, Flags, NetworkService,
+    NetworkState, SupportProtocols,
 };
 use ckb_resource::Resource;
 use ckb_stop_handler::{broadcast_exit_signals, wait_all_ckb_services_exit};
@@ -128,6 +129,8 @@ impl RunConfig {
                 clap::crate_version!().to_owned(),
                 Flags::DISCOVERY,
             ),
+            // Usually native light-client only connects to peers through TCP
+            TransportType::Tcp,
         )
         .start(&handle)
         .map_err(|err| {

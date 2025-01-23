@@ -14,6 +14,7 @@ interface WorkerInitializeOptions {
     inputBuffer: SharedArrayBuffer;
     outputBuffer: SharedArrayBuffer;
     logLevel: string;
+    transportType: "ws" | "wss";
 }
 interface DbWorkerInitializeOptions extends WorkerInitializeOptions {
 }

@@ -4,7 +4,7 @@ use ckb_app_config::{BlockAssemblerConfig, NetworkConfig};
 use ckb_chain::{start_chain_services, ChainController};
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_jsonrpc_types::JsonBytes;
-use ckb_network::{Flags, NetworkController, NetworkService, NetworkState};
+use ckb_network::{network::TransportType, Flags, NetworkController, NetworkService, NetworkState};
 use ckb_resource::Resource;
 use ckb_shared::{Shared, SharedBuilder};
 use ckb_types::{core, prelude::*};
@@ -143,6 +143,7 @@ fn dummy_network(shared: &Shared) -> NetworkController {
             "test".to_string(),
             Flags::all(),
         ),
+        TransportType::Tcp,
     )
     .start(shared.async_handle())
     .expect("Start network service failed")
