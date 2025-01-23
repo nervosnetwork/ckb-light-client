@@ -1,4 +1,4 @@
-CARGO_TARGET_DIR ?= target
+CARGO_TARGET_DIR ?= $(shell pwd)/target
 COVERAGE_PROFRAW_DIR ?= ${CARGO_TARGET_DIR}/coverage
 GRCOV_OUTPUT ?= coverage-report.info
 GRCOV_EXCL_START = ^\s*((log::)?(trace|debug|info|warn|error)|(debug_)?assert(_eq|_ne|_error_eq))!\($$
