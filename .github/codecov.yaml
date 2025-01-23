@@ -6,11 +6,13 @@ coverage:
         target: 25%
         threshold: 0%
         paths:
-        - "src"
+        - "light-client-bin/src"
+        - "light-client-lib/src"
     patch:
       default:
         # The majority of new code should be tested.
         target: 60%
         threshold: 0%
         paths:
-        - "src"
+        - "light-client-bin/src"
+        - "light-client-lib/src"
