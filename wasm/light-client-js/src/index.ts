@@ -48,6 +48,7 @@ class LightClient {
     /**
      * Start the light client.
      * @param networkSetting Network setting for light-client-wasm. You can specify config if you are using mainnet or testnet. You must provide config and spec if you are using devnet.
+     * @param networkSecretKey A secret key used to derive keys during data transport between nodes. This key should be persistent for a unique client.
      * @param logLevel Log Level for light-client-db-worker and light-client-wasm
      * @param transportType Specify transport type. `ws` stands for non-secure WebSocket, while `wss` stands for WebSocket over SSL.
      */
