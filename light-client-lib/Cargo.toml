@@ -25,9 +25,7 @@ ckb-resource = "0.121.0"
 ckb-verification = "0.121.0"
 ckb-hash = "0.121.0"
 ckb-systemtime = "0.121.0"
-ckb-dao = "0.121.0"
 ckb-dao-utils = "0.121.0"
-ckb-tx-pool = "0.121.0"
 
 
 log = "0.4.14"

@@ -6,10 +6,9 @@ use std::{
 use byteorder::{ByteOrder, LittleEndian};
 use ckb_chain_spec::consensus::Consensus;
 use ckb_dao_utils::{extract_dao_data, DaoError};
-use ckb_error::Error;
+use ckb_error::{Error, OtherError};
 use ckb_script::TxVerifyEnv;
 use ckb_traits::{CellDataProvider, ExtensionProvider, HeaderFieldsProvider, HeaderProvider};
-use ckb_tx_pool::error::Reject;
 use ckb_types::{
     bytes::Bytes,
     core::{
@@ -24,6 +23,8 @@ use ckb_verification::{
     CapacityVerifier, NonContextualTransactionVerifier, ScriptVerifier,
     TimeRelativeTransactionVerifier,
 };
+
+const DEFAULT_MIN_FEE_RATE: FeeRate = FeeRate(1000);
 
 /// A FeeCalculator for transactions, adapted from `DaoCalculator` in `ckb-dao`
 pub struct FeeCalculator<DL> {
@@ -192,9 +193,11 @@ impl<DL: CellDataProvider + HeaderProvider> MinFeeVerifier<DL> {
             .serialized_size_in_block();
         let min_fee = self.min_fee_rate.fee(tx_size as u64);
         if fee < min_fee {
-            return Err(
-                Reject::LowFeeRate(self.min_fee_rate, min_fee.as_u64(), fee.as_u64()).into(),
-            );
+            return Err(OtherError::new(format!(
+                "Transaction rejected by low fee rate: min_fee_rate = {}, min_fee = {}, fee = {}, tx_size = {}",
+                self.min_fee_rate, min_fee, fee, tx_size
+            ))
+            .into());
         }
         Ok(())
     }
@@ -245,7 +248,7 @@ where
             ),
             capacity: CapacityVerifier::new(Arc::clone(&rtx), consensus.dao_type_hash()),
             min_fee_rate: MinFeeVerifier::new(
-                FeeRate(1_0000_0000),
+                DEFAULT_MIN_FEE_RATE,
                 Arc::clone(&rtx),
                 Arc::clone(&consensus),
                 swc.clone().into(),
