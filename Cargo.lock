@@ -762,10 +762,13 @@ name = "ckb-light-client-lib"
 version = "0.3.8"
 dependencies = [
  "anyhow",
+ "byteorder",
  "ckb-app-config",
  "ckb-chain",
  "ckb-chain-spec",
  "ckb-constant",
+ "ckb-dao",
+ "ckb-dao-utils",
  "ckb-error",
  "ckb-hash",
  "ckb-jsonrpc-types",
