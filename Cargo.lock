@@ -768,6 +768,8 @@ dependencies = [
  "ckb-chain-spec",
  "ckb-constant",
  "ckb-dao-utils",
+ "ckb-db",
+ "ckb-db-schema",
  "ckb-error",
  "ckb-hash",
  "ckb-jsonrpc-types",

@@ -1,17 +1,141 @@
 use std::sync::Arc;
 
-use ckb_jsonrpc_types::{Block, Script, Transaction};
-use ckb_types::{
-    core::Capacity,
-    packed,
-    prelude::{IntoHeaderView, IntoTransactionView as _},
-};
-
 use crate::{
     storage::{ScriptStatus, ScriptType, StorageWithChainData},
     tests::{prelude::*, utils::MockChain},
     verify::{resolve_tx, verify_tx, FeeCalculator},
 };
+use ckb_chain_spec::consensus::Consensus;
+use ckb_dao_utils::pack_dao_data;
+use ckb_db::RocksDB;
+use ckb_db_schema::COLUMNS;
+use ckb_jsonrpc_types::{Block, Script, Transaction};
+use ckb_store::{ChainDB, ChainStore};
+use ckb_types::{
+    bytes::Bytes,
+    core::{capacity_bytes, BlockBuilder, Capacity, EpochNumberWithFraction, HeaderBuilder},
+    packed::{self, CellOutput},
+    prelude::{Entity, IntoHeaderView, IntoTransactionView as _, Pack},
+};
+use ckb_types::{core::TransactionBuilder, prelude::Builder};
+use tempfile::TempDir;
+#[test]
+fn check_withdraw_calculation() {
+    let data = Bytes::from(vec![1; 10]);
+    let output = CellOutput::new_builder()
+        .capacity(capacity_bytes!(1000000).pack())
+        .build();
+    let tx = TransactionBuilder::default()
+        .output(output.clone())
+        .output_data(data.pack())
+        .build();
+    let epoch = EpochNumberWithFraction::new(1, 100, 1000);
+    let deposit_header = HeaderBuilder::default()
+        .number(100.pack())
+        .epoch(epoch.pack())
+        .dao(pack_dao_data(
+            10_000_000_000_123_456,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        ))
+        .build();
+    let deposit_block = BlockBuilder::default()
+        .header(deposit_header)
+        .transaction(tx)
+        .build();
+
+    let epoch = EpochNumberWithFraction::new(1, 200, 1000);
+    let withdrawing_header = HeaderBuilder::default()
+        .number(200.pack())
+        .epoch(epoch.pack())
+        .dao(pack_dao_data(
+            10_000_000_001_123_456,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        ))
+        .build();
+    let withdrawing_block = BlockBuilder::default().header(withdrawing_header).build();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let db = RocksDB::open_in(&tmp_dir, COLUMNS);
+    let store = ChainDB::new(db, Default::default());
+    let txn = store.begin_transaction();
+    txn.insert_block(&deposit_block).unwrap();
+    txn.attach_block(&deposit_block).unwrap();
+    txn.insert_block(&withdrawing_block).unwrap();
+    txn.attach_block(&withdrawing_block).unwrap();
+    txn.commit().unwrap();
+
+    let consensus = Arc::new(Consensus::default());
+    let data_loader = Arc::new(store.borrow_as_data_loader());
+    let calculator = FeeCalculator::new(Arc::clone(&consensus), data_loader);
+    let result = calculator.calculate_maximum_withdraw(
+        &output,
+        Capacity::bytes(data.len()).expect("should not overflow"),
+        &deposit_block.hash(),
+        &withdrawing_block.hash(),
+    );
+    assert_eq!(result.unwrap(), Capacity::shannons(100_000_000_009_999));
+}
+
+#[test]
+fn check_withdraw_calculation_overflows() {
+    let output = CellOutput::new_builder()
+        .capacity(Capacity::shannons(18_446_744_073_709_550_000).pack())
+        .build();
+    let tx = TransactionBuilder::default().output(output.clone()).build();
+    let epoch = EpochNumberWithFraction::new(1, 100, 1000);
+    let deposit_header = HeaderBuilder::default()
+        .number(100.pack())
+        .epoch(epoch.pack())
+        .dao(pack_dao_data(
+            10_000_000_000_123_456,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        ))
+        .build();
+    let deposit_block = BlockBuilder::default()
+        .header(deposit_header)
+        .transaction(tx)
+        .build();
+
+    let epoch = EpochNumberWithFraction::new(1, 200, 1000);
+    let withdrawing_header = HeaderBuilder::default()
+        .number(200.pack())
+        .epoch(epoch.pack())
+        .dao(pack_dao_data(
+            10_000_000_001_123_456,
+            Default::default(),
+            Default::default(),
+            Default::default(),
+        ))
+        .build();
+    let withdrawing_block = BlockBuilder::default().header(withdrawing_header).build();
+
+    let tmp_dir = TempDir::new().unwrap();
+    let db = RocksDB::open_in(&tmp_dir, COLUMNS);
+    let store = ChainDB::new(db, Default::default());
+    let txn = store.begin_transaction();
+    txn.insert_block(&deposit_block).unwrap();
+    txn.attach_block(&deposit_block).unwrap();
+    txn.insert_block(&withdrawing_block).unwrap();
+    txn.attach_block(&withdrawing_block).unwrap();
+    txn.commit().unwrap();
+
+    let consensus = Arc::new(Consensus::default());
+    let data_loader = Arc::new(store.borrow_as_data_loader());
+    let calculator = FeeCalculator::new(consensus, data_loader);
+    let result = calculator.calculate_maximum_withdraw(
+        &output,
+        Capacity::bytes(0).expect("should not overflow"),
+        &deposit_block.hash(),
+        &withdrawing_block.hash(),
+    );
+    assert!(result.is_err());
+}
 
 #[test]
 fn verify_valid_transaction_and_fee() {
