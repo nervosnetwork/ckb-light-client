@@ -20,6 +20,7 @@ class LightClient {
     private commandInvokeLock: Mutex
     private traceLogBuffer: SharedArrayBuffer
     private stopping: boolean = false;
+    private started: boolean = false;
     private traceLogCallback: (value: TraceRecord) => void | null = null;
     /**
      * Construct a LightClient instance.
@@ -94,8 +95,12 @@ class LightClient {
             }
             console.log("Exiting trace log fetcher..");
         })();
+        this.started = true;
     }
     private invokeLightClientCommand(name: string, args?: any[]): Promise<any> {
+        if (!this.started) {
+            throw new Error("ckb-light-client not started yet!");
+        }
         // Why use lock here?
         // light-client-wasm provides synchronous APIs, means if we send a call request through postMessage, onmessage will be called only when the command call resolved. 
         // We use lock here to avoid multiple call to postMessage before onmessage fired, to avoid mixed result of different calls 
@@ -138,6 +143,7 @@ class LightClient {
         this.dbWorker.terminate();
         this.lightClientWorker.terminate();
         this.stopping = true;
+        this.started = false;
     }
     /**
      * Returns the header with the highest block number in the canonical chain
