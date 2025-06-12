@@ -103,7 +103,6 @@ macro_rules! return_if_failed {
     };
 }
 
-// #[cfg(test)]
 impl PartialEq for Status {
     fn eq(&self, other: &Self) -> bool {
         self.code == other.code
