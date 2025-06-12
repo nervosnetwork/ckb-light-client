@@ -1,15 +1,17 @@
 use std::sync::Arc;
 
+use ckb_jsonrpc_types::{Block, Script, Transaction};
+use ckb_types::{
+    packed,
+    prelude::{IntoHeaderView, IntoTransactionView as _},
+};
+
 use crate::{
-    storage::StorageWithChainData,
+    storage::{ScriptStatus, ScriptType, StorageWithChainData},
     tests::{prelude::*, utils::MockChain},
     verify::verify_tx,
 };
-use ckb_jsonrpc_types::Transaction;
-use ckb_types::{
-    packed::{self},
-    prelude::{IntoHeaderView, IntoTransactionView as _},
-};
+
 #[test]
 fn verify_valid_transaction() {
     let chain = MockChain::new_with_default_pow("verify_valid_transaction");
