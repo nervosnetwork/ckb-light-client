@@ -160,7 +160,7 @@ where
         .verify(consensus.max_block_cycles())
 }
 
-pub(crate) fn resolve_tx<T>(
+fn resolve_tx<T>(
     swc: &T,
     transaction: TransactionView,
 ) -> Result<ResolvedTransaction, OutPointError>
