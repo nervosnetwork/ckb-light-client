@@ -18,7 +18,7 @@ use ckb_types::{
     prelude::Entity,
 };
 use ckb_verification::{
-    CapacityVerifier, NonContextualTransactionVerifier, ScriptVerifier,
+    CapacityVerifier, DaoScriptSizeVerifier, NonContextualTransactionVerifier, ScriptVerifier,
     TimeRelativeTransactionVerifier,
 };
 
@@ -76,6 +76,7 @@ where
     pub(crate) capacity: CapacityVerifier,
     pub(crate) script: ScriptVerifier<T>,
     pub(crate) min_fee_rate: MinFeeVerifier<T>,
+    pub(crate) dao_script_size_verifier: DaoScriptSizeVerifier<T>,
 }
 
 impl<T> ContextualTransactionVerifier<T>
@@ -117,6 +118,11 @@ where
                 Arc::clone(&consensus),
                 swc.clone().into(),
             ),
+            dao_script_size_verifier: DaoScriptSizeVerifier::new(
+                Arc::clone(&rtx),
+                Arc::clone(&consensus),
+                swc.clone().into(),
+            ),
         }
     }
 
@@ -124,6 +130,7 @@ where
         self.time_relative.verify()?;
         self.capacity.verify()?;
         self.min_fee_rate.verify()?;
+        self.dao_script_size_verifier.verify()?;
         self.script.verify(max_cycles)
     }
 }
