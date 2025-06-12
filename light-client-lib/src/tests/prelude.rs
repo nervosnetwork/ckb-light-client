@@ -206,7 +206,7 @@ pub(crate) trait RunningChainExt: ChainExt {
     fn shared(&self) -> &Shared;
 
     fn tx_pool(&self) -> &TxPoolController {
-        &self.shared().tx_pool_controller()
+        self.shared().tx_pool_controller()
     }
 
     fn always_success_cell_dep(&self) -> packed::CellDep {
@@ -368,7 +368,6 @@ pub(crate) trait RunningChainExt: ChainExt {
             let difficulties = {
                 let u256_one = &U256::from(1u64);
                 let total_diffs = (0..last_num)
-                    .into_iter()
                     .map(|num| snapshot.get_total_difficulty_by_number(num).unwrap())
                     .collect::<Vec<_>>();
                 let mut difficulties = Vec::new();

@@ -3,21 +3,19 @@ use std::{
     sync::Arc,
 };
 
-use byteorder::{ByteOrder, LittleEndian};
 use ckb_chain_spec::consensus::Consensus;
-use ckb_dao_utils::{extract_dao_data, DaoError};
+use ckb_dao::DaoCalculator;
 use ckb_error::{Error, OtherError};
 use ckb_script::TxVerifyEnv;
 use ckb_traits::{CellDataProvider, ExtensionProvider, HeaderFieldsProvider, HeaderProvider};
 use ckb_types::{
-    bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus, ResolvedTransaction},
         error::OutPointError,
-        Capacity, Cycle, DepType, FeeRate, HeaderView, ScriptHashType, TransactionView,
+        Cycle, DepType, FeeRate, HeaderView, TransactionView,
     },
-    packed::{Byte32, CellOutput, OutPoint, OutPointVec, Script, WitnessArgs},
-    prelude::{Entity, Unpack},
+    packed::{OutPoint, OutPointVec},
+    prelude::Entity,
 };
 use ckb_verification::{
     CapacityVerifier, NonContextualTransactionVerifier, ScriptVerifier,
@@ -26,176 +24,50 @@ use ckb_verification::{
 
 const DEFAULT_MIN_FEE_RATE: FeeRate = FeeRate(1000);
 
-/// A FeeCalculator for transactions, adapted from `DaoCalculator` in `ckb-dao`
-pub struct FeeCalculator<DL> {
-    consensus: Arc<Consensus>,
-    data_loader: Arc<DL>,
-}
-
-impl<DL: CellDataProvider + HeaderProvider> FeeCalculator<DL> {
-    /// Creates a new `FeeCalculator`.
-    pub fn new(consensus: Arc<Consensus>, data_loader: Arc<DL>) -> Self {
-        FeeCalculator {
-            consensus,
-            data_loader,
-        }
-    }
-
-    /// Returns the total transactions fee of `rtx`.
-    pub fn transaction_fee(&self, rtx: &ResolvedTransaction) -> Result<Capacity, DaoError> {
-        let maximum_withdraw = self.transaction_maximum_withdraw(rtx)?;
-        rtx.transaction
-            .outputs_capacity()
-            .and_then(|y| maximum_withdraw.safe_sub(y))
-            .map_err(Into::into)
-    }
-
-    fn transaction_maximum_withdraw(
-        &self,
-        rtx: &ResolvedTransaction,
-    ) -> Result<Capacity, DaoError> {
-        let header_deps: HashSet<Byte32> = rtx.transaction.header_deps_iter().collect();
-        rtx.resolved_inputs.iter().enumerate().try_fold(
-            Capacity::zero(),
-            |capacities, (i, cell_meta)| {
-                let capacity: Result<Capacity, DaoError> = {
-                    let output = &cell_meta.cell_output;
-                    let is_dao_type_script = |type_script: Script| {
-                        Into::<u8>::into(type_script.hash_type())
-                            == Into::<u8>::into(ScriptHashType::Type)
-                            && type_script.code_hash() == self.consensus.dao_type_hash()
-                    };
-                    let is_withdrawing_input =
-                        |cell_meta: &CellMeta| match self.data_loader.load_cell_data(cell_meta) {
-                            Some(data) => data.len() == 8 && LittleEndian::read_u64(&data) > 0,
-                            None => false,
-                        };
-                    if output
-                        .type_()
-                        .to_opt()
-                        .map(is_dao_type_script)
-                        .unwrap_or(false)
-                        && is_withdrawing_input(cell_meta)
-                    {
-                        let withdrawing_header_hash = cell_meta
-                            .transaction_info
-                            .as_ref()
-                            .map(|info| &info.block_hash)
-                            .filter(|hash| header_deps.contains(hash))
-                            .ok_or(DaoError::InvalidOutPoint)?;
-                        let deposit_header_hash = rtx
-                            .transaction
-                            .witnesses()
-                            .get(i)
-                            .ok_or(DaoError::InvalidOutPoint)
-                            .and_then(|witness_data| {
-                                // dao contract stores header deps index as u64 in the input_type field of WitnessArgs
-                                let witness = WitnessArgs::from_slice(&Unpack::<Bytes>::unpack(
-                                    &witness_data,
-                                ))
-                                .map_err(|_| DaoError::InvalidDaoFormat)?;
-                                let header_deps_index_data: Option<Bytes> = witness
-                                    .input_type()
-                                    .to_opt()
-                                    .map(|witness| witness.unpack());
-                                if header_deps_index_data.is_none()
-                                    || header_deps_index_data.clone().map(|data| data.len())
-                                        != Some(8)
-                                {
-                                    return Err(DaoError::InvalidDaoFormat);
-                                }
-                                Ok(LittleEndian::read_u64(&header_deps_index_data.unwrap()))
-                            })
-                            .and_then(|header_dep_index| {
-                                rtx.transaction
-                                    .header_deps()
-                                    .get(header_dep_index as usize)
-                                    .and_then(|hash| header_deps.get(&hash))
-                                    .ok_or(DaoError::InvalidOutPoint)
-                            })?;
-                        self.calculate_maximum_withdraw(
-                            output,
-                            Capacity::bytes(cell_meta.data_bytes as usize)?,
-                            deposit_header_hash,
-                            withdrawing_header_hash,
-                        )
-                    } else {
-                        Ok(output.capacity().unpack())
-                    }
-                };
-                capacity.and_then(|c| c.safe_add(capacities).map_err(Into::into))
-            },
-        )
-    }
-
-    /// Calculate maximum withdraw capacity of a deposited dao output
-    pub fn calculate_maximum_withdraw(
-        &self,
-        output: &CellOutput,
-        output_data_capacity: Capacity,
-        deposit_header_hash: &Byte32,
-        withdrawing_header_hash: &Byte32,
-    ) -> Result<Capacity, DaoError> {
-        let deposit_header = self
-            .data_loader
-            .get_header(deposit_header_hash)
-            .ok_or(DaoError::InvalidHeader)?;
-        let withdrawing_header = self
-            .data_loader
-            .get_header(withdrawing_header_hash)
-            .ok_or(DaoError::InvalidHeader)?;
-        if deposit_header.number() >= withdrawing_header.number() {
-            return Err(DaoError::InvalidOutPoint);
-        }
-
-        let (deposit_ar, _, _, _) = extract_dao_data(deposit_header.dao());
-        let (withdrawing_ar, _, _, _) = extract_dao_data(withdrawing_header.dao());
-
-        let occupied_capacity = output.occupied_capacity(output_data_capacity)?;
-        let output_capacity: Capacity = output.capacity().unpack();
-        let counted_capacity = output_capacity.safe_sub(occupied_capacity)?;
-        let withdraw_counted_capacity = u128::from(counted_capacity.as_u64())
-            * u128::from(withdrawing_ar)
-            / u128::from(deposit_ar);
-        let withdraw_capacity =
-            Capacity::shannons(withdraw_counted_capacity as u64).safe_add(occupied_capacity)?;
-        Ok(withdraw_capacity)
-    }
-}
-
 /// Used to verify if a transaction meets the lowest fee rate
-pub struct MinFeeVerifier<DL> {
+/// Use self reference here since `DaoCalculator` requires references to consensus and data_loader, but `ContextualTransactionVerifier` can only provide `Arc`s
+#[ouroboros::self_referencing]
+pub struct MinFeeVerifier<DL: 'static> {
     min_fee_rate: FeeRate,
     resolved_tx: Arc<ResolvedTransaction>,
-    fee_calculator: FeeCalculator<DL>,
+    consensus: Arc<Consensus>,
+    data_loader: Arc<DL>,
+    #[borrows(consensus, data_loader)]
+    #[covariant]
+    fee_calculator: DaoCalculator<'this, DL>,
 }
-impl<DL: CellDataProvider + HeaderProvider> MinFeeVerifier<DL> {
+impl<DL: CellDataProvider + HeaderProvider + 'static> MinFeeVerifier<DL> {
     /// Creates a new `MinFeeVerifier`.
-    pub fn new(
+    pub fn new_with_arc(
         min_fee_rate: FeeRate,
         resolved_tx: Arc<ResolvedTransaction>,
         consensus: Arc<Consensus>,
         data_loader: Arc<DL>,
     ) -> Self {
-        Self {
+        MinFeeVerifierBuilder {
             min_fee_rate,
             resolved_tx,
-            fee_calculator: FeeCalculator::new(consensus, data_loader),
+            consensus,
+            data_loader,
+            fee_calculator_builder: |a: &Arc<Consensus>, b: &Arc<DL>| DaoCalculator::new(a, b),
         }
+        .build()
     }
     /// Verify if the transaction meets the lowest fee rate set by `min_fee_rate`
     pub fn verify(&self) -> Result<(), Error> {
-        let fee = self.fee_calculator.transaction_fee(&self.resolved_tx)?;
+        let fee = self
+            .borrow_fee_calculator()
+            .transaction_fee(self.borrow_resolved_tx())?;
         let tx_size = self
-            .resolved_tx
+            .borrow_resolved_tx()
             .transaction
             .data()
             .serialized_size_in_block();
-        let min_fee = self.min_fee_rate.fee(tx_size as u64);
+        let min_fee = self.borrow_min_fee_rate().fee(tx_size as u64);
         if fee < min_fee {
             return Err(OtherError::new(format!(
                 "Transaction rejected by low fee rate: min_fee_rate = {}, min_fee = {}, fee = {}, tx_size = {}",
-                self.min_fee_rate, min_fee, fee, tx_size
+                self.borrow_min_fee_rate(), min_fee, fee, tx_size
             ))
             .into());
         }
@@ -247,7 +119,7 @@ where
                 Arc::clone(&tx_env),
             ),
             capacity: CapacityVerifier::new(Arc::clone(&rtx), consensus.dao_type_hash()),
-            min_fee_rate: MinFeeVerifier::new(
+            min_fee_rate: MinFeeVerifier::new_with_arc(
                 DEFAULT_MIN_FEE_RATE,
                 Arc::clone(&rtx),
                 Arc::clone(&consensus),

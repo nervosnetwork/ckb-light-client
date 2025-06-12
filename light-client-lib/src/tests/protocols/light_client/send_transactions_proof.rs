@@ -69,7 +69,7 @@ async fn test_send_txs_proof_ok() {
                 .iter()
                 .map(|tx| tx.hash())
                 .collect::<Vec<_>>(),
-            &vec![tx_info.index as u32],
+            &[tx_info.index as u32],
         )
         .unwrap();
         let filtered_block = packed::FilteredBlock::new_builder()
@@ -206,7 +206,7 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
                 .iter()
                 .map(|tx| tx.hash())
                 .collect::<Vec<_>>(),
-            &vec![tx_info.index as u32],
+            &[tx_info.index as u32],
         )
         .unwrap();
         let filtered_block = packed::FilteredBlock::new_builder()
@@ -328,7 +328,7 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
                 .iter()
                 .map(|tx| tx.hash())
                 .collect::<Vec<_>>(),
-            &vec![tx_info.index as u32],
+            &[tx_info.index as u32],
         )
         .unwrap();
         let filtered_block = packed::FilteredBlock::new_builder()

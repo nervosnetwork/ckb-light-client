@@ -58,7 +58,7 @@ impl MockNetworkContext {
             .borrow()
             .iter()
             .find(|(peer, _, _)| *peer == target)
-            .map(|(_, duration, reason)| (duration.clone(), reason.clone()))
+            .map(|(_, duration, reason)| (*duration, reason.clone()))
     }
 
     pub(crate) fn not_banned(&self, target: PeerIndex) -> bool {

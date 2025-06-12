@@ -43,7 +43,7 @@ impl ChainExt for MockRunningChain {
     }
 
     fn consensus(&self) -> &Consensus {
-        &self.shared.consensus()
+        self.shared.consensus()
     }
 }
 

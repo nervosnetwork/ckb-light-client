@@ -156,7 +156,7 @@ async fn update_last_state() {
         assert_eq!(nc.sent_messages().borrow().len(), 1);
 
         let data = &nc.sent_messages().borrow()[0].2;
-        let message = packed::LightClientMessageReader::new_unchecked(&data);
+        let message = packed::LightClientMessageReader::new_unchecked(data);
         let content = if let packed::LightClientMessageUnionReader::GetLastStateProof(content) =
             message.to_enum()
         {
@@ -299,7 +299,6 @@ async fn headers_should_be_sorted() {
         let data = {
             let item = packed::HeaderDigest::default();
             let headers = (1..num)
-                .into_iter()
                 .map(|mut n| {
                     if n == 1 {
                         n = num / 2;
@@ -382,7 +381,7 @@ async fn valid_proof_with_boundary_not_in_last_n() {
                 .iter()
                 .map(|n| *n as BlockNumber)
                 .filter(|n| *n < first_last_n_number)
-                .chain((first_last_n_number..num).into_iter())
+                .chain(first_last_n_number..num)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)
@@ -477,7 +476,7 @@ async fn valid_proof_with_boundary_in_last_n() {
                 .iter()
                 .map(|n| *n as BlockNumber)
                 .filter(|n| *n < first_last_n_number)
-                .chain((first_last_n_number..num).into_iter())
+                .chain(first_last_n_number..num)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)
@@ -554,7 +553,6 @@ async fn valid_proof_with_no_matched_sample() {
                 let difficulties = {
                     let u256_one = &U256::from(1u64);
                     let total_diffs = (0..num)
-                        .into_iter()
                         .map(|num| snapshot.get_total_difficulty_by_number(num).unwrap())
                         .collect::<Vec<_>>();
                     let mut difficulties = Vec::new();
@@ -606,7 +604,7 @@ async fn valid_proof_with_no_matched_sample() {
                 .iter()
                 .map(|n| *n as BlockNumber)
                 .filter(|n| *n < first_last_n_number)
-                .chain((first_last_n_number..num).into_iter())
+                .chain(first_last_n_number..num)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)
@@ -699,7 +697,6 @@ async fn valid_proof_with_prove_state() {
                 1
             };
             let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
@@ -737,7 +734,7 @@ async fn valid_proof_with_prove_state() {
                 .iter()
                 .map(|n| *n as BlockNumber)
                 .filter(|n| *n < first_last_n_number)
-                .chain((first_last_n_number..num).into_iter())
+                .chain(first_last_n_number..num)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)
@@ -830,7 +827,6 @@ async fn valid_proof_with_reorg_blocks() {
                 1
             };
             let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
@@ -871,7 +867,7 @@ async fn valid_proof_with_reorg_blocks() {
                         .map(|n| *n as BlockNumber)
                         .filter(|n| *n < first_last_n_number),
                 )
-                .chain((first_last_n_number..num).into_iter())
+                .chain(first_last_n_number..num)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)
@@ -974,7 +970,6 @@ async fn test_parent_chain_root_for_the_genesis_block(should_passed: bool) {
             .expect("block stored");
         let data = {
             let headers = (0..num)
-                .into_iter()
                 .map(|n| {
                     if !should_passed && n == num / 2 {
                         // Set a wrong parent chain root:
@@ -1085,7 +1080,6 @@ async fn invalid_parent_chain_root_for_non_genesis_blocks() {
             .expect("block stored");
         let data = {
             let headers = (0..num)
-                .into_iter()
                 .map(|n| {
                     if n == 1 {
                         snapshot
@@ -1247,7 +1241,6 @@ async fn last_n_headers_is_not_continuous() {
     let last_n_blocks = 3;
     let boundary_number = last_number - last_n_blocks - 2;
     let returned_last_n_numbers = (boundary_number..last_number)
-        .into_iter()
         .filter(|n| *n != boundary_number + 1)
         .collect();
     let param = TestParameter {
@@ -1267,7 +1260,6 @@ async fn last_n_headers_is_not_continuous_in_middle_when_no_samples() {
     let last_n_blocks = 3;
     let boundary_number = last_number - last_n_blocks - 2;
     let returned_last_n_numbers = (boundary_number..last_number)
-        .into_iter()
         .filter(|n| *n != boundary_number + 1)
         .collect();
     let param = TestParameter {
@@ -1286,7 +1278,7 @@ async fn last_n_headers_is_not_continuous_with_start_when_no_samples() {
     let last_number = 20;
     let last_n_blocks = 3;
     let boundary_number = last_number - last_n_blocks - 2;
-    let returned_last_n_numbers = ((boundary_number + 1)..last_number).into_iter().collect();
+    let returned_last_n_numbers = ((boundary_number + 1)..last_number).collect();
     let param = TestParameter {
         last_number,
         boundary_number,
@@ -1304,7 +1296,7 @@ async fn last_n_headers_is_not_continuous_with_last_when_no_samples() {
     let last_number = 20;
     let last_n_blocks = 3;
     let boundary_number = last_number - last_n_blocks - 2;
-    let returned_last_n_numbers = (boundary_number..(last_number - 1)).into_iter().collect();
+    let returned_last_n_numbers = (boundary_number..(last_number - 1)).collect();
     let param = TestParameter {
         last_number,
         boundary_number,
@@ -1803,7 +1795,6 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                 1
             };
             let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
-                .into_iter()
                 .map(|n| snapshot.get_header_by_number(n).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
@@ -1911,7 +1902,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                         .map(|n| *n as BlockNumber)
                         .filter(|n| *n < first_last_n_number),
                 )
-                .chain((first_last_n_number..last_number).into_iter())
+                .chain(first_last_n_number..last_number)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)
@@ -2103,7 +2094,7 @@ async fn multi_peers_override_last_headers() {
                 .iter()
                 .map(|n| *n as BlockNumber)
                 .filter(|n| *n < first_last_n_number)
-                .chain((first_last_n_number..num).into_iter())
+                .chain(first_last_n_number..num)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)
@@ -2164,7 +2155,7 @@ async fn multi_peers_override_last_headers() {
                 .iter()
                 .map(|n| *n as BlockNumber)
                 .filter(|n| *n < first_last_n_number)
-                .chain((first_last_n_number..num).into_iter())
+                .chain(first_last_n_number..num)
                 .map(|n| {
                     snapshot
                         .get_verifiable_header_by_number(n)

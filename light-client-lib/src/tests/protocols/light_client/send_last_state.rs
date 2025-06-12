@@ -156,7 +156,7 @@ async fn initialize_last_state() {
     assert_eq!(nc.sent_messages().borrow().len(), 1);
 
     let data = &nc.sent_messages().borrow()[0].2;
-    let message = packed::LightClientMessageReader::new_unchecked(&data);
+    let message = packed::LightClientMessageReader::new_unchecked(data);
     let content = if let packed::LightClientMessageUnionReader::GetLastStateProof(content) =
         message.to_enum()
     {
@@ -221,7 +221,7 @@ async fn update_to_same_last_state() {
             .expect("has peer state");
         let last_state_after = peer_state_after.get_last_state().expect("has last state");
 
-        assert!(last_state_after.is_same_as(&last_state_before));
+        assert!(last_state_after.is_same_as(last_state_before));
         assert_eq!(last_state_after.update_ts(), last_state_before.update_ts());
     }
 }
@@ -275,7 +275,6 @@ async fn update_to_continuous_last_state() {
             .unwrap();
         let prove_state = {
             let last_n_headers = (1..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request, Vec::new(), last_n_headers)
@@ -376,7 +375,6 @@ async fn update_to_noncontinuous_last_state() {
             .unwrap();
         let prove_state = {
             let last_n_headers = (1..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request, Vec::new(), last_n_headers)
@@ -482,7 +480,6 @@ async fn update_to_continuous_but_forked_last_state() {
             .unwrap();
         let prove_state = {
             let last_n_headers = (1..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request, Vec::new(), last_n_headers)
@@ -594,7 +591,6 @@ async fn update_to_proved_last_state() {
         };
         let prove_state = {
             let last_n_headers = (1..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)

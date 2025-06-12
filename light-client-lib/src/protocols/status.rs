@@ -17,8 +17,10 @@ use super::{Peers, BAD_MESSAGE_BAN_TIME};
 #[repr(u16)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(dead_code)]
+#[derive(Default)]
 pub enum StatusCode {
     /// OK
+    #[default]
     OK = 200,
     /// Require re-check.
     RequireRecheck = 201,
@@ -101,13 +103,7 @@ macro_rules! return_if_failed {
     };
 }
 
-#[cfg(test)]
-impl Default for StatusCode {
-    fn default() -> Self {
-        StatusCode::OK
-    }
-}
-
+// #[cfg(test)]
 impl PartialEq for Status {
     fn eq(&self, other: &Self) -> bool {
         self.code == other.code
