@@ -48,7 +48,7 @@ impl<DL: CellDataProvider + HeaderProvider> MinFeeVerifier<DL> {
     }
     /// Verify if the transaction meets the lowest fee rate set by `min_fee_rate`
     pub fn verify(&self) -> Result<(), Error> {
-        let fee = DaoCalculator::new(&*self.consensus, &*self.data_loader)
+        let fee = DaoCalculator::new(&self.consensus, &*self.data_loader)
             .transaction_fee(&self.resolved_tx)?;
         let tx_size = self
             .resolved_tx
@@ -121,7 +121,7 @@ where
             dao_script_size_verifier: DaoScriptSizeVerifier::new(
                 Arc::clone(&rtx),
                 Arc::clone(&consensus),
-                swc.clone().into(),
+                swc.clone(),
             ),
         }
     }
