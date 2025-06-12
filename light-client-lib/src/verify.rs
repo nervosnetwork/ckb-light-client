@@ -25,7 +25,6 @@ use ckb_verification::{
 const DEFAULT_MIN_FEE_RATE: FeeRate = FeeRate(1000);
 
 /// Used to verify if a transaction meets the lowest fee rate
-/// Use self reference here since `DaoCalculator` requires references to consensus and data_loader, but `ContextualTransactionVerifier` can only provide `Arc`s
 pub struct MinFeeVerifier<DL> {
     min_fee_rate: FeeRate,
     resolved_tx: Arc<ResolvedTransaction>,
