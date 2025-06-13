@@ -106,7 +106,6 @@ async fn last_state_is_changed() {
                 1
             };
             let last_n_headers = (last_n_blocks_start_number..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
@@ -202,7 +201,6 @@ async fn unexpected_response() {
                 1
             };
             let last_n_headers = (last_n_blocks_start_number..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
@@ -311,7 +309,6 @@ async fn get_blocks_with_chunks() {
                 1
             };
             let last_n_headers = (last_n_blocks_start_number..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
@@ -378,9 +375,9 @@ async fn get_blocks_with_chunks() {
             .borrow()
             .iter()
             .enumerate()
-            .map(|(idx, msg)| {
+            .flat_map(|(idx, msg)| {
                 let data = &msg.2;
-                let message = packed::SyncMessageReader::new_unchecked(&data);
+                let message = packed::SyncMessageReader::new_unchecked(data);
                 let hashes =
                     if let packed::SyncMessageUnionReader::GetBlocks(content) = message.to_enum() {
                         content.block_hashes().to_entity().into_iter()
@@ -394,7 +391,6 @@ async fn get_blocks_with_chunks() {
                 }
                 hashes
             })
-            .flatten()
             .collect::<Vec<_>>();
         assert_eq!(actual_block_hashes.as_slice(), block_hashes.as_slice());
 
@@ -420,7 +416,7 @@ async fn valid_proof() {
 #[tokio::test(flavor = "multi_thread")]
 async fn valid_proof_without_any_proof_items() {
     let last_block_number = 20;
-    let block_numbers = (0..last_block_number).into_iter().collect::<Vec<_>>();
+    let block_numbers = (0..last_block_number).collect::<Vec<_>>();
     let param = TestParameter {
         last_block_number,
         block_numbers: block_numbers.clone(),
@@ -539,7 +535,7 @@ async fn invalid_proof_with_insufficient_proved_blocks() {
     let param = TestParameter {
         last_block_number,
         block_numbers: block_numbers.clone(),
-        proved_block_numbers: proved_block_numbers,
+        proved_block_numbers,
         returned_headers: block_numbers,
         ..Default::default()
     };
@@ -554,7 +550,7 @@ async fn invalid_proof_with_redundant_proved_blocks() {
     let param = TestParameter {
         last_block_number,
         block_numbers: block_numbers.clone(),
-        proved_block_numbers: proved_block_numbers,
+        proved_block_numbers,
         returned_headers: block_numbers,
         ..Default::default()
     };
@@ -570,7 +566,7 @@ async fn invalid_proof_with_insufficient_returned_headers() {
         last_block_number,
         block_numbers: block_numbers.clone(),
         proved_block_numbers: block_numbers,
-        returned_headers: returned_headers,
+        returned_headers,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -585,7 +581,7 @@ async fn invalid_proof_with_redundant_returned_headers() {
         last_block_number,
         block_numbers: block_numbers.clone(),
         proved_block_numbers: block_numbers,
-        returned_headers: returned_headers,
+        returned_headers,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -600,7 +596,7 @@ async fn invalid_proof_with_duplicate_returned_headers() {
         last_block_number,
         block_numbers: block_numbers.clone(),
         proved_block_numbers: block_numbers,
-        returned_headers: returned_headers,
+        returned_headers,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -659,7 +655,6 @@ async fn test_send_blocks_proof(param: TestParameter) {
                 1
             };
             let last_n_headers = (last_n_blocks_start_number..num)
-                .into_iter()
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
@@ -702,7 +697,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
             let headers = headers.iter().map(|h| h.data()).collect::<Vec<_>>();
             let last_number: BlockNumber = last_header.header().raw().number().unpack();
             let proof = chain.build_proof_by_numbers(last_number, &param.proved_block_numbers);
-            let all_block_numbers = (0..last_number).into_iter().collect::<Vec<_>>();
+            let all_block_numbers = (0..last_number).collect::<Vec<_>>();
             if param.proved_block_numbers == all_block_numbers {
                 assert!(proof.is_empty());
             }
@@ -734,7 +729,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
                 assert_eq!(nc.sent_messages().borrow().len(), 1);
 
                 let data = &nc.sent_messages().borrow()[0].2;
-                let message = packed::SyncMessageReader::new_unchecked(&data);
+                let message = packed::SyncMessageReader::new_unchecked(data);
                 let content =
                     if let packed::SyncMessageUnionReader::GetBlocks(content) = message.to_enum() {
                         content

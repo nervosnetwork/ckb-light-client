@@ -47,7 +47,6 @@ fn verify_valid_transaction() {
     // it's fixed in https://github.com/nervosnetwork/ckb/pull/4218
     assert_eq!(1691692, result);
 }
-
 #[test]
 fn non_contextual_transaction_verifier() {
     let chain = MockChain::new_with_default_pow("non_contextual_transaction_verifier");
