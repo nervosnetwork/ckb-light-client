@@ -742,7 +742,7 @@ dependencies = [
 
 [[package]]
 name = "ckb-light-client"
-version = "0.3.8"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "ckb-async-runtime",
@@ -771,7 +771,7 @@ dependencies = [
 
 [[package]]
 name = "ckb-light-client-lib"
-version = "0.3.8"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "ckb-app-config",
@@ -2779,7 +2779,7 @@ dependencies = [
 
 [[package]]
 name = "light-client-wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ckb-app-config",
  "ckb-async-runtime",
