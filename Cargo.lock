@@ -3449,9 +3449,9 @@ dependencies = [
 
 [[package]]
 name = "r-efi"
-version = "5.2.0"
+version = "5.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "74765f6d916ee2faa39bc8e68e4f3ed8949b48cccdac59983d287a7cb71ce9c5"
+checksum = "69cdb34c158ceb288df11e18b4bd39de994f6657d83847bdffdbd7f346754b0f"
 
 [[package]]
 name = "rand"
@@ -4042,9 +4042,9 @@ dependencies = [
 
 [[package]]
 name = "tentacle"
-version = "0.7.0"
+version = "0.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47aff14515ffd53f333b93053e4f3476eccc801f4d1f34f7dfe392d967fc6985"
+checksum = "c93437528aede81cca2ad8e41569d988b8ca2f13e50a03864f772d1b148314ea"
 dependencies = [
  "async-trait",
  "bytes",
@@ -4232,9 +4232,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-tungstenite"
-version = "0.26.1"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be4bf6fecd69fcdede0ec680aaf474cdab988f9de6bc73d3758f0160e3b7025a"
+checksum = "489a59b6730eda1b0171fcfda8b121f4bee2b35cba8645ca35c5f7ba3eb736c1"
 dependencies = [
  "futures-util",
  "log",
@@ -4271,9 +4271,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-yamux"
-version = "0.3.14"
+version = "0.3.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e448cb88b75c217ab89014b0c66221260aef0c53f1c021f60a7dca26a299f7cf"
+checksum = "27d30d76fd9e772524ba2c2ea08015f185bfe5cd06dcb59cfde5b7a6eb30ca32"
 dependencies = [
  "bytes",
  "futures",
@@ -4327,17 +4327,16 @@ checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
 
 [[package]]
 name = "tungstenite"
-version = "0.26.1"
+version = "0.27.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "413083a99c579593656008130e29255e54dcaae495be556cc26888f211648c24"
+checksum = "eadc29d668c91fcc564941132e17b28a7ceb2f3ebf0b9dae3e03fd7a6748eb0d"
 dependencies = [
- "byteorder",
  "bytes",
  "data-encoding",
  "http 1.2.0",
  "httparse",
  "log",
- "rand 0.8.5",
+ "rand 0.9.1",
  "sha1",
  "thiserror 2.0.11",
  "utf-8",
