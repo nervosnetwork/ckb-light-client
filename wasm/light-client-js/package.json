@@ -1,5 +1,6 @@
 {
   "name": "@nervosnetwork/ckb-light-client-js",
+  "repository": "https://github.com/Officeyutong/ckb-light-client",
   "version": "0.5.0",
   "main": "dist/index.js",
   "license": "MIT",
