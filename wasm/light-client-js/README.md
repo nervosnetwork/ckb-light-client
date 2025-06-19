@@ -6,7 +6,7 @@ Web version of CKB LightClient, provide full APIs of CKB LightClient in browser.
 
 ### Install this package
 ```
-npm install ckb-light-client-js
+npm install @nervosnetwork/ckb-light-client-js
 ```
 ### A piece of code
 ```js
