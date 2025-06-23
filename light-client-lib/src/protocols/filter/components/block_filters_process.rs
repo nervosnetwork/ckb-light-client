@@ -260,14 +260,14 @@ impl<'a> BlockFiltersProcess<'a> {
                     .storage
                     .update_block_number(filtered_block_number)
             }
+            #[cfg(target_arch = "wasm32")]
+            self.filter
+                .update_min_filtered_block_number(filtered_block_number)
+                .await;
+            #[cfg(not(target_arch = "wasm32"))]
+            self.filter
+                .update_min_filtered_block_number(filtered_block_number);
         }
-        #[cfg(target_arch = "wasm32")]
-        self.filter
-            .update_min_filtered_block_number(filtered_block_number)
-            .await;
-        #[cfg(not(target_arch = "wasm32"))]
-        self.filter
-            .update_min_filtered_block_number(filtered_block_number);
 
         let could_request_more_block_filters = self
             .filter
