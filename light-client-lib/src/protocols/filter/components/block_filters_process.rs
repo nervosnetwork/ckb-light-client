@@ -260,6 +260,7 @@ impl<'a> BlockFiltersProcess<'a> {
                     .storage
                     .update_block_number(filtered_block_number)
             }
+            // Lock of `matched_blocks` must be held over `update_min_filtered_block_number`
             #[cfg(target_arch = "wasm32")]
             self.filter
                 .update_min_filtered_block_number(filtered_block_number)
