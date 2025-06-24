@@ -135,7 +135,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         scripts: Vec<ScriptStatus>,
         command: Option<SetScriptsCommand>,
     ) -> Result<()> {
-        let mut matched_blocks = self.swc.matched_blocks().write().expect("poisoned");
+        let mut matched_blocks = self.swc.matched_blocks().blocking_write();
         let scripts = scripts.into_iter().map(Into::into).collect();
         self.swc
             .storage()

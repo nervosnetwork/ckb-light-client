@@ -1373,7 +1373,7 @@ fn test_set_scripts_clear_matched_blocks() {
     storage.add_matched_blocks(2233, 200, vec![(H256(rand::random()).pack(), false)]);
     storage.add_matched_blocks(4455, 200, vec![(H256(rand::random()).pack(), false)]);
     {
-        let mut matched_blocks = peers.matched_blocks().write().unwrap();
+        let mut matched_blocks = peers.matched_blocks().blocking_write();
         peers.add_matched_blocks(
             &mut matched_blocks,
             vec![(H256(rand::random()).pack(), false)],
@@ -1409,7 +1409,7 @@ fn test_set_scripts_clear_matched_blocks() {
     );
     assert!(storage.get_earliest_matched_blocks().is_none());
     assert!(storage.get_latest_matched_blocks().is_none());
-    assert!(peers.matched_blocks().read().unwrap().is_empty());
+    assert!(peers.matched_blocks().blocking_read().is_empty());
 }
 
 #[test]

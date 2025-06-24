@@ -50,7 +50,7 @@ async fn test_sync_add_block() {
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
         {
-            let mut matched_blocks = peers.matched_blocks().write().unwrap();
+            let mut matched_blocks = peers.matched_blocks().write().await;
             peers.add_matched_blocks(&mut matched_blocks, vec![(proved_block_hash, true)]);
         }
         peers
@@ -69,7 +69,7 @@ async fn test_sync_add_block() {
     let mut protocol = chain.create_sync_protocol(Arc::clone(&peers));
     protocol.received(nc.context(), peer_index, message).await;
 
-    assert!(peers.matched_blocks().read().unwrap().is_empty());
+    assert!(peers.matched_blocks().read().await.is_empty());
     assert!(chain
         .client_storage()
         .get_earliest_matched_blocks()
