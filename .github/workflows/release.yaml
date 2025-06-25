@@ -34,7 +34,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ ubuntu-22.04, ubuntu-24.04, macos-13, macos-14, windows-2022 ]
+        os: [ ubuntu-22.04, ubuntu-24.04, macos-13, macos-14, windows-2022, windows-latest]
         include:
           - os: ubuntu-22.04
             bin_suffix:
@@ -51,6 +51,9 @@ jobs:
           - os: windows-2022
             bin_suffix: .exe
             pkg_suffix: x86_64-windows
+          - os: windows-latest
+            bin_suffix: .exe
+            pkg_suffix: x86_64-windows-portable
     steps:
     - name: Checkout the Repository
       uses: actions/checkout@v4
@@ -100,6 +103,9 @@ jobs:
     - if: matrix.os == 'windows-2022'
       name: Build windows
       run: cargo build --release
+    - if: matrix.os == 'windows-2022'
+      name: Build windows portable
+      run: cargo build --release --features portable
     - name: Get the Version
       id: get_version
       shell: bash
