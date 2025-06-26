@@ -53,6 +53,7 @@ impl<'a> BlockFiltersProcess<'a> {
             warn!("ignoring, peer {} prove state is none", self.peer);
             return Status::ok();
         };
+        let mut matched_blocks = self.filter.peers.matched_blocks().write().await;
 
         let block_filters = self.message.to_entity();
         let start_number: BlockNumber = block_filters.start_number().unpack();
@@ -216,7 +217,6 @@ impl<'a> BlockFiltersProcess<'a> {
         let actual_blocks_count = blocks_count.min(limit);
         let tip_header = self.filter.storage.get_tip_header();
         let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
-        let mut matched_blocks = self.filter.peers.matched_blocks().write().await;
 
         if possible_match_blocks_len != 0 {
             let blocks = possible_match_blocks
@@ -250,7 +250,6 @@ impl<'a> BlockFiltersProcess<'a> {
                 .storage
                 .update_block_number(filtered_block_number)
         }
-        // Lock of `matched_blocks` must be held over `update_min_filtered_block_number`
         #[cfg(target_arch = "wasm32")]
         self.filter
             .update_min_filtered_block_number(filtered_block_number)
