@@ -163,7 +163,7 @@ impl FilterProtocol {
             .max_by_key(|(_, prove_state)| prove_state.get_last_header().total_difficulty())
         {
             debug!("found best proved peer {}", peer);
-            
+
             let mut matched_blocks = self.peers.matched_blocks().write().await;
             if let Some((db_start_number, blocks_count, db_blocks)) =
                 self.storage.get_earliest_matched_blocks()

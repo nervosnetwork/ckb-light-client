@@ -140,8 +140,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         std::thread::spawn(move || {
             let mut matched_blocks = swc.matched_blocks().blocking_write();
             let scripts = scripts.into_iter().map(Into::into).collect();
-            swc
-                .storage()
+            swc.storage()
                 .update_filter_scripts(scripts, command.map(Into::into).unwrap_or_default());
             matched_blocks.clear();
             tx.send(()).unwrap();
