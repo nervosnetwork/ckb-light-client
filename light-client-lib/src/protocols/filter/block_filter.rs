@@ -164,15 +164,10 @@ impl FilterProtocol {
         {
             debug!("found best proved peer {}", peer);
 
+            let mut matched_blocks = self.peers.matched_blocks().write().await;
             if let Some((db_start_number, blocks_count, db_blocks)) =
                 self.storage.get_earliest_matched_blocks()
             {
-                #[cfg(target_arch = "wasm32")]
-                let mut matched_blocks = self.peers.matched_blocks().write().await;
-
-                #[cfg(not(target_arch = "wasm32"))]
-                let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
-
                 debug!(
                     "try recover matched blocks from storage, start_number={}, \
                              blocks_count={}, matched_count: {}",

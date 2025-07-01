@@ -197,7 +197,7 @@ async fn test_light_client_get_idle_matched_blocks() {
         (proved_block_hash.clone(), true),
     ];
     {
-        let mut matched_blocks = peers.matched_blocks().write().expect("poisoned");
+        let mut matched_blocks = peers.matched_blocks().write().await;
         peers.add_matched_blocks(&mut matched_blocks, blocks);
     }
 

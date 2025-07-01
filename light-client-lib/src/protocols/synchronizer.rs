@@ -60,10 +60,7 @@ impl CKBProtocolHandler for SyncProtocol {
         match message {
             packed::SyncMessageUnionReader::SendBlock(reader) => {
                 let new_block = reader.to_entity().block();
-                #[cfg(target_arch = "wasm32")]
                 let mut matched_blocks = self.peers.matched_blocks().write().await;
-                #[cfg(not(target_arch = "wasm32"))]
-                let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
                 self.peers.add_block(&mut matched_blocks, new_block);
                 if !matched_blocks.is_empty()
                     && self.peers.all_matched_blocks_downloaded(&matched_blocks)

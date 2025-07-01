@@ -135,12 +135,17 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         scripts: Vec<ScriptStatus>,
         command: Option<SetScriptsCommand>,
     ) -> Result<()> {
-        let mut matched_blocks = self.swc.matched_blocks().write().expect("poisoned");
-        let scripts = scripts.into_iter().map(Into::into).collect();
-        self.swc
-            .storage()
-            .update_filter_scripts(scripts, command.map(Into::into).unwrap_or_default());
-        matched_blocks.clear();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let swc = self.swc.clone();
+        std::thread::spawn(move || {
+            let mut matched_blocks = swc.matched_blocks().blocking_write();
+            let scripts = scripts.into_iter().map(Into::into).collect();
+            swc.storage()
+                .update_filter_scripts(scripts, command.map(Into::into).unwrap_or_default());
+            matched_blocks.clear();
+            tx.send(()).unwrap();
+        });
+        rx.recv().unwrap();
         Ok(())
     }
 

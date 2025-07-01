@@ -131,7 +131,9 @@ impl StorageWithChainData {
         &self.pending_txs
     }
 
-    pub fn matched_blocks(&self) -> &RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
+    pub fn matched_blocks(
+        &self,
+    ) -> &tokio::sync::RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
         self.peers.matched_blocks()
     }
     /// return (added_ts, first_sent, missing)

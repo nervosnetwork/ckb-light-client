@@ -1709,7 +1709,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
         peers
             .matched_blocks()
             .write()
-            .unwrap()
+            .await
             .insert(downloading_matched_block.clone(), (false, None));
         peers
     };
@@ -2014,7 +2014,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             );
         }
         assert_eq!(
-            peers.matched_blocks().read().unwrap().is_empty(),
+            peers.matched_blocks().read().await.is_empty(),
             last_number > prev_last_number
         );
     }

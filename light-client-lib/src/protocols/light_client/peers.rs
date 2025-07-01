@@ -35,7 +35,7 @@ pub struct Peers {
     // The matched block filters to download, the key is the block hash, the value is:
     //   * if the block is proved
     //   * the downloaded block
-    matched_blocks: RwLock<HashMap<H256, (bool, Option<packed::Block>)>>,
+    matched_blocks: tokio::sync::RwLock<HashMap<H256, (bool, Option<packed::Block>)>>,
 
     // Data:
     // - Cached check point index.
@@ -1269,7 +1269,9 @@ impl Peers {
         }
     }
 
-    pub fn matched_blocks(&self) -> &RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
+    pub fn matched_blocks(
+        &self,
+    ) -> &tokio::sync::RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
         &self.matched_blocks
     }
 

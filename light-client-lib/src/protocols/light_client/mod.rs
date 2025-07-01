@@ -353,6 +353,7 @@ impl LightClientProtocol {
                 // For safety, just remove the block#1.
                 if prev_last_header_number == 1 {
                     info!("rollback to block#1 since previous last header number is 1");
+                    let mut matched_blocks = self.peers.matched_blocks().write().await;
 
                     while let Some((start_number, _, _)) = self.storage.get_latest_matched_blocks()
                     {
@@ -361,10 +362,6 @@ impl LightClientProtocol {
                         }
                     }
                     self.storage.rollback_to_block(1);
-                    #[cfg(target_arch = "wasm32")]
-                    let mut matched_blocks = self.peers.matched_blocks().write().await;
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
 
                     matched_blocks.clear();
                 }
@@ -386,6 +383,7 @@ impl LightClientProtocol {
                 });
                 if let Some(to_number) = fork_number {
                     debug!("fork to number: {}", to_number);
+                    let mut matched_blocks = self.peers.matched_blocks().write().await;
                     let mut start_number_opt = None;
                     while let Some((start_number, _, _)) = self.storage.get_latest_matched_blocks()
                     {
@@ -400,10 +398,6 @@ impl LightClientProtocol {
                     let rollback_to = start_number_opt.unwrap_or(to_number) + 1;
                     info!("rollback to block#{}", rollback_to);
                     self.storage.rollback_to_block(rollback_to);
-                    #[cfg(target_arch = "wasm32")]
-                    let mut matched_blocks = self.peers.matched_blocks().write().await;
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let mut matched_blocks = self.peers.matched_blocks().write().expect("poisoned");
                     matched_blocks.clear();
                 } else {
                     warn!("long fork detected");
@@ -706,10 +700,7 @@ impl LightClientProtocol {
 
     async fn get_idle_blocks(&mut self, nc: &BoxedCKBProtocolContext) {
         let tip_header = self.storage.get_tip_header();
-        #[cfg(target_arch = "wasm32")]
         let matched_blocks = self.peers.matched_blocks().read().await;
-        #[cfg(not(target_arch = "wasm32"))]
-        let matched_blocks = self.peers.matched_blocks().read().expect("poisoned");
 
         prove_or_download_matched_blocks(
             Arc::clone(&self.peers),
