@@ -21,7 +21,8 @@ interface DbWorkerInitializeOptions extends WorkerInitializeOptions {
 
 interface LightClientWorkerInitializeOptions extends WorkerInitializeOptions {
     networkFlag: NetworkSetting;
-    networkSecretKey: Uint8Array
+    networkSecretKey: Uint8Array;
+    networkConfigIsJSObject: boolean;
 };
 
 interface LightClientFunctionCall {
@@ -178,7 +179,9 @@ export function localNodeTo(input: LightClientLocalNode): LocalNode {
         version: input.version
     })
 }
-type NetworkSetting = { type: "MainNet"; config?: string; } | { type: "TestNet"; config?: string; } | { type: "DevNet"; spec: string; config: string; };
+type NetworkSetting = { type: "MainNet"; config?: string | any; } |
+{ type: "TestNet"; config?: string | any; } |
+{ type: "DevNet"; spec: string; config: string | any; };
 export enum LightClientSetScriptsCommand {
     All = 0,
     Partial = 1,

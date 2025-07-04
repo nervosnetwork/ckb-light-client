@@ -52,8 +52,14 @@ class LightClient {
      * @param networkSecretKey A secret key used to derive keys during data transport between nodes. This key should be persistent for a unique client.
      * @param logLevel Log Level for light-client-db-worker and light-client-wasm
      * @param transportType Specify transport type. `ws` stands for non-secure WebSocket, while `wss` stands for WebSocket over SSL.
+     * @param networkConfigIsJSObject Sets to true if `NetworkSetting.config` is provided as a JS object, otherwise it should be a TOML string.
      */
-    async start(networkSetting: NetworkSetting, networkSecretKey: Hex, logLevel: "trace" | "debug" | "info" | "error" = "info", transportType: "ws" | "wss" = "ws") {
+    async start(
+        networkSetting: NetworkSetting,
+        networkSecretKey: Hex,
+        logLevel: "trace" | "debug" | "info" | "error" = "info", transportType: "ws" | "wss" = "ws",
+        networkConfigIsJSObject: boolean = false,
+    ) {
         this.dbWorker.postMessage({
             inputBuffer: this.inputBuffer,
             outputBuffer: this.outputBuffer,
@@ -66,7 +72,8 @@ class LightClient {
             logLevel: logLevel,
             traceLogBuffer: this.traceLogBuffer,
             networkSecretKey: bytesFrom(networkSecretKey),
-            transportType
+            transportType,
+            networkConfigIsJSObject
         } as LightClientWorkerInitializeOptions);
         await new Promise<void>((res, rej) => {
             this.dbWorker.onmessage = () => res();
