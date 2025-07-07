@@ -289,7 +289,13 @@ class LightClient {
     async fetchTransaction(txHash: HexLike): Promise<FetchResponse<ClientTransactionResponse>> {
         return transformFetchResponse<any, ClientTransactionResponse>(await this.invokeLightClientCommand("fetch_transaction", [hexFrom(txHash)]), JsonRpcTransformers.transactionResponseTo);
     }
-
+    /**
+     * Count how many records are in the IndexedDB store
+     * @returns The count.
+     */
+    async getStoreRecordCount(): Promise<number> {
+        return await this.invokeLightClientCommand("get_store_record_count");
+    }
 }
 
 export { LightClient };

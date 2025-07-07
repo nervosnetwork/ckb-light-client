@@ -68,6 +68,7 @@ enum CommandRequestWithTakeWhile {
         limit: usize,
         skip: usize,
     },
+    GetRecordCount,
 }
 
 thread_local! {
@@ -194,6 +195,7 @@ impl CommunicationChannel {
                 },
                 Some(take_while),
             ),
+            CommandRequestWithTakeWhile::GetRecordCount => (DbCommandRequest::GetRecordCount, None),
         };
         debug!("Dispatching database command: {:?}", new_cmd);
         let CommunicationChannel {
@@ -282,6 +284,18 @@ impl Storage {
             DB_INITIALIZED.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         Self { channel: chan }
+    }
+
+    pub fn get_store_record_count(&self) -> usize {
+        let result = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhile::GetRecordCount)
+            .map_err(|e| Error::Indexdb(format!("{:?}", e)))
+            .unwrap();
+        match result {
+            DbCommandResponse::GetRecordCount { count } => count,
+            _ => unreachable!(),
+        }
     }
 
     fn batch(&self) -> Batch {

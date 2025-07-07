@@ -29,6 +29,7 @@ pub enum DbCommandResponse {
     Delete,
     Iterator { kvs: Vec<KV> },
     IteratorKey { keys: Vec<Vec<u8>> },
+    GetRecordCount { count: usize },
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -37,15 +38,21 @@ pub enum DbCommandRequest {
     /// Read the value corresponding to a series of keys
     /// Input: A series of keys
     /// Output: A series of values corresponding to keys, None if the key wasn't found in database
-    Read { keys: Vec<Vec<u8>> },
+    Read {
+        keys: Vec<Vec<u8>>,
+    },
     /// Write a series of key-value pairs into database
     /// Input: A series of key-value pairs
     /// Output: None
-    Put { kvs: Vec<KV> },
+    Put {
+        kvs: Vec<KV>,
+    },
     /// Remove a series of entries from database
     /// Input: Keys to remove
     /// Output: None
-    Delete { keys: Vec<Vec<u8>> },
+    Delete {
+        keys: Vec<Vec<u8>>,
+    },
     /// Gets at most `limit` entries, starting from `start_key_bound`, skipping the first `skip` entries, keep fetching until `take_while` evals to false
     /// Output: Key value pairs fetched
     Iterator {
@@ -61,6 +68,7 @@ pub enum DbCommandRequest {
         limit: usize,
         skip: usize,
     },
+    GetRecordCount,
 }
 #[repr(i32)]
 /// Represent a 4-byte command which will be put in input buffer

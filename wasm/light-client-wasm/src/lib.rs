@@ -1265,6 +1265,12 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
     .serialize(&SERIALIZER)?)
 }
 
+#[wasm_bindgen]
+pub fn get_store_record_count() -> usize {
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    swc.storage().get_store_record_count()
+}
+
 const MAX_PREFIX_SEARCH_SIZE: usize = u16::MAX as usize;
 
 // a helper fn to build query options from search paramters, returns prefix, from_key, direction and skip offset
