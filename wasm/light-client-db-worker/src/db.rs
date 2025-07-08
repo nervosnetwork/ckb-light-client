@@ -212,12 +212,9 @@ where
                 serde_wasm_bindgen::to_value(&upper_bound).unwrap()
             };
             let count = store
-                .count(Some(idb::Query::KeyRange(KeyRange::bound(
-                    &lower_bound,
-                    &upper_bound,
-                    Some(false),
-                    Some(false),
-                ).unwrap())))
+                .count(Some(idb::Query::KeyRange(
+                    KeyRange::bound(&lower_bound, &upper_bound, Some(false), Some(false)).unwrap(),
+                )))
                 .map_err(|e| anyhow!("Unable to create query store size request: {}", e))?
                 .await
                 .map_err(|e| anyhow!("Unable to get store size: {}", e))?;
