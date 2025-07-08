@@ -38,21 +38,15 @@ pub enum DbCommandRequest {
     /// Read the value corresponding to a series of keys
     /// Input: A series of keys
     /// Output: A series of values corresponding to keys, None if the key wasn't found in database
-    Read {
-        keys: Vec<Vec<u8>>,
-    },
+    Read { keys: Vec<Vec<u8>> },
     /// Write a series of key-value pairs into database
     /// Input: A series of key-value pairs
     /// Output: None
-    Put {
-        kvs: Vec<KV>,
-    },
+    Put { kvs: Vec<KV> },
     /// Remove a series of entries from database
     /// Input: Keys to remove
     /// Output: None
-    Delete {
-        keys: Vec<Vec<u8>>,
-    },
+    Delete { keys: Vec<Vec<u8>> },
     /// Gets at most `limit` entries, starting from `start_key_bound`, skipping the first `skip` entries, keep fetching until `take_while` evals to false
     /// Output: Key value pairs fetched
     Iterator {
@@ -68,8 +62,24 @@ pub enum DbCommandRequest {
         limit: usize,
         skip: usize,
     },
-    GetRecordCount,
+    /// Count how many records statisfies the specified prefix
+    GetRecordCount { prefix: Vec<u8> },
 }
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum GetRecordCountType {
+    All,
+    Transaction,
+    CellLockScript,
+    CellTypeScript,
+    TxLockScript,
+    TxTypeScript,
+    BlockByHash,
+    BlockByNumber,
+    CheckPointIndex,
+    Meta,
+}
+
 #[repr(i32)]
 /// Represent a 4-byte command which will be put in input buffer
 pub enum InputCommand {

@@ -189,7 +189,7 @@ where
     let tx_mode = match cmd {
         DbCommandRequest::Iterator { .. }
         | DbCommandRequest::IteratorKey { .. }
-        | DbCommandRequest::GetRecordCount => TransactionMode::ReadOnly,
+        | DbCommandRequest::GetRecordCount { .. } => TransactionMode::ReadOnly,
         DbCommandRequest::Read { .. } => TransactionMode::ReadOnly,
         DbCommandRequest::Put { .. } | DbCommandRequest::Delete { .. } => {
             TransactionMode::ReadWrite
@@ -204,9 +204,20 @@ where
         .map_err(|e| anyhow!("Unable to find store {}: {}", store_name, e))?;
 
     let result = match cmd {
-        DbCommandRequest::GetRecordCount => {
+        DbCommandRequest::GetRecordCount { prefix } => {
+            let lower_bound = serde_wasm_bindgen::to_value(&prefix).unwrap();
+            let upper_bound = {
+                let mut upper_bound = prefix.clone();
+                upper_bound.push(255);
+                serde_wasm_bindgen::to_value(&upper_bound).unwrap()
+            };
             let count = store
-                .count(None)
+                .count(Some(idb::Query::KeyRange(KeyRange::bound(
+                    &lower_bound,
+                    &upper_bound,
+                    Some(false),
+                    Some(false),
+                ).unwrap())))
                 .map_err(|e| anyhow!("Unable to create query store size request: {}", e))?
                 .await
                 .map_err(|e| anyhow!("Unable to get store size: {}", e))?;

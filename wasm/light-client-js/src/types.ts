@@ -319,6 +319,8 @@ type TraceRecord = {
     stop_at: number;
 };
 
+type RecordType = "all" | "transaction" | "cell_lock_script" | "cell_type_script" | "tx_lock_script" | "tx_type_script" | "block_by_hash" | "block_by_number" | "check_point_index" | "meta";
+
 export {
     LightClientFunctionCall,
     WorkerInitializeOptions,
@@ -341,5 +343,6 @@ export {
     GetCellsResponse,
     TraceRecord,
     Num,
-    Transaction
+    Transaction,
+    RecordType
 }

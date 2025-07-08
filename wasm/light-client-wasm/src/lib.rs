@@ -26,6 +26,7 @@ use ckb_light_client_lib::{
     types::RunEnv,
     verify::verify_tx,
 };
+use light_client_db_common::GetRecordCountType;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use serde_wasm_bindgen::Serializer;
@@ -1266,9 +1267,12 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
 }
 
 #[wasm_bindgen]
-pub fn get_store_record_count() -> usize {
+pub fn get_store_record_count(record_type: JsValue) -> Result<usize, JsValue> {
+    let record_type: GetRecordCountType = serde_wasm_bindgen::from_value(record_type)
+        .map_err(|e| format!("Invalid record type: {}", e))?;
+
     let swc = STORAGE_WITH_DATA.get().unwrap();
-    swc.storage().get_store_record_count()
+    Ok(swc.storage().get_store_record_count(record_type))
 }
 
 const MAX_PREFIX_SEARCH_SIZE: usize = u16::MAX as usize;
