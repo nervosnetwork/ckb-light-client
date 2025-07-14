@@ -93,6 +93,7 @@ pub async fn light_client(
     log_level: String,
     network_secret_key: JsValue,
     wasm_transport_type: JsValue,
+    network_config_is_json: bool,
 ) -> Result<(), JsValue> {
     if !status(0b0) {
         return Err(JsValue::from_str("Can't start twice"));
@@ -109,20 +110,35 @@ pub async fn light_client(
         "Starting with wasm transport type = {:?}",
         wasm_transport_type
     );
-    let mut config = match &network_flag {
+    enum NetworkConfigType<'a> {
+        Default(&'a str),
+        UserDefined(&'a str),
+    }
+    let config_string = match &network_flag {
         NetworkSetting::TestNet { config } => config
             .as_ref()
-            .map_or(TESTNET_CONFIG, |v| v)
-            .parse::<RunEnv>()
-            .unwrap(),
+            .map_or(NetworkConfigType::Default(TESTNET_CONFIG), |v| {
+                NetworkConfigType::UserDefined(v.as_str())
+            }),
         NetworkSetting::MainNet { config } => config
             .as_ref()
-            .map_or(MAINNET_CONFIG, |v| v)
-            .parse::<RunEnv>()
-            .unwrap(),
-        NetworkSetting::DevNet { config, .. } => config.parse::<RunEnv>().unwrap(),
+            .map_or(NetworkConfigType::Default(MAINNET_CONFIG), |v| {
+                NetworkConfigType::UserDefined(v.as_str())
+            }),
+        NetworkSetting::DevNet { config, .. } => NetworkConfigType::UserDefined(config.as_str()),
     };
-
+    let mut config = match config_string {
+        NetworkConfigType::Default(s) => s.parse::<RunEnv>().unwrap(),
+        NetworkConfigType::UserDefined(s) => {
+            if network_config_is_json {
+                serde_json::from_str(s)
+                    .map_err(|e| format!("Unable to parse network setting from json: {}", e))?
+            } else {
+                s.parse::<RunEnv>()
+                    .map_err(|e| format!("Unable to parse network setting from toml: {}", e))?
+            }
+        }
+    };
     let storage = Storage::new(&config.store.path);
     let chain_spec = ChainSpec::load_from(&match network_flag {
         NetworkSetting::MainNet { .. } => Resource::bundled("specs/mainnet.toml".to_string()),
