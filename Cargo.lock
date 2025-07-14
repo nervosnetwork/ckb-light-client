@@ -2793,6 +2793,7 @@ dependencies = [
  "ckb-types",
  "console_error_panic_hook",
  "getrandom 0.2.15",
+ "light-client-db-common",
  "log",
  "serde",
  "serde-wasm-bindgen",

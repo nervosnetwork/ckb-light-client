@@ -1,5 +1,5 @@
 import { ClientIndexerSearchKeyLike, ClientIndexerSearchKeyTransactionLike, ClientTransactionResponse } from "@ckb-ccc/core";
-import { FetchResponse, LocalNode, localNodeTo, RemoteNode, remoteNodeTo, ScriptStatus, scriptStatusFrom, scriptStatusTo, LightClientSetScriptsCommand, transformFetchResponse, cccOrderToLightClientWasmOrder, GetTransactionsResponse, TxWithCell, TxWithCells, lightClientGetTransactionsResultTo, LightClientLocalNode, LightClientRemoteNode, LightClientScriptStatus, NetworkSetting, GetCellsResponse, getCellsResponseFrom, LightClientWorkerInitializeOptions, TraceRecord } from "./types.ts";
+import { FetchResponse, LocalNode, localNodeTo, RemoteNode, remoteNodeTo, ScriptStatus, scriptStatusFrom, scriptStatusTo, LightClientSetScriptsCommand, transformFetchResponse, cccOrderToLightClientWasmOrder, GetTransactionsResponse, TxWithCell, TxWithCells, lightClientGetTransactionsResultTo, LightClientLocalNode, LightClientRemoteNode, LightClientScriptStatus, NetworkSetting, GetCellsResponse, getCellsResponseFrom, LightClientWorkerInitializeOptions, TraceRecord, RecordType } from "./types.ts";
 import { ClientBlock, ClientBlockHeader, Hex, hexFrom, HexLike, Num, numFrom, NumLike, numToHex, TransactionLike } from "@ckb-ccc/core/barrel";
 import { JsonRpcBlockHeader, JsonRpcTransformers } from "@ckb-ccc/core/advancedBarrel";
 import { Mutex } from "async-mutex";
@@ -296,7 +296,14 @@ class LightClient {
     async fetchTransaction(txHash: HexLike): Promise<FetchResponse<ClientTransactionResponse>> {
         return transformFetchResponse<any, ClientTransactionResponse>(await this.invokeLightClientCommand("fetch_transaction", [hexFrom(txHash)]), JsonRpcTransformers.transactionResponseTo);
     }
-
+    /**
+     * Count how many records are in the IndexedDB store
+     * @param RecordType to filter
+     * @returns The count.
+     */
+    async getStoreRecordCount(recordType: RecordType): Promise<number> {
+        return await this.invokeLightClientCommand("get_store_record_count", [recordType]);
+    }
 }
 
 export { LightClient };

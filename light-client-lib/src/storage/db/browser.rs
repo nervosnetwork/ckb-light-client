@@ -26,7 +26,7 @@ use ckb_types::{
 pub use idb::CursorDirection;
 use light_client_db_common::{
     idb_cursor_direction_to_ckb, read_command_payload, write_command_with_payload,
-    DbCommandRequest, DbCommandResponse, InputCommand, OutputCommand, KV,
+    DbCommandRequest, DbCommandResponse, GetRecordCountType, InputCommand, OutputCommand, KV,
 };
 
 use log::debug;
@@ -67,6 +67,9 @@ enum CommandRequestWithTakeWhile {
         take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
         limit: usize,
         skip: usize,
+    },
+    GetRecordCount {
+        prefix: Vec<u8>,
     },
 }
 
@@ -194,6 +197,9 @@ impl CommunicationChannel {
                 },
                 Some(take_while),
             ),
+            CommandRequestWithTakeWhile::GetRecordCount { prefix } => {
+                (DbCommandRequest::GetRecordCount { prefix }, None)
+            }
         };
         debug!("Dispatching database command: {:?}", new_cmd);
         let CommunicationChannel {
@@ -282,6 +288,30 @@ impl Storage {
             DB_INITIALIZED.store(true, std::sync::atomic::Ordering::SeqCst);
         }
         Self { channel: chan }
+    }
+
+    pub fn get_store_record_count(&self, record_type: GetRecordCountType) -> usize {
+        let prefix = match record_type {
+            GetRecordCountType::All => vec![],
+            GetRecordCountType::Transaction => vec![KeyPrefix::TxHash as u8],
+            GetRecordCountType::CellLockScript => vec![KeyPrefix::CellLockScript as u8],
+            GetRecordCountType::CellTypeScript => vec![KeyPrefix::CellTypeScript as u8],
+            GetRecordCountType::TxLockScript => vec![KeyPrefix::TxLockScript as u8],
+            GetRecordCountType::TxTypeScript => vec![KeyPrefix::TxTypeScript as u8],
+            GetRecordCountType::BlockByHash => vec![KeyPrefix::BlockHash as u8],
+            GetRecordCountType::BlockByNumber => vec![KeyPrefix::BlockNumber as u8],
+            GetRecordCountType::CheckPointIndex => vec![KeyPrefix::CheckPointIndex as u8],
+            GetRecordCountType::Meta => vec![KeyPrefix::Meta as u8],
+        };
+        let result = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhile::GetRecordCount { prefix })
+            .map_err(|e| Error::Indexdb(format!("{:?}", e)))
+            .unwrap();
+        match result {
+            DbCommandResponse::GetRecordCount { count } => count,
+            _ => unreachable!(),
+        }
     }
 
     fn batch(&self) -> Batch {

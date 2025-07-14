@@ -29,6 +29,7 @@ pub enum DbCommandResponse {
     Delete,
     Iterator { kvs: Vec<KV> },
     IteratorKey { keys: Vec<Vec<u8>> },
+    GetRecordCount { count: usize },
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -61,7 +62,24 @@ pub enum DbCommandRequest {
         limit: usize,
         skip: usize,
     },
+    /// Count how many records statisfies the specified prefix
+    GetRecordCount { prefix: Vec<u8> },
 }
+#[derive(Deserialize, Serialize, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum GetRecordCountType {
+    All,
+    Transaction,
+    CellLockScript,
+    CellTypeScript,
+    TxLockScript,
+    TxTypeScript,
+    BlockByHash,
+    BlockByNumber,
+    CheckPointIndex,
+    Meta,
+}
+
 #[repr(i32)]
 /// Represent a 4-byte command which will be put in input buffer
 pub enum InputCommand {
