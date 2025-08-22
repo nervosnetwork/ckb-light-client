@@ -604,6 +604,7 @@ pub fn get_cells(
     let mut last_key = Vec::new();
     for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
         debug!("get cells iterator at {:?} {:?}", key, value);
+        last_key = key.to_vec();
         let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
         let output_index = u32::from_be_bytes(
             key[key.len() - 4..]
@@ -708,7 +709,6 @@ pub fn get_cells(
             }
         }
 
-        last_key = key.to_vec();
         let cell_to_push = Cell {
             output: output.into(),
             output_data: if with_data {
@@ -925,6 +925,7 @@ pub fn get_transactions(
         let mut last_key = Vec::new();
         let mut txs = Vec::new();
         for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+            last_key = key.to_vec();
             let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
             let tx = packed::Transaction::from_slice(
                 &storage
@@ -1008,7 +1009,6 @@ pub fn get_transactions(
                 }
             }
 
-            last_key = key.to_vec();
             txs.push(Tx::Ungrouped(TxWithCell {
                 transaction: tx.into_view().into(),
                 block_number: block_number.into(),

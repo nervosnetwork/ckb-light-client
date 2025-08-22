@@ -192,6 +192,8 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         let cells = iter
             .take_while(|(key, _value)| key.starts_with(&prefix))
             .filter_map(|(key, value)| {
+                last_key = key.to_vec();
+
                 let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
                 let output_index = u32::from_be_bytes(
                     key[key.len() - 4..]
@@ -288,8 +290,6 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                         return None;
                     }
                 }
-
-                last_key = key.to_vec();
 
                 Some(Cell {
                     output: output.into(),
@@ -479,6 +479,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             let txs = iter
                 .take_while(|(key, _value)| key.starts_with(&prefix))
                 .filter_map(|(key, value)| {
+                    last_key = key.to_vec();
                     let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
                     let tx = packed::Transaction::from_slice(
                         &snapshot
@@ -554,7 +555,6 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                         }
                     }
 
-                    last_key = key.to_vec();
                     Some(Tx::Ungrouped(TxWithCell {
                         transaction: tx.into_view().into(),
                         block_number: block_number.into(),
