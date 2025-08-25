@@ -383,6 +383,24 @@ fn rpc() {
         "total size should be filtered cellbase cells (100~199)"
     );
 
+    let filter_cells_empty_page = rpc
+        .get_cells(
+            SearchKey {
+                script: lock_script1.clone().into(),
+                filter: Some(SearchKeyFilter {
+                    block_range: Some([300.into(), 400.into()]),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            Order::Asc,
+            1.into(),
+            None,
+        )
+        .unwrap();
+    assert_eq!(0, filter_cells_empty_page.objects.len(), "no cells in this range");
+    assert!(filter_cells_empty_page.last_cursor.is_empty());
+
     // test get_transactions rpc
     let txs_page_1 = rpc
         .get_transactions(
