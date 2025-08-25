@@ -602,13 +602,7 @@ pub fn get_cells(
         let kvs: Vec<_> = storage.collect_iterator(
             from_key.clone(),
             direction,
-            Box::new(move |key| {
-                if !key.starts_with(&prefix_cloned) {
-                    return false;
-                }
-
-                return true;
-            }),
+            Box::new(move |key| key.starts_with(&prefix_cloned)),
             internal_limit,
             skip,
         );
@@ -741,7 +735,7 @@ pub fn get_cells(
         }
         debug!("get_cells last_key={:?}", last_key);
 
-        if cells.len() > 0 {
+        if !cells.is_empty() {
             return Ok((Pagination {
                 objects: cells,
                 last_cursor: JsonBytes::from_vec(last_key),
@@ -956,7 +950,7 @@ pub fn get_transactions(
 
             debug!("get_transactions (grouped) last_key={:?}", last_key);
 
-            if tx_with_cells.len() > 0 {
+            if !tx_with_cells.is_empty() {
                 return Ok((Pagination {
                     objects: tx_with_cells.into_iter().map(Tx::Grouped).collect(),
                     last_cursor: JsonBytes::from_vec(last_key),
@@ -1094,7 +1088,7 @@ pub fn get_transactions(
             }
             debug!("get_transactions last_key={:?}", last_key);
 
-            if txs.len() > 0 {
+            if !txs.is_empty() {
                 return Ok((Pagination {
                     objects: txs,
                     last_cursor: JsonBytes::from_vec(last_key),
