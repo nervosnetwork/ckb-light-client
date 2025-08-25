@@ -398,7 +398,11 @@ fn rpc() {
             None,
         )
         .unwrap();
-    assert_eq!(0, filter_cells_empty_page.objects.len(), "no cells in this range");
+    assert_eq!(
+        0,
+        filter_cells_empty_page.objects.len(),
+        "no cells in this range"
+    );
     assert!(filter_cells_empty_page.last_cursor.is_empty());
 
     // test get_transactions rpc
