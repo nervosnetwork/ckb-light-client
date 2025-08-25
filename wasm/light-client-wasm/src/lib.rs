@@ -592,143 +592,176 @@ pub fn get_cells(
 
     let storage = STORAGE_WITH_DATA.get().unwrap().storage();
 
-    let kvs: Vec<_> = storage.collect_iterator(
-        from_key,
-        direction,
-        Box::new(move |key| key.starts_with(&prefix)),
-        limit,
-        skip,
-    );
+    let mut internal_limit: usize = limit;
 
-    let mut cells = Vec::new();
-    let mut last_key = Vec::new();
-    for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
-        debug!("get cells iterator at {:?} {:?}", key, value);
-        let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
-        let output_index = u32::from_be_bytes(
-            key[key.len() - 4..]
-                .try_into()
-                .expect("stored output_index"),
-        );
-        let tx_index = u32::from_be_bytes(
-            key[key.len() - 8..key.len() - 4]
-                .try_into()
-                .expect("stored tx_index"),
-        );
-        let block_number = u64::from_be_bytes(
-            key[key.len() - 16..key.len() - 8]
-                .try_into()
-                .expect("stored block_number"),
-        );
-
-        let tx = packed::Transaction::from_slice(
-            &storage
-                .get(Key::TxHash(&tx_hash).into_vec())
-                .unwrap()
-                .expect("stored tx")[12..],
-        )
-        .expect("from stored tx slice should be OK");
-        let output = tx
-            .raw()
-            .outputs()
-            .get(output_index as usize)
-            .expect("get output by index should be OK");
-        let output_data = tx
-            .raw()
-            .outputs_data()
-            .get(output_index as usize)
-            .expect("get output data by index should be OK");
-
-        if let Some(prefix) = filter_prefix.as_ref() {
-            match filter_script_type {
-                ScriptType::Lock => {
-                    if !extract_raw_data(&output.lock())
-                        .as_slice()
-                        .starts_with(prefix)
-                    {
-                        debug!("skipped at {}", line!());
-                        continue;
-                    }
+    // The new implementation iterates to try "limit * 2^0", "limit * 2^1", "limit * 2^2".. (until meets n such that limit * 2^n > u32::MAX) as the limit passed to storage.collect_iterator and finds result to return from what `collect_iterator` returns.
+    // Since this is a light client, we can assume that storage.collect_iterator won't return too much data 
+    // If internal_limit reaches u32::MAX and we still can't get any cells from filtered results, we can assume that no cells will be found.
+    loop {
+        let prefix_cloned = prefix.clone();
+        let kvs: Vec<_> = storage.collect_iterator(
+            from_key.clone(),
+            direction,
+            Box::new(move |key| {
+                if !key.starts_with(&prefix_cloned) {
+                    return false;
                 }
-                ScriptType::Type => {
-                    if output.type_().is_none()
-                        || !extract_raw_data(&output.type_().to_opt().unwrap())
+
+                return true;
+            }),
+            internal_limit,
+            skip,
+        );
+
+        let mut cells = Vec::new();
+        let mut last_key = Vec::new();
+        for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+            debug!("get cells iterator at {:?} {:?}", key, value);
+            let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
+            let output_index = u32::from_be_bytes(
+                key[key.len() - 4..]
+                    .try_into()
+                    .expect("stored output_index"),
+            );
+            let tx_index = u32::from_be_bytes(
+                key[key.len() - 8..key.len() - 4]
+                    .try_into()
+                    .expect("stored tx_index"),
+            );
+            let block_number = u64::from_be_bytes(
+                key[key.len() - 16..key.len() - 8]
+                    .try_into()
+                    .expect("stored block_number"),
+            );
+
+            let tx = packed::Transaction::from_slice(
+                &storage
+                    .get(Key::TxHash(&tx_hash).into_vec())
+                    .unwrap()
+                    .expect("stored tx")[12..],
+            )
+            .expect("from stored tx slice should be OK");
+            let output = tx
+                .raw()
+                .outputs()
+                .get(output_index as usize)
+                .expect("get output by index should be OK");
+            let output_data = tx
+                .raw()
+                .outputs_data()
+                .get(output_index as usize)
+                .expect("get output data by index should be OK");
+
+            if let Some(prefix) = filter_prefix.as_ref() {
+                match filter_script_type {
+                    ScriptType::Lock => {
+                        if !extract_raw_data(&output.lock())
                             .as_slice()
                             .starts_with(prefix)
-                    {
-                        debug!("skipped at {}", line!());
-                        continue;
+                        {
+                            debug!("skipped at {}", line!());
+                            continue;
+                        }
+                    }
+                    ScriptType::Type => {
+                        if output.type_().is_none()
+                            || !extract_raw_data(&output.type_().to_opt().unwrap())
+                                .as_slice()
+                                .starts_with(prefix)
+                        {
+                            debug!("skipped at {}", line!());
+                            continue;
+                        }
                     }
                 }
             }
-        }
 
-        if let Some([r0, r1]) = filter_script_len_range {
-            match filter_script_type {
-                ScriptType::Lock => {
-                    let script_len = extract_raw_data(&output.lock()).len();
-                    if script_len < r0 || script_len > r1 {
-                        debug!("skipped at {}", line!());
-                        continue;
+            if let Some([r0, r1]) = filter_script_len_range {
+                match filter_script_type {
+                    ScriptType::Lock => {
+                        let script_len = extract_raw_data(&output.lock()).len();
+                        if script_len < r0 || script_len > r1 {
+                            debug!("skipped at {}", line!());
+                            continue;
+                        }
+                    }
+                    ScriptType::Type => {
+                        let script_len = output
+                            .type_()
+                            .to_opt()
+                            .map(|script| extract_raw_data(&script).len())
+                            .unwrap_or_default();
+                        if script_len < r0 || script_len > r1 {
+                            debug!("skipped at {}", line!());
+                            continue;
+                        }
                     }
                 }
-                ScriptType::Type => {
-                    let script_len = output
-                        .type_()
-                        .to_opt()
-                        .map(|script| extract_raw_data(&script).len())
-                        .unwrap_or_default();
-                    if script_len < r0 || script_len > r1 {
-                        debug!("skipped at {}", line!());
-                        continue;
-                    }
+            }
+
+            if let Some([r0, r1]) = filter_output_data_len_range {
+                if output_data.len() < r0 || output_data.len() >= r1 {
+                    debug!("skipped at {}", line!());
+                    continue;
                 }
             }
-        }
 
-        if let Some([r0, r1]) = filter_output_data_len_range {
-            if output_data.len() < r0 || output_data.len() >= r1 {
-                debug!("skipped at {}", line!());
-                continue;
+            if let Some([r0, r1]) = filter_output_capacity_range {
+                let capacity: core::Capacity = output.capacity().unpack();
+                if capacity < r0 || capacity >= r1 {
+                    debug!("skipped at {}", line!());
+                    continue;
+                }
+            }
+
+            if let Some([r0, r1]) = filter_block_range {
+                if block_number < r0 || block_number >= r1 {
+                    debug!("skipped at {}", line!());
+                    continue;
+                }
+            }
+
+            last_key = key.to_vec();
+            let cell_to_push = Cell {
+                output: output.into(),
+                output_data: if with_data {
+                    Some(output_data.into())
+                } else {
+                    None
+                },
+                out_point: packed::OutPoint::new(tx_hash, output_index).into(),
+                block_number: block_number.into(),
+                tx_index: tx_index.into(),
+            };
+            debug!("pushed cell {:#?}", cell_to_push);
+            cells.push(cell_to_push);
+            if cells.len() >= limit {
+                break;
             }
         }
+        debug!("get_cells last_key={:?}", last_key);
 
-        if let Some([r0, r1]) = filter_output_capacity_range {
-            let capacity: core::Capacity = output.capacity().unpack();
-            if capacity < r0 || capacity >= r1 {
-                debug!("skipped at {}", line!());
-                continue;
+        if cells.len() > 0 {
+            return Ok((Pagination {
+                objects: cells,
+                last_cursor: JsonBytes::from_vec(last_key),
+            })
+            .serialize(&SERIALIZER)?);
+        } else {
+            internal_limit *= 2;
+            if internal_limit > u32::MAX as usize {
+                debug!(
+                    "Internal limit is now greater than {}, assuming no data is found",
+                    u32::MAX
+                );
+                return Ok((Pagination {
+                    objects: Vec::<Cell>::default(),
+                    last_cursor: JsonBytes::from_vec(vec![]),
+                })
+                .serialize(&SERIALIZER)?);
             }
         }
-
-        if let Some([r0, r1]) = filter_block_range {
-            if block_number < r0 || block_number >= r1 {
-                debug!("skipped at {}", line!());
-                continue;
-            }
-        }
-
-        last_key = key.to_vec();
-        let cell_to_push = Cell {
-            output: output.into(),
-            output_data: if with_data {
-                Some(output_data.into())
-            } else {
-                None
-            },
-            out_point: packed::OutPoint::new(tx_hash, output_index).into(),
-            block_number: block_number.into(),
-            tx_index: tx_index.into(),
-        };
-        debug!("pushed cell {:#?}", cell_to_push);
-        cells.push(cell_to_push);
     }
-    debug!("get_cells last_key={:?}", last_key);
-    Ok((Pagination {
-        objects: cells,
-        last_cursor: JsonBytes::from_vec(last_key),
-    })
-    .serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
