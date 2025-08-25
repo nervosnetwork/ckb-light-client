@@ -595,7 +595,7 @@ pub fn get_cells(
     let mut internal_limit: usize = limit;
 
     // The new implementation iterates to try "limit * 2^0", "limit * 2^1", "limit * 2^2".. (until meets n such that limit * 2^n > u32::MAX) as the limit passed to storage.collect_iterator and finds result to return from what `collect_iterator` returns.
-    // Since this is a light client, we can assume that storage.collect_iterator won't return too much data 
+    // Since this is a light client, we can assume that storage.collect_iterator won't return too much data
     // If internal_limit reaches u32::MAX and we still can't get any cells from filtered results, we can assume that no cells will be found.
     loop {
         let prefix_cloned = prefix.clone();
@@ -763,7 +763,6 @@ pub fn get_cells(
         }
     }
 }
-
 #[wasm_bindgen]
 pub fn get_transactions(
     search_key: JsValue,
@@ -774,6 +773,10 @@ pub fn get_transactions(
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
+    debug!(
+        "Calling get_transactions with {:?}, {:?}, {:?}, {:?}",
+        search_key, order, limit, after_cursor
+    );
 
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     let (prefix, from_key, direction, skip) = build_query_options(
@@ -816,26 +819,181 @@ pub fn get_transactions(
     let storage = STORAGE_WITH_DATA.get().unwrap().storage();
 
     if search_key.group_by_transaction.unwrap_or_default() {
-        let prefix_cloned = prefix.clone();
-        let mut kvs: Vec<_> = storage.collect_iterator(
-            from_key,
-            direction,
-            Box::new(move |key| key.starts_with(&prefix_cloned)),
-            100,
-            skip,
-        );
-        let mut tx_with_cells: Vec<TxWithCells> = Vec::new();
-        let mut last_key = Vec::new();
+        let mut internal_limit: usize = limit * 10; // Start with higher limit for grouped mode
 
-        'outer: while !kvs.is_empty() {
-            for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
-                let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
-                if tx_with_cells.len() == limit
-                    && tx_with_cells.last_mut().unwrap().transaction.hash != tx_hash.unpack()
-                {
+        loop {
+            let prefix_cloned = prefix.clone();
+            let mut kvs: Vec<_> = storage.collect_iterator(
+                from_key.clone(),
+                direction,
+                Box::new(move |key| key.starts_with(&prefix_cloned)),
+                internal_limit,
+                skip,
+            );
+            let mut tx_with_cells: Vec<TxWithCells> = Vec::new();
+            let mut last_key = Vec::new();
+
+            'outer: while !kvs.is_empty() {
+                for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+                    let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
+                    if tx_with_cells.len() == limit
+                        && tx_with_cells.last_mut().unwrap().transaction.hash != tx_hash.unpack()
+                    {
+                        break 'outer;
+                    }
+                    last_key = key.to_vec();
+                    let tx = packed::Transaction::from_slice(
+                        &storage
+                            .get(Key::TxHash(&tx_hash).into_vec())
+                            .expect("get tx should be OK")
+                            .expect("stored tx")[12..],
+                    )
+                    .expect("from stored tx slice should be OK");
+
+                    let block_number = u64::from_be_bytes(
+                        key[key.len() - 17..key.len() - 9]
+                            .try_into()
+                            .expect("stored block_number"),
+                    );
+                    let tx_index = u32::from_be_bytes(
+                        key[key.len() - 9..key.len() - 5]
+                            .try_into()
+                            .expect("stored tx_index"),
+                    );
+                    let io_index = u32::from_be_bytes(
+                        key[key.len() - 5..key.len() - 1]
+                            .try_into()
+                            .expect("stored io_index"),
+                    );
+                    let io_type = if *key.last().expect("stored io_type") == 0 {
+                        CellType::Input
+                    } else {
+                        CellType::Output
+                    };
+
+                    if let Some(filter_script) = filter_script.as_ref() {
+                        let filter_script_matched = match filter_script_type {
+                            ScriptType::Lock => storage
+                                .get(
+                                    Key::TxLockScript(
+                                        filter_script,
+                                        block_number,
+                                        tx_index,
+                                        io_index,
+                                        match io_type {
+                                            CellType::Input => storage::CellType::Input,
+                                            CellType::Output => storage::CellType::Output,
+                                        },
+                                    )
+                                    .into_vec(),
+                                )
+                                .expect("get TxLockScript should be OK")
+                                .is_some(),
+                            ScriptType::Type => storage
+                                .get(
+                                    Key::TxTypeScript(
+                                        filter_script,
+                                        block_number,
+                                        tx_index,
+                                        io_index,
+                                        match io_type {
+                                            CellType::Input => storage::CellType::Input,
+                                            CellType::Output => storage::CellType::Output,
+                                        },
+                                    )
+                                    .into_vec(),
+                                )
+                                .expect("get TxTypeScript should be OK")
+                                .is_some(),
+                        };
+
+                        if !filter_script_matched {
+                            debug!("skipped at {}", line!());
+                            continue;
+                        }
+                    }
+
+                    if let Some([r0, r1]) = filter_block_range {
+                        if block_number < r0 || block_number >= r1 {
+                            debug!("skipped at {}", line!());
+                            continue;
+                        }
+                    }
+
+                    let last_tx_hash_is_same = tx_with_cells
+                        .last_mut()
+                        .map(|last| {
+                            if last.transaction.hash == tx_hash.unpack() {
+                                last.cells.push((io_type.clone(), io_index.into()));
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                        .unwrap_or_default();
+
+                    if !last_tx_hash_is_same {
+                        tx_with_cells.push(TxWithCells {
+                            transaction: tx.into_view().into(),
+                            block_number: block_number.into(),
+                            tx_index: tx_index.into(),
+                            cells: vec![(io_type, io_index.into())],
+                        });
+                    }
+                }
+                if tx_with_cells.len() >= limit {
                     break 'outer;
                 }
-                last_key = key.to_vec();
+                let prefix_cloned = prefix.clone();
+                kvs = storage.collect_iterator(
+                    last_key.clone(),
+                    direction,
+                    Box::new(move |key| key.starts_with(&prefix_cloned)),
+                    100,
+                    1,
+                );
+            }
+
+            debug!("get_transactions (grouped) last_key={:?}", last_key);
+
+            if tx_with_cells.len() > 0 {
+                return Ok((Pagination {
+                    objects: tx_with_cells.into_iter().map(Tx::Grouped).collect(),
+                    last_cursor: JsonBytes::from_vec(last_key),
+                })
+                .serialize(&SERIALIZER)?);
+            } else {
+                internal_limit *= 2;
+                if internal_limit > u32::MAX as usize {
+                    debug!(
+                        "Internal limit is now greater than {}, assuming no data is found",
+                        u32::MAX
+                    );
+                    return Ok((Pagination {
+                        objects: Vec::<Tx>::default(),
+                        last_cursor: JsonBytes::from_vec(vec![]),
+                    })
+                    .serialize(&SERIALIZER)?);
+                }
+            }
+        }
+    } else {
+        let mut internal_limit: usize = limit;
+
+        loop {
+            let prefix_cloned = prefix.clone();
+            let kvs: Vec<_> = storage.collect_iterator(
+                from_key.clone(),
+                direction,
+                Box::new(move |key| key.starts_with(&prefix_cloned)),
+                internal_limit,
+                skip,
+            );
+            let mut last_key = Vec::new();
+            let mut txs = Vec::new();
+            for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+                debug!("get transactions iterator at {:?} {:?}", key, value);
+                let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
                 let tx = packed::Transaction::from_slice(
                     &storage
                         .get(Key::TxHash(&tx_hash).into_vec())
@@ -866,196 +1024,97 @@ pub fn get_transactions(
                 };
 
                 if let Some(filter_script) = filter_script.as_ref() {
-                    let filter_script_matched = match filter_script_type {
-                        ScriptType::Lock => storage
-                            .get(
-                                Key::TxLockScript(
-                                    filter_script,
-                                    block_number,
-                                    tx_index,
-                                    io_index,
-                                    match io_type {
-                                        CellType::Input => storage::CellType::Input,
-                                        CellType::Output => storage::CellType::Output,
-                                    },
+                    match filter_script_type {
+                        ScriptType::Lock => {
+                            if storage
+                                .get(
+                                    Key::TxLockScript(
+                                        filter_script,
+                                        block_number,
+                                        tx_index,
+                                        io_index,
+                                        match io_type {
+                                            CellType::Input => storage::CellType::Input,
+                                            CellType::Output => storage::CellType::Output,
+                                        },
+                                    )
+                                    .into_vec(),
                                 )
-                                .into_vec(),
-                            )
-                            .expect("get TxLockScript should be OK")
-                            .is_some(),
-                        ScriptType::Type => storage
-                            .get(
-                                Key::TxTypeScript(
-                                    filter_script,
-                                    block_number,
-                                    tx_index,
-                                    io_index,
-                                    match io_type {
-                                        CellType::Input => storage::CellType::Input,
-                                        CellType::Output => storage::CellType::Output,
-                                    },
+                                .expect("get TxLockScript should be OK")
+                                .is_none()
+                            {
+                                debug!("skipped at {}", line!());
+                                continue;
+                            };
+                        }
+                        ScriptType::Type => {
+                            if storage
+                                .get(
+                                    Key::TxTypeScript(
+                                        filter_script,
+                                        block_number,
+                                        tx_index,
+                                        io_index,
+                                        match io_type {
+                                            CellType::Input => storage::CellType::Input,
+                                            CellType::Output => storage::CellType::Output,
+                                        },
+                                    )
+                                    .into_vec(),
                                 )
-                                .into_vec(),
-                            )
-                            .expect("get TxTypeScript should be OK")
-                            .is_some(),
-                    };
-
-                    if !filter_script_matched {
-                        continue;
+                                .expect("get TxTypeScript should be OK")
+                                .is_none()
+                            {
+                                debug!("skipped at {}", line!());
+                                continue;
+                            };
+                        }
                     }
                 }
 
                 if let Some([r0, r1]) = filter_block_range {
                     if block_number < r0 || block_number >= r1 {
+                        debug!("skipped at {}", line!());
                         continue;
                     }
                 }
 
-                let last_tx_hash_is_same = tx_with_cells
-                    .last_mut()
-                    .map(|last| {
-                        if last.transaction.hash == tx_hash.unpack() {
-                            last.cells.push((io_type.clone(), io_index.into()));
-                            true
-                        } else {
-                            false
-                        }
-                    })
-                    .unwrap_or_default();
-
-                if !last_tx_hash_is_same {
-                    tx_with_cells.push(TxWithCells {
-                        transaction: tx.into_view().into(),
-                        block_number: block_number.into(),
-                        tx_index: tx_index.into(),
-                        cells: vec![(io_type, io_index.into())],
-                    });
+                last_key = key.to_vec();
+                let tx_to_push = Tx::Ungrouped(TxWithCell {
+                    transaction: tx.into_view().into(),
+                    block_number: block_number.into(),
+                    tx_index: tx_index.into(),
+                    io_index: io_index.into(),
+                    io_type,
+                });
+                txs.push(tx_to_push);
+                if txs.len() >= limit {
+                    break;
                 }
             }
-            let prefix_cloned = prefix.clone();
-            kvs = storage.collect_iterator(
-                last_key.clone(),
-                direction,
-                Box::new(move |key| key.starts_with(&prefix_cloned)),
-                100,
-                1,
-            );
-        }
-        Ok((Pagination {
-            objects: tx_with_cells.into_iter().map(Tx::Grouped).collect(),
-            last_cursor: JsonBytes::from_vec(last_key),
-        })
-        .serialize(&SERIALIZER)?)
-    } else {
-        let kvs: Vec<_> = storage.collect_iterator(
-            from_key,
-            direction,
-            Box::new(move |key| key.starts_with(&prefix)),
-            limit,
-            skip,
-        );
-        let mut last_key = Vec::new();
-        let mut txs = Vec::new();
-        for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
-            let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
-            let tx = packed::Transaction::from_slice(
-                &storage
-                    .get(Key::TxHash(&tx_hash).into_vec())
-                    .expect("get tx should be OK")
-                    .expect("stored tx")[12..],
-            )
-            .expect("from stored tx slice should be OK");
+            debug!("get_transactions last_key={:?}", last_key);
 
-            let block_number = u64::from_be_bytes(
-                key[key.len() - 17..key.len() - 9]
-                    .try_into()
-                    .expect("stored block_number"),
-            );
-            let tx_index = u32::from_be_bytes(
-                key[key.len() - 9..key.len() - 5]
-                    .try_into()
-                    .expect("stored tx_index"),
-            );
-            let io_index = u32::from_be_bytes(
-                key[key.len() - 5..key.len() - 1]
-                    .try_into()
-                    .expect("stored io_index"),
-            );
-            let io_type = if *key.last().expect("stored io_type") == 0 {
-                CellType::Input
+            if txs.len() > 0 {
+                return Ok((Pagination {
+                    objects: txs,
+                    last_cursor: JsonBytes::from_vec(last_key),
+                })
+                .serialize(&SERIALIZER)?);
             } else {
-                CellType::Output
-            };
-
-            if let Some(filter_script) = filter_script.as_ref() {
-                match filter_script_type {
-                    ScriptType::Lock => {
-                        if storage
-                            .get(
-                                Key::TxLockScript(
-                                    filter_script,
-                                    block_number,
-                                    tx_index,
-                                    io_index,
-                                    match io_type {
-                                        CellType::Input => storage::CellType::Input,
-                                        CellType::Output => storage::CellType::Output,
-                                    },
-                                )
-                                .into_vec(),
-                            )
-                            .expect("get TxLockScript should be OK")
-                            .is_none()
-                        {
-                            continue;
-                        };
-                    }
-                    ScriptType::Type => {
-                        if storage
-                            .get(
-                                Key::TxTypeScript(
-                                    filter_script,
-                                    block_number,
-                                    tx_index,
-                                    io_index,
-                                    match io_type {
-                                        CellType::Input => storage::CellType::Input,
-                                        CellType::Output => storage::CellType::Output,
-                                    },
-                                )
-                                .into_vec(),
-                            )
-                            .expect("get TxTypeScript should be OK")
-                            .is_none()
-                        {
-                            continue;
-                        };
-                    }
+                internal_limit *= 2;
+                if internal_limit > u32::MAX as usize {
+                    debug!(
+                        "Internal limit is now greater than {}, assuming no data is found",
+                        u32::MAX
+                    );
+                    return Ok((Pagination {
+                        objects: Vec::<Tx>::default(),
+                        last_cursor: JsonBytes::from_vec(vec![]),
+                    })
+                    .serialize(&SERIALIZER)?);
                 }
             }
-
-            if let Some([r0, r1]) = filter_block_range {
-                if block_number < r0 || block_number >= r1 {
-                    continue;
-                }
-            }
-
-            last_key = key.to_vec();
-            txs.push(Tx::Ungrouped(TxWithCell {
-                transaction: tx.into_view().into(),
-                block_number: block_number.into(),
-                tx_index: tx_index.into(),
-                io_index: io_index.into(),
-                io_type,
-            }))
         }
-
-        Ok((Pagination {
-            objects: txs,
-            last_cursor: JsonBytes::from_vec(last_key),
-        })
-        .serialize(&SERIALIZER)?)
     }
 }
 
