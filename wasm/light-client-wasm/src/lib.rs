@@ -706,7 +706,7 @@ pub fn get_cells(
                     return None;
                 }
             }
-            return Some(key.to_vec());
+            Some(key.to_vec())
         }),
         limit,
         skip,
@@ -755,11 +755,11 @@ pub fn get_cells(
     }
     debug!("get_cells last_key={:?}", last_key);
 
-    return Ok((Pagination {
+    Ok((Pagination {
         objects: cells,
         last_cursor: JsonBytes::from_vec(last_key),
     })
-    .serialize(&SERIALIZER)?);
+    .serialize(&SERIALIZER)?)
 }
 #[wasm_bindgen]
 pub fn get_transactions(
@@ -896,7 +896,7 @@ pub fn get_transactions(
                     }
                 }
 
-                return Some(key.to_vec());
+                Some(key.to_vec())
             }),
             limit * 10, // Start with higher limit for grouped mode
             skip,
@@ -970,11 +970,11 @@ pub fn get_transactions(
 
         debug!("get_transactions (grouped) last_key={:?}", last_key);
 
-        return Ok((Pagination {
+        Ok((Pagination {
             objects: tx_with_cells.into_iter().map(Tx::Grouped).collect(),
             last_cursor: JsonBytes::from_vec(last_key),
         })
-        .serialize(&SERIALIZER)?);
+        .serialize(&SERIALIZER)?)
     } else {
         let kvs: Vec<_> = storage.collect_iterator(
             from_key.clone(),
@@ -1061,7 +1061,7 @@ pub fn get_transactions(
                     }
                 }
 
-                return Some(key.to_vec());
+                Some(key.to_vec())
             }),
             limit,
             skip,
@@ -1116,11 +1116,11 @@ pub fn get_transactions(
         }
         debug!("get_transactions last_key={:?}", last_key);
 
-        return Ok((Pagination {
+        Ok((Pagination {
             objects: txs,
             last_cursor: JsonBytes::from_vec(last_key),
         })
-        .serialize(&SERIALIZER)?);
+        .serialize(&SERIALIZER)?)
     }
 }
 #[wasm_bindgen]
@@ -1250,7 +1250,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
                 }
             }
 
-            return Some(key.to_vec());
+            Some(key.to_vec())
         }),
         usize::MAX,
         skip,
