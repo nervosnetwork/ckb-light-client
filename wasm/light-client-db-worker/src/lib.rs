@@ -2,8 +2,8 @@ use std::cell::RefCell;
 use std::str::FromStr;
 
 use db::{handle_db_command, open_database};
-use idb::Database;
-use light_client_db_common::{read_command_payload, write_command_with_payload};
+use idb::{Database, Transaction};
+use light_client_db_common::{read_command_payload, write_command_with_payload, DbCommandRequest};
 use light_client_db_common::{InputCommand, OutputCommand};
 use log::{debug, info};
 use util::{wait_for_command, wait_for_command_sync};
@@ -16,6 +16,7 @@ mod util;
 thread_local! {
     static INPUT_BUFFER: RefCell<Option<SharedArrayBuffer>> = const { RefCell::new(None) };
     static OUTPUT_BUFFER: RefCell<Option<SharedArrayBuffer>> = const { RefCell::new(None) };
+    pub(crate) static GLOBAL_TRANSACTION: RefCell<Option<Transaction>> = const { RefCell::new(None) };
 }
 #[wasm_bindgen]
 /// Set `SharedArrayBuffer` used for communicating with light client worker. This must be called before executing `main_loop`
@@ -95,25 +96,112 @@ pub async fn main_loop(log_level: &str) {
             InputCommand::DbRequest => {
                 let db_cmd = read_command_payload(&input_i32_arr, &input_u8_arr).unwrap();
                 let db = db.as_ref().expect("Database not opened yet");
-                let result = handle_db_command(db, STORE_NAME, db_cmd, |buf| {
-                    input_i32_arr.set_index(0, InputCommand::Waiting as i32);
-                    debug!("Invoking request take while with args {:?}", buf);
-                    write_command_with_payload(
-                        OutputCommand::RequestTakeWhile as i32,
-                        buf,
-                        &output_i32_arr,
-                        &output_u8_arr,
-                    )
-                    .unwrap();
-                    // Sync wait here, so transaction of IndexedDB won't be commited (it will be commited once control flow was returned from sync call stack)
-                    wait_for_command_sync(&input_i32_arr, InputCommand::Waiting).unwrap();
+                let result = handle_db_command(
+                    db,
+                    STORE_NAME,
+                    db_cmd,
+                    |buf| {
+                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                        debug!("Invoking request take while with args {:?}", buf);
+                        write_command_with_payload(
+                            OutputCommand::RequestTakeWhile as i32,
+                            buf,
+                            &output_i32_arr,
+                            &output_u8_arr,
+                        )
+                        .unwrap();
+                        // Sync wait here, so transaction of IndexedDB won't be commited (it will be commited once control flow was returned from sync call stack)
+                        wait_for_command_sync(&input_i32_arr, InputCommand::Waiting).unwrap();
+                        let result =
+                            read_command_payload::<bool>(&input_i32_arr, &input_u8_arr).unwrap();
+                        debug!("Received take while result {}", result);
+                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                        result
+                    },
+                    |buf, store| {
+                        let buf = buf.to_vec();
+                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                        debug!("Invoking request filter_map with args {:?}", buf);
+                        write_command_with_payload(
+                            OutputCommand::RequestFilterMap as i32,
+                            buf,
+                            &output_i32_arr,
+                            &output_u8_arr,
+                        )
+                        .unwrap();
+                        let input_i32_arr = input_i32_arr.clone();
+                        let input_u8_arr = input_u8_arr.clone();
+                        let output_i32_arr = output_i32_arr.clone();
+                        let output_u8_arr = output_u8_arr.clone();
 
-                    let result =
-                        read_command_payload::<bool>(&input_i32_arr, &input_u8_arr).unwrap();
-                    debug!("Received take while result {}", result);
-                    input_i32_arr.set_index(0, InputCommand::Waiting as i32);
-                    result
-                })
+                        async move {
+                            loop {
+                                let store = store.clone();
+                                match wait_for_command_sync(&input_i32_arr, InputCommand::Waiting)
+                                    .unwrap()
+                                {
+                                    InputCommand::Waiting
+                                    | InputCommand::OpenDatabase
+                                    | InputCommand::Shutdown
+                                    | InputCommand::ResponseTakeWhile => {
+                                        unreachable!()
+                                    }
+                                    // Allow calling other db requests in filter map call
+                                    InputCommand::DbRequest => {
+                                        let db_cmd: DbCommandRequest =
+                                            read_command_payload(&input_i32_arr, &input_u8_arr)
+                                                .unwrap();
+                                        debug!(
+                                            "Received DbCommandRequest\
+                                         when waiting for ResponseTakeWhile: {:?}",
+                                            db_cmd
+                                        );
+                                        let db_result = handle_db_command(
+                                            db,
+                                            STORE_NAME,
+                                            db_cmd,
+                                            |_| panic!("Can't call take while in filter map"),
+                                            |_, _| async {
+                                                panic!("Can't call filter map in filter map")
+                                            },
+                                            Some(store),
+                                        )
+                                        .await;
+                                        debug!("db command result at filter map: {:?}", db_result);
+                                        match db_result {
+                                            Ok(o) => write_command_with_payload(
+                                                OutputCommand::DbResponse as i32,
+                                                &o,
+                                                &output_i32_arr,
+                                                &output_u8_arr,
+                                            )
+                                            .unwrap(),
+                                            Err(e) => write_command_with_payload(
+                                                OutputCommand::Error as i32,
+                                                format!("{:?}", e),
+                                                &output_i32_arr,
+                                                &output_u8_arr,
+                                            )
+                                            .unwrap(),
+                                        };
+                                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                                    }
+                                    InputCommand::ResponseFilterMap => {
+                                        let result = read_command_payload::<Option<Vec<u8>>>(
+                                            &input_i32_arr,
+                                            &input_u8_arr,
+                                        )
+                                        .unwrap();
+                                        debug!("Received filter map result {:?}", result);
+                                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                                        return result;
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    None,
+                )
                 .await;
                 debug!("db command result: {:?}", result);
                 match result {
@@ -134,7 +222,9 @@ pub async fn main_loop(log_level: &str) {
                 };
             }
             InputCommand::Shutdown => break,
-            InputCommand::Waiting | InputCommand::ResponseTakeWhile => unreachable!(),
+            InputCommand::Waiting
+            | InputCommand::ResponseTakeWhile
+            | InputCommand::ResponseFilterMap => unreachable!(),
         }
     }
     info!("Db worker main loop exited");

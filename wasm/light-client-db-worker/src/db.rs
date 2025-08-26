@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use anyhow::{anyhow, Context};
 use idb::{
     CursorDirection, Database, DatabaseEvent, Factory, IndexParams, KeyPath, KeyRange,
@@ -41,16 +43,19 @@ async fn open_iterator(
         .into_managed())
 }
 
-pub async fn collect_iterator<F>(
+pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
     start_key_bound: &[u8],
     order: CursorDirection,
     take_while: F,
+    filter_map: FnFilterMap,
     limit: usize,
     skip: usize,
 ) -> anyhow::Result<Vec<KV>>
 where
     F: Fn(&[u8]) -> bool,
+    FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
+    FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
     let mut iter = open_iterator(store, start_key_bound, order)
         .await
@@ -74,7 +79,12 @@ where
     if take_while(&raw_kv.key) {
         skip_index += 1;
         if skip_index > skip {
-            res.push(raw_kv);
+            if let Some(new_key) = filter_map(&raw_kv.key).await {
+                res.push(KV {
+                    key: new_key,
+                    value: raw_kv.value,
+                });
+            }
         }
     } else {
         return Ok(res);
@@ -102,7 +112,12 @@ where
         if take_while(&raw_kv.key) {
             skip_index += 1;
             if skip_index > skip {
-                res.push(raw_kv);
+                if let Some(new_key) = filter_map(&raw_kv.key).await {
+                    res.push(KV {
+                        key: new_key,
+                        value: raw_kv.value,
+                    });
+                }
             }
         } else {
             return Ok(res);
@@ -111,16 +126,19 @@ where
     Ok(res)
 }
 
-async fn collect_iterator_keys<F>(
+async fn collect_iterator_keys<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
     start_key_bound: &[u8],
     order: CursorDirection,
     take_while: F,
+    filter_map: FnFilterMap,
     limit: usize,
     skip: usize,
 ) -> anyhow::Result<Vec<Vec<u8>>>
 where
     F: Fn(&[u8]) -> bool,
+    FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
+    FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
     let mut iter = open_iterator(store, start_key_bound, order)
         .await
@@ -143,7 +161,9 @@ where
     if take_while(&raw_key) {
         skip_index += 1;
         if skip_index > skip {
-            res.push(raw_key);
+            if let Some(new_key) = filter_map(&raw_key).await {
+                res.push(new_key);
+            }
         }
     } else {
         return Ok(res);
@@ -167,7 +187,9 @@ where
         if take_while(&raw_key) {
             skip_index += 1;
             if skip_index > skip {
-                res.push(raw_key);
+                if let Some(new_key) = filter_map(&raw_key).await {
+                    res.push(new_key);
+                }
             }
         } else {
             return Ok(res);
@@ -176,33 +198,42 @@ where
     Ok(res)
 }
 
-pub(crate) async fn handle_db_command<F>(
+pub(crate) async fn handle_db_command<F, FnFilterMap, FnFilterMapOutput>(
     db: &Database,
     store_name: &str,
     cmd: DbCommandRequest,
     invoke_take_while: F,
+    invoke_filter_map: FnFilterMap,
+    custom_store: Option<ObjectStore>,
 ) -> anyhow::Result<DbCommandResponse>
 where
     F: Fn(&[u8]) -> bool,
+    FnFilterMap: FnOnce(&[u8], ObjectStore) -> FnFilterMapOutput + Clone,
+    FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
     debug!("Handle command: {:?}", cmd);
-    let tx_mode = match cmd {
-        DbCommandRequest::Iterator { .. } | DbCommandRequest::IteratorKey { .. } => {
-            TransactionMode::ReadOnly
-        }
-        DbCommandRequest::Read { .. } => TransactionMode::ReadOnly,
-        DbCommandRequest::Put { .. } | DbCommandRequest::Delete { .. } => {
-            TransactionMode::ReadWrite
-        }
+
+    let (tran, store) = if let Some(store) = custom_store {
+        (None, store)
+    } else {
+        let tx_mode = match cmd {
+            DbCommandRequest::Iterator { .. } | DbCommandRequest::IteratorKey { .. } => {
+                TransactionMode::ReadOnly
+            }
+            DbCommandRequest::Read { .. } => TransactionMode::ReadOnly,
+            DbCommandRequest::Put { .. } | DbCommandRequest::Delete { .. } => {
+                TransactionMode::ReadWrite
+            }
+        };
+        let tran = db
+            .transaction(&[&store_name], tx_mode)
+            .map_err(|e| anyhow!("Failed to create transaction: {:?}", e))?;
+
+        let store = tran
+            .object_store(store_name)
+            .map_err(|e| anyhow!("Unable to find store {}: {}", store_name, e))?;
+        (Some(tran), store)
     };
-    let tran = db
-        .transaction(&[&store_name], tx_mode)
-        .map_err(|e| anyhow!("Failed to create transaction: {:?}", e))?;
-
-    let store = tran
-        .object_store(store_name)
-        .map_err(|e| anyhow!("Unable to find store {}: {}", store_name, e))?;
-
     let result = match cmd {
         DbCommandRequest::Read { keys } => {
             let mut res = Vec::new();
@@ -257,6 +288,12 @@ where
                 &start_key_bound,
                 ckb_cursor_direction_to_idb(order),
                 invoke_take_while,
+                |key| {
+                    let key = key.to_vec();
+                    let store = store.clone();
+                    let invoke_filter_map = invoke_filter_map.clone();
+                    async move { invoke_filter_map(&key, store.clone()).await }
+                },
                 limit,
                 skip,
             )
@@ -279,6 +316,12 @@ where
                 &start_key_bound,
                 ckb_cursor_direction_to_idb(order),
                 invoke_take_while,
+                |key| {
+                    let key = key.to_vec();
+                    let store = store.clone();
+                    let invoke_filter_map = invoke_filter_map.clone();
+                    async move { invoke_filter_map(&key, store.clone()).await }
+                },
                 limit,
                 skip,
             )
@@ -287,7 +330,9 @@ where
             DbCommandResponse::IteratorKey { keys }
         }
     };
-    assert_eq!(TransactionResult::Committed, tran.await.unwrap());
+    if let Some(tran) = tran {
+        assert_eq!(TransactionResult::Committed, tran.await.unwrap());
+    }
     debug!("Command result={:?}", result);
     Ok(result)
 }
