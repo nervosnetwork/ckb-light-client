@@ -104,6 +104,7 @@ impl TryFrom<i32> for InputCommand {
 }
 
 #[repr(i32)]
+#[derive(Debug)]
 /// Represent a 4-byte command which will be put in output buffer
 pub enum OutputCommand {
     /// Waiting for db worker to handle the command

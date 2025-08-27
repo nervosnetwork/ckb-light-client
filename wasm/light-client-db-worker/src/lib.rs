@@ -69,6 +69,7 @@ pub async fn main_loop(log_level: &str) {
             .expect("Unable to wait for command");
         // Clean it to avoid infinite loop
         input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+        log::trace!("Received input command: {:?}", cmd);
         match cmd {
             InputCommand::OpenDatabase => {
                 let database_name =
@@ -121,7 +122,7 @@ pub async fn main_loop(log_level: &str) {
                     |buf, store| {
                         let buf = buf.to_vec();
                         input_i32_arr.set_index(0, InputCommand::Waiting as i32);
-                        debug!("Invoking request filter_map with args {:?}", buf);
+                        log::trace!("Invoking request filter_map with args {:?}", buf);
                         write_command_with_payload(
                             OutputCommand::RequestFilterMap as i32,
                             buf,
@@ -135,7 +136,7 @@ pub async fn main_loop(log_level: &str) {
                         let output_u8_arr = output_u8_arr.clone();
 
                         async move {
-                            loop {
+                            let result = loop {
                                 let store = store.clone();
                                 match wait_for_command_sync(&input_i32_arr, InputCommand::Waiting)
                                     .unwrap()
@@ -167,7 +168,8 @@ pub async fn main_loop(log_level: &str) {
                                             Some(store),
                                         )
                                         .await;
-                                        debug!("db command result at filter map: {:?}", db_result);
+                                        log::trace!("db command result at filter map: {:?}", db_result);
+                                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
                                         match db_result {
                                             Ok(o) => write_command_with_payload(
                                                 OutputCommand::DbResponse as i32,
@@ -184,7 +186,6 @@ pub async fn main_loop(log_level: &str) {
                                             )
                                             .unwrap(),
                                         };
-                                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
                                     }
                                     InputCommand::ResponseFilterMap => {
                                         let result = read_command_payload::<Option<Vec<u8>>>(
@@ -192,12 +193,14 @@ pub async fn main_loop(log_level: &str) {
                                             &input_u8_arr,
                                         )
                                         .unwrap();
-                                        debug!("Received filter map result {:?}", result);
-                                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
-                                        return result;
+                                        log::trace!("Received filter map result {:?}", result);
+
+                                        break result;
                                     }
                                 }
-                            }
+                            };
+                            input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                            result
                         }
                     },
                     None,

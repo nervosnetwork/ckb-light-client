@@ -225,6 +225,7 @@ impl CommunicationChannel {
             Atomics::wait(output_i32_arr, 0, OutputCommand::Waiting as i32).unwrap();
             let output_cmd = OutputCommand::try_from(output_i32_arr.get_index(0)).unwrap();
             output_i32_arr.set_index(0, 0);
+            log::trace!("Received output command: {:?}", output_cmd);
             match output_cmd {
                 OutputCommand::OpenDatabaseResponse | OutputCommand::Waiting => unreachable!(),
                 OutputCommand::RequestTakeWhile => {
@@ -247,9 +248,10 @@ impl CommunicationChannel {
                     let arg = read_command_payload::<Vec<u8>>(output_i32_arr, output_u8_arr)?;
                     let result = filter_map.as_ref().unwrap()(&arg);
 
-                    debug!(
+                    log::trace!(
                         "Received filter_map request with args {:?}, result {:?}",
-                        arg, result
+                        arg,
+                        result
                     );
                     write_command_with_payload(
                         InputCommand::ResponseFilterMap as i32,
@@ -257,6 +259,7 @@ impl CommunicationChannel {
                         input_i32_arr,
                         input_u8_arr,
                     )?;
+                    log::trace!("Result of RequestFilterMap written");
                     continue;
                 }
 

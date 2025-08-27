@@ -1151,11 +1151,14 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
     ) = build_filter_options(search_key)?;
 
     let storage = STORAGE_WITH_DATA.get().unwrap().storage();
+    log::trace!("get_cells_capacity: before entering collect iterator");
+
     let kvs: Vec<_> = storage.collect_iterator(
         from_key,
         direction,
         Box::new(move |key| key.starts_with(&prefix)),
         Box::new(move |key| {
+            log::trace!("At key {:?}", key);
             let value = storage.get(key).unwrap().unwrap();
 
             let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
@@ -1195,6 +1198,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
                             .as_slice()
                             .starts_with(prefix)
                         {
+                            log::trace!("break at {}", line!());
                             return None;
                         }
                     }
@@ -1204,6 +1208,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
                                 .as_slice()
                                 .starts_with(prefix)
                         {
+                            log::trace!("break at {}", line!());
                             return None;
                         }
                     }
@@ -1215,6 +1220,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
                     ScriptType::Lock => {
                         let script_len = extract_raw_data(&output.lock()).len();
                         if script_len < r0 || script_len > r1 {
+                            log::trace!("break at {}", line!());
                             return None;
                         }
                     }
@@ -1225,6 +1231,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
                             .map(|script| extract_raw_data(&script).len())
                             .unwrap_or_default();
                         if script_len < r0 || script_len > r1 {
+                            log::trace!("break at {}", line!());
                             return None;
                         }
                     }
@@ -1233,6 +1240,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
 
             if let Some([r0, r1]) = filter_output_data_len_range {
                 if output_data.len() < r0 || output_data.len() >= r1 {
+                    log::trace!("break at {}", line!());
                     return None;
                 }
             }
@@ -1240,16 +1248,18 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
             if let Some([r0, r1]) = filter_output_capacity_range {
                 let capacity: core::Capacity = output.capacity().unpack();
                 if capacity < r0 || capacity >= r1 {
+                    log::trace!("break at {}", line!());
                     return None;
                 }
             }
 
             if let Some([r0, r1]) = filter_block_range {
                 if block_number < r0 || block_number >= r1 {
+                    log::trace!("break at {}", line!());
                     return None;
                 }
             }
-
+            log::trace!("Returning normally at {:?}", key);
             Some(key.to_vec())
         }),
         usize::MAX,
@@ -1286,6 +1296,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
         .expect("snapshot get last state should be ok")
         .map(|data| packed::HeaderReader::from_slice_should_be_ok(&data[32..]).to_entity())
         .expect("tip header should be inited");
+    log::trace!("Get cells capacity done");
     Ok((CellsCapacity {
         capacity: capacity.into(),
         block_hash: tip_header.calc_header_hash().unpack(),
