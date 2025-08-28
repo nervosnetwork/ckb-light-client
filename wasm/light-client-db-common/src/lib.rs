@@ -63,6 +63,7 @@ pub enum DbCommandRequest {
     },
 }
 #[repr(i32)]
+#[derive(Debug)]
 /// Represent a 4-byte command which will be put in input buffer
 pub enum InputCommand {
     /// Indicates that there is no command and light client is waiting for next call
@@ -81,6 +82,9 @@ pub enum InputCommand {
     /// Used for response from take_while, not for users
     /// Payload: result of the call, in bool, bincode-encoded
     ResponseTakeWhile = 20,
+    /// Used for response from filter_map, not for users
+    /// Payload: result of the call, in Option<Vec<u8>>, bincode-encoded
+    ResponseFilterMap = 21,
 }
 
 impl TryFrom<i32> for InputCommand {
@@ -93,12 +97,14 @@ impl TryFrom<i32> for InputCommand {
             2 => Ok(Self::DbRequest),
             3 => Ok(Self::Shutdown),
             20 => Ok(Self::ResponseTakeWhile),
+            21 => Ok(Self::ResponseFilterMap),
             s => Err(anyhow!("Invalid command: {}", s)),
         }
     }
 }
 
 #[repr(i32)]
+#[derive(Debug)]
 /// Represent a 4-byte command which will be put in output buffer
 pub enum OutputCommand {
     /// Waiting for db worker to handle the command
@@ -116,6 +122,9 @@ pub enum OutputCommand {
     /// DbWorker wants to call take_while
     /// Payload: bincode-encoded bytes, argument of take_while
     RequestTakeWhile = 20,
+    /// DbWorker wants to call filter_map
+    /// Payload: bincode-encoded bytes, argument of filter_map
+    RequestFilterMap = 21,
 }
 
 impl TryFrom<i32> for OutputCommand {
@@ -128,6 +137,7 @@ impl TryFrom<i32> for OutputCommand {
             2 => Ok(Self::DbResponse),
             10 => Ok(Self::Error),
             20 => Ok(Self::RequestTakeWhile),
+            21 => Ok(Self::RequestFilterMap),
             s => Err(anyhow!("Invalid command: {}", s)),
         }
     }
