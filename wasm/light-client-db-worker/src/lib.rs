@@ -168,7 +168,10 @@ pub async fn main_loop(log_level: &str) {
                                             Some(store),
                                         )
                                         .await;
-                                        log::trace!("db command result at filter map: {:?}", db_result);
+                                        log::trace!(
+                                            "db command result at filter map: {:?}",
+                                            db_result
+                                        );
                                         input_i32_arr.set_index(0, InputCommand::Waiting as i32);
                                         match db_result {
                                             Ok(o) => write_command_with_payload(
