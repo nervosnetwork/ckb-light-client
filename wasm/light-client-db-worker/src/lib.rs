@@ -141,10 +141,14 @@ pub async fn main_loop(log_level: &str) {
                                 match wait_for_command_sync(&input_i32_arr, InputCommand::Waiting)
                                     .unwrap()
                                 {
-                                    InputCommand::Waiting
+                                    s @ (InputCommand::Waiting
                                     | InputCommand::OpenDatabase
                                     | InputCommand::Shutdown
-                                    | InputCommand::ResponseTakeWhile => {
+                                    | InputCommand::ResponseTakeWhile) => {
+                                        log::warn!(
+                                            "Unreachable branch at light-client-db-worker: {:?}",
+                                            s
+                                        );
                                         unreachable!()
                                     }
                                     // Allow calling other db requests in filter map call
@@ -228,9 +232,8 @@ pub async fn main_loop(log_level: &str) {
                 };
             }
             InputCommand::Shutdown => break,
-            InputCommand::Waiting
-            | InputCommand::ResponseTakeWhile
-            | InputCommand::ResponseFilterMap => unreachable!(),
+            InputCommand::Waiting => continue,
+            InputCommand::ResponseTakeWhile | InputCommand::ResponseFilterMap => unreachable!(),
         }
     }
     info!("Db worker main loop exited");

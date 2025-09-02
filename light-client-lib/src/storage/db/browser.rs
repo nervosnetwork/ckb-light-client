@@ -224,10 +224,13 @@ impl CommunicationChannel {
         loop {
             Atomics::wait(output_i32_arr, 0, OutputCommand::Waiting as i32).unwrap();
             let output_cmd = OutputCommand::try_from(output_i32_arr.get_index(0)).unwrap();
-            output_i32_arr.set_index(0, 0);
+            output_i32_arr.set_index(0, OutputCommand::Waiting as i32);
             log::trace!("Received output command: {:?}", output_cmd);
             match output_cmd {
-                OutputCommand::OpenDatabaseResponse | OutputCommand::Waiting => unreachable!(),
+                s @ (OutputCommand::OpenDatabaseResponse | OutputCommand::Waiting) => {
+                    log::warn!("Unreachable at light-client-lib: {:?}", s);
+                    continue;
+                }
                 OutputCommand::RequestTakeWhile => {
                     let arg = read_command_payload::<Vec<u8>>(output_i32_arr, output_u8_arr)?;
                     let ok = take_while.as_ref().unwrap()(&arg);
@@ -264,10 +267,9 @@ impl CommunicationChannel {
                 }
 
                 OutputCommand::DbResponse => {
-                    return read_command_payload::<DbCommandResponse>(
-                        output_i32_arr,
-                        output_u8_arr,
-                    );
+                    let result =
+                        read_command_payload::<DbCommandResponse>(output_i32_arr, output_u8_arr);
+                    return result;
                 }
                 OutputCommand::Error => {
                     let payload = read_command_payload::<String>(output_i32_arr, output_u8_arr)?;
