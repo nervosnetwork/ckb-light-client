@@ -227,7 +227,7 @@ impl CommunicationChannel {
             output_i32_arr.set_index(0, 0);
             log::trace!("Received output command: {:?}", output_cmd);
             match output_cmd {
-                OutputCommand::OpenDatabaseResponse | OutputCommand::Waiting => unreachable!(),
+                OutputCommand::OpenDatabaseResponse | OutputCommand::Waiting => continue,
                 OutputCommand::RequestTakeWhile => {
                     let arg = read_command_payload::<Vec<u8>>(output_i32_arr, output_u8_arr)?;
                     let ok = take_while.as_ref().unwrap()(&arg);
