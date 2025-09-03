@@ -92,6 +92,7 @@ impl Storage {
         self.db.delete(key).map_err(Into::into)
     }
     /// filter_map is not used on RocksDB implementation
+    #[allow(clippy::type_complexity)]
     pub fn collect_iterator(
         &self,
         start_key_bound: Vec<u8>,
@@ -116,7 +117,7 @@ impl Storage {
                 },
                 mode,
             )
-            .take_while(|(key, _)| take_while(&key))
+            .take_while(|(key, _)| take_while(key))
             .take(limit)
             .skip(skip)
             .map(|(key, value)| KV {
@@ -125,7 +126,7 @@ impl Storage {
             })
             .collect::<Vec<_>>()
     }
-
+    #[allow(clippy::type_complexity)]
     pub fn collect_iterator_key(
         &self,
         start_key_bound: Vec<u8>,
@@ -150,7 +151,7 @@ impl Storage {
                 },
                 mode,
             )
-            .take_while(|(key, _)| take_while(&key))
+            .take_while(|(key, _)| take_while(key))
             .take(limit)
             .skip(skip)
             .map(|(key, _)| key.to_vec())
