@@ -26,9 +26,9 @@ use ckb_types::{
 pub use idb::CursorDirection;
 use light_client_db_common::{
     idb_cursor_direction_to_ckb, read_command_payload, write_command_with_payload,
-    DbCommandRequest, DbCommandResponse, InputCommand, OutputCommand, KV,
+    DbCommandRequest, DbCommandResponse, InputCommand, OutputCommand,
 };
-
+pub use light_client_db_common::KV;
 use log::debug;
 
 use crate::{
@@ -366,70 +366,167 @@ impl Storage {
             .map(|_| ())
             .map_err(|e| Error::Indexdb(format!("{:?}", e)))
     }
-    pub fn is_filter_scripts_empty(&self) -> bool {
-        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
-
-        let value = match self.channel.dispatch_database_command(
-            CommandRequestWithTakeWhileAndFilterMap::IteratorKey {
-                start_key_bound: key_prefix.clone(),
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: 1,
-                skip: 0,
-            },
-        ) {
-            Ok(v) => v,
-            Err(_) => return false,
-        };
-
-        if let DbCommandResponse::IteratorKey { keys } = value {
-            keys.is_empty()
+    #[allow(clippy::type_complexity)]
+    pub fn collect_iterator(
+        &self,
+        start_key_bound: Vec<u8>,
+        order: CursorDirection,
+        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
+        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        limit: usize,
+        skip: usize,
+    ) -> Vec<KV> {
+        let value = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
+                start_key_bound,
+                order,
+                take_while,
+                filter_map,
+                limit,
+                skip,
+            })
+            .unwrap();
+        if let DbCommandResponse::Iterator { kvs } = value {
+            kvs
         } else {
             unreachable!()
         }
     }
-    pub fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
-        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
-        let key_prefix_clone = key_prefix.clone();
+    #[allow(clippy::type_complexity)]
+    pub fn collect_iterator_key(
+        &self,
+        start_key_bound: Vec<u8>,
+        order: CursorDirection,
+        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
+        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        limit: usize,
+        skip: usize,
+    ) -> Vec<Vec<u8>> {
         let value = self
             .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: key_prefix_clone.clone(),
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: usize::MAX,
-                skip: 0,
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::IteratorKey {
+                start_key_bound,
+                order,
+                take_while,
+                filter_map,
+                limit,
+                skip,
             })
             .unwrap();
-        debug!("raw get filter script response: {:#?}", value);
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs.into_iter()
-                .map(|kv| (kv.key, kv.value))
-                .map(|(key, value)| {
-                    let script = Script::from_slice(&key[key_prefix.len()..key.len() - 1])
-                        .expect("stored Script");
-                    let script_type = match key[key.len() - 1] {
-                        0 => ScriptType::Lock,
-                        1 => ScriptType::Type,
-                        _ => panic!("invalid script type"),
-                    };
-                    let block_number = BlockNumber::from_be_bytes(
-                        AsRef::<[u8]>::as_ref(&value)
-                            .try_into()
-                            .expect("stored BlockNumber"),
-                    );
-                    ScriptStatus {
-                        script,
-                        script_type,
-                        block_number,
-                    }
-                })
-                .collect()
+        if let DbCommandResponse::IteratorKey { keys } = value {
+            keys
         } else {
             unreachable!()
         }
+    }
+}
+
+pub struct Batch {
+    add: Vec<KV>,
+    delete: Vec<Vec<u8>>,
+    comm_arrays: CommunicationChannel,
+}
+
+impl Batch {
+    fn put_kv<K: Into<Vec<u8>>, V: Into<Vec<u8>>>(&mut self, key: K, value: V) -> Result<()> {
+        self.add.push(KV {
+            key: key.into(),
+            value: value.into(),
+        });
+        Ok(())
+    }
+
+    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, value: V) -> Result<()> {
+        self.add.push(KV {
+            key: key.as_ref().to_vec(),
+            value: value.as_ref().to_vec(),
+        });
+        Ok(())
+    }
+
+    fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<()> {
+        self.delete.push(key.as_ref().to_vec());
+        Ok(())
+    }
+
+    fn delete_many(&mut self, keys: Vec<Vec<u8>>) -> Result<()> {
+        self.comm_arrays
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete { keys })
+            .map(|_| ())
+            .map_err(|e| Error::Indexdb(format!("{:?}", e)))
+    }
+
+    fn commit(self) -> Result<()> {
+        if !self.add.is_empty() {
+            self.comm_arrays
+                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Put {
+                    kvs: self.add,
+                })
+                .map(|_| ())
+                .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
+        }
+
+        if !self.delete.is_empty() {
+            self.comm_arrays
+                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete {
+                    keys: self.delete,
+                })
+                .map(|_| ())
+                .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
+        }
+
+        Ok(())
+    }
+}
+
+impl Storage {
+    pub fn is_filter_scripts_empty(&self) -> bool {
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+
+        self.collect_iterator_key(
+            key_prefix.clone(),
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
+            Box::new(|s| Some(s.to_vec())),
+            1,
+            0,
+        )
+        .is_empty()
+    }
+    pub fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
+        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+        let key_prefix_clone = key_prefix.clone();
+        self.collect_iterator(
+            key_prefix_clone.clone(),
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
+            Box::new(|s| Some(s.to_vec())),
+            usize::MAX,
+            0,
+        )
+        .into_iter()
+        .map(|kv| (kv.key, kv.value))
+        .map(|(key, value)| {
+            let script =
+                Script::from_slice(&key[key_prefix.len()..key.len() - 1]).expect("stored Script");
+            let script_type = match key[key.len() - 1] {
+                0 => ScriptType::Lock,
+                1 => ScriptType::Type,
+                _ => panic!("invalid script type"),
+            };
+            let block_number = BlockNumber::from_be_bytes(
+                AsRef::<[u8]>::as_ref(&value)
+                    .try_into()
+                    .expect("stored BlockNumber"),
+            );
+            ScriptStatus {
+                script,
+                script_type,
+                block_number,
+            }
+        })
+        .collect()
     }
     pub fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
         let mut should_filter_genesis_block = false;
@@ -441,28 +538,15 @@ impl Storage {
                 should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
 
                 let key_prefix_clone = key_prefix.clone();
-                let remove_keys = self
-                    .channel
-                    .dispatch_database_command(
-                        CommandRequestWithTakeWhileAndFilterMap::IteratorKey {
-                            start_key_bound: key_prefix_clone.clone(),
-                            order: CursorDirection::NextUnique,
-                            take_while: Box::new(move |raw_key: &[u8]| {
-                                raw_key.starts_with(&key_prefix_clone)
-                            }),
-                            filter_map: Box::new(|s| Some(s.to_vec())),
-                            limit: usize::MAX,
-                            skip: 0,
-                        },
-                    )
-                    .unwrap();
-                debug!("Received {:?}", remove_keys);
-                if let DbCommandResponse::IteratorKey { keys } = remove_keys {
-                    batch.delete_many(keys).unwrap();
-                } else {
-                    unreachable!()
-                }
-
+                let remove_keys = self.collect_iterator_key(
+                    key_prefix_clone.clone(),
+                    CursorDirection::NextUnique,
+                    Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
+                    Box::new(|s| Some(s.to_vec())),
+                    usize::MAX,
+                    0,
+                );
+                batch.delete_many(remove_keys).unwrap();
                 for ss in scripts {
                     let key = [
                         key_prefix.as_ref(),
@@ -533,75 +617,61 @@ impl Storage {
     fn update_min_filtered_block_number_by_scripts(&self) {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: key_prefix.clone(),
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: usize::MAX,
-                skip: 0,
+        let value = self.collect_iterator(
+            key_prefix.clone(),
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
+            Box::new(|s| Some(s.to_vec())),
+            usize::MAX,
+            0,
+        );
+
+        let min_block_number = value
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .map(|(_key, value)| {
+                BlockNumber::from_be_bytes(
+                    AsRef::<[u8]>::as_ref(&value)
+                        .try_into()
+                        .expect("stored BlockNumber"),
+                )
             })
-            .unwrap();
+            .min();
 
-        if let DbCommandResponse::Iterator { kvs } = value {
-            let min_block_number = kvs
-                .into_iter()
-                .map(|kv| (kv.key, kv.value))
-                .map(|(_key, value)| {
-                    BlockNumber::from_be_bytes(
-                        AsRef::<[u8]>::as_ref(&value)
-                            .try_into()
-                            .expect("stored BlockNumber"),
-                    )
-                })
-                .min();
-
-            if let Some(n) = min_block_number {
-                self.update_min_filtered_block_number(n);
-            }
-        } else {
-            unreachable!()
+        if let Some(n) = min_block_number {
+            self.update_min_filtered_block_number(n);
         }
     }
     pub fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 
         let key_prefix_clone = key_prefix.clone();
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: key_prefix_clone.clone(),
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: usize::MAX,
-                skip: 0,
+        let value = self.collect_iterator(
+            key_prefix_clone.clone(),
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
+            Box::new(|s| Some(s.to_vec())),
+            usize::MAX,
+            0,
+        );
+        value
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .filter_map(|(key, value)| {
+                let stored_block_number = BlockNumber::from_be_bytes(
+                    AsRef::<[u8]>::as_ref(&value)
+                        .try_into()
+                        .expect("stored BlockNumber"),
+                );
+                if stored_block_number < block_number {
+                    let script = Script::from_slice(&key[key_prefix.len()..key.len() - 1])
+                        .expect("stored Script");
+                    Some(script.calc_script_hash())
+                } else {
+                    None
+                }
             })
-            .unwrap();
-
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs.into_iter()
-                .map(|kv| (kv.key, kv.value))
-                .filter_map(|(key, value)| {
-                    let stored_block_number = BlockNumber::from_be_bytes(
-                        AsRef::<[u8]>::as_ref(&value)
-                            .try_into()
-                            .expect("stored BlockNumber"),
-                    );
-                    if stored_block_number < block_number {
-                        let script = Script::from_slice(&key[key_prefix.len()..key.len() - 1])
-                            .expect("stored Script");
-                        Some(script.calc_script_hash())
-                    } else {
-                        None
-                    }
-                })
-                .collect()
-        } else {
-            unreachable!()
-        }
+            .collect()
     }
     fn clear_matched_blocks(&self) {
         debug!(
@@ -612,23 +682,17 @@ impl Storage {
 
         let mut batch = self.batch();
 
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::IteratorKey {
-                start_key_bound: key_prefix.clone(),
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: usize::MAX,
-                skip: 0,
-            })
-            .unwrap();
-        if let DbCommandResponse::IteratorKey { keys } = value {
-            batch.delete_many(keys).unwrap();
-            batch.commit().unwrap();
-        } else {
-            unreachable!()
-        }
+        let value = self.collect_iterator_key(
+            key_prefix.clone(),
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
+            Box::new(|s| Some(s.to_vec())),
+            usize::MAX,
+            0,
+        );
+
+        batch.delete_many(value).unwrap();
+        batch.commit().unwrap();
     }
     #[allow(clippy::type_complexity)]
     fn get_matched_blocks(
@@ -648,31 +712,26 @@ impl Storage {
 
         let key_prefix_clone = key_prefix.clone();
 
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: iter_from,
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: 1,
-                skip: 0,
+        let value = self.collect_iterator(
+            iter_from,
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
+            Box::new(|s| Some(s.to_vec())),
+            1,
+            0,
+        );
+
+        value
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .map(|(key, value)| {
+                let mut u64_bytes = [0u8; 8];
+                u64_bytes.copy_from_slice(&key[key_prefix.len()..]);
+                let start_number = u64::from_be_bytes(u64_bytes);
+                let (blocks_count, blocks) = parse_matched_blocks(&value);
+                (start_number, blocks_count, blocks)
             })
-            .unwrap();
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs.into_iter()
-                .map(|kv| (kv.key, kv.value))
-                .map(|(key, value)| {
-                    let mut u64_bytes = [0u8; 8];
-                    u64_bytes.copy_from_slice(&key[key_prefix.len()..]);
-                    let start_number = u64::from_be_bytes(u64_bytes);
-                    let (blocks_count, blocks) = parse_matched_blocks(&value);
-                    (start_number, blocks_count, blocks)
-                })
-                .next()
-        } else {
-            unreachable!()
-        }
+            .next()
     }
     #[allow(clippy::type_complexity)]
     pub fn get_earliest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
@@ -692,60 +751,48 @@ impl Storage {
         let start_key = Key::CheckPointIndex(start_index).into_vec();
         let key_prefix = [KeyPrefix::CheckPointIndex as u8];
 
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: start_key,
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit,
-                skip: 0,
-            })
-            .unwrap();
-
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs.into_iter()
-                .map(|kv| (kv.key, kv.value))
-                .map(|(_key, value)| Byte32::from_slice(&value).expect("stored block filter hash"))
-                .collect()
-        } else {
-            unreachable!()
-        }
+        let value = self.collect_iterator(
+            start_key,
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
+            Box::new(|s| Some(s.to_vec())),
+            limit,
+            0,
+        );
+        value
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .map(|(_key, value)| Byte32::from_slice(&value).expect("stored block filter hash"))
+            .collect()
     }
     pub fn update_block_number(&self, block_number: BlockNumber) {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mut batch = self.batch();
 
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: key_prefix.clone(),
-                order: CursorDirection::NextUnique,
-                take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: usize::MAX,
-                skip: 0,
-            })
-            .unwrap();
-
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs.into_iter()
-                .map(|kv| (kv.key, kv.value))
-                .for_each(|(key, value)| {
-                    let stored_block_number = BlockNumber::from_be_bytes(
-                        AsRef::<[u8]>::as_ref(&value)
-                            .try_into()
-                            .expect("stored BlockNumber"),
-                    );
-                    if stored_block_number < block_number {
-                        batch
-                            .put(key, block_number.to_be_bytes())
-                            .expect("batch put should be ok")
-                    }
-                });
-            batch.commit().expect("batch commit should be ok");
-        }
+        let value = self.collect_iterator(
+            key_prefix.clone(),
+            CursorDirection::NextUnique,
+            Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
+            Box::new(|s| Some(s.to_vec())),
+            usize::MAX,
+            0,
+        );
+        value
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .for_each(|(key, value)| {
+                let stored_block_number = BlockNumber::from_be_bytes(
+                    AsRef::<[u8]>::as_ref(&value)
+                        .try_into()
+                        .expect("stored BlockNumber"),
+                );
+                if stored_block_number < block_number {
+                    batch
+                        .put(key, block_number.to_be_bytes())
+                        .expect("batch put should be ok")
+                }
+            });
+        batch.commit().expect("batch commit should be ok");
     }
     pub fn rollback_to_block(&self, to_number: BlockNumber) {
         let scripts = self.get_filter_scripts();
@@ -762,142 +809,132 @@ impl Storage {
                 let mut start_key = key_prefix.clone();
                 start_key.extend_from_slice(BlockNumber::MAX.to_be_bytes().as_ref());
                 let key_prefix_len = key_prefix.len();
-
-                let value = self
-                    .channel
-                    .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                        start_key_bound: key_prefix.clone(),
-                        order: CursorDirection::PrevUnique,
-                        take_while: Box::new(move |raw_key: &[u8]| {
-                            raw_key.starts_with(&key_prefix)
-                                && BlockNumber::from_be_bytes(
-                                    raw_key[key_prefix_len..key_prefix_len + 8]
-                                        .try_into()
-                                        .expect("stored BlockNumber"),
-                                ) >= to_number
-                        }),
-                        filter_map: Box::new(|s| Some(s.to_vec())),
-                        limit: usize::MAX,
-                        skip: 0,
-                    })
-                    .unwrap();
-
-                if let DbCommandResponse::Iterator { kvs } = value {
-                    for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
-                        let block_number = BlockNumber::from_be_bytes(
-                            key[key_prefix_len..key_prefix_len + 8]
-                                .try_into()
-                                .expect("stored BlockNumber"),
-                        );
-                        log::debug!("rollback {}", block_number);
-                        let tx_index = TxIndex::from_be_bytes(
-                            key[key_prefix_len + 8..key_prefix_len + 12]
-                                .try_into()
-                                .expect("stored TxIndex"),
-                        );
-                        let cell_index = CellIndex::from_be_bytes(
-                            key[key_prefix_len + 12..key_prefix_len + 16]
-                                .try_into()
-                                .expect("stored CellIndex"),
-                        );
-                        let tx_hash =
-                            packed::Byte32Reader::from_slice_should_be_ok(&value).to_entity();
-                        if key[key_prefix_len + 16] == 0 {
-                            let (_, _, tx) = self
-                                .get_transaction(&tx_hash)
-                                .expect("stored transaction history");
-                            let input = tx.raw().inputs().get(cell_index as usize).unwrap();
-                            if let Some((
-                                generated_by_block_number,
-                                generated_by_tx_index,
-                                _previous_tx,
-                            )) = self.get_transaction(&input.previous_output().tx_hash())
-                            {
-                                let key = match ss.script_type {
-                                    ScriptType::Lock => Key::CellLockScript(
-                                        &script,
-                                        generated_by_block_number,
-                                        generated_by_tx_index,
-                                        input.previous_output().index().unpack(),
-                                    ),
-                                    ScriptType::Type => Key::CellTypeScript(
-                                        &script,
-                                        generated_by_block_number,
-                                        generated_by_tx_index,
-                                        input.previous_output().index().unpack(),
-                                    ),
-                                };
-                                batch
-                                    .put_kv(key, input.previous_output().tx_hash().as_slice())
-                                    .expect("batch put should be ok");
+                let value = self.collect_iterator(
+                    key_prefix.clone(),
+                    CursorDirection::PrevUnique,
+                    Box::new(move |raw_key: &[u8]| {
+                        raw_key.starts_with(&key_prefix)
+                            && BlockNumber::from_be_bytes(
+                                raw_key[key_prefix_len..key_prefix_len + 8]
+                                    .try_into()
+                                    .expect("stored BlockNumber"),
+                            ) >= to_number
+                    }),
+                    Box::new(|s| Some(s.to_vec())),
+                    usize::MAX,
+                    0,
+                );
+                for (key, value) in value.into_iter().map(|kv| (kv.key, kv.value)) {
+                    let block_number = BlockNumber::from_be_bytes(
+                        key[key_prefix_len..key_prefix_len + 8]
+                            .try_into()
+                            .expect("stored BlockNumber"),
+                    );
+                    log::debug!("rollback {}", block_number);
+                    let tx_index = TxIndex::from_be_bytes(
+                        key[key_prefix_len + 8..key_prefix_len + 12]
+                            .try_into()
+                            .expect("stored TxIndex"),
+                    );
+                    let cell_index = CellIndex::from_be_bytes(
+                        key[key_prefix_len + 12..key_prefix_len + 16]
+                            .try_into()
+                            .expect("stored CellIndex"),
+                    );
+                    let tx_hash = packed::Byte32Reader::from_slice_should_be_ok(&value).to_entity();
+                    if key[key_prefix_len + 16] == 0 {
+                        let (_, _, tx) = self
+                            .get_transaction(&tx_hash)
+                            .expect("stored transaction history");
+                        let input = tx.raw().inputs().get(cell_index as usize).unwrap();
+                        if let Some((
+                            generated_by_block_number,
+                            generated_by_tx_index,
+                            _previous_tx,
+                        )) = self.get_transaction(&input.previous_output().tx_hash())
+                        {
+                            let key = match ss.script_type {
+                                ScriptType::Lock => Key::CellLockScript(
+                                    &script,
+                                    generated_by_block_number,
+                                    generated_by_tx_index,
+                                    input.previous_output().index().unpack(),
+                                ),
+                                ScriptType::Type => Key::CellTypeScript(
+                                    &script,
+                                    generated_by_block_number,
+                                    generated_by_tx_index,
+                                    input.previous_output().index().unpack(),
+                                ),
                             };
-                            // delete tx history
-                            let key = match ss.script_type {
-                                ScriptType::Lock => Key::TxLockScript(
-                                    &script,
-                                    block_number,
-                                    tx_index,
-                                    cell_index,
-                                    CellType::Input,
-                                ),
-                                ScriptType::Type => Key::TxTypeScript(
-                                    &script,
-                                    block_number,
-                                    tx_index,
-                                    cell_index,
-                                    CellType::Input,
-                                ),
-                            }
-                            .into_vec();
-                            batch.delete(key).expect("batch delete should be ok");
-                        } else {
-                            // delete utxo
-                            let key = match ss.script_type {
-                                ScriptType::Lock => {
-                                    Key::CellLockScript(&script, block_number, tx_index, cell_index)
-                                }
-                                ScriptType::Type => {
-                                    Key::CellTypeScript(&script, block_number, tx_index, cell_index)
-                                }
-                            }
-                            .into_vec();
-                            batch.delete(key).expect("batch delete should be ok");
-
-                            // delete tx history
-                            let key = match ss.script_type {
-                                ScriptType::Lock => Key::TxLockScript(
-                                    &script,
-                                    block_number,
-                                    tx_index,
-                                    cell_index,
-                                    CellType::Output,
-                                ),
-                                ScriptType::Type => Key::TxTypeScript(
-                                    &script,
-                                    block_number,
-                                    tx_index,
-                                    cell_index,
-                                    CellType::Output,
-                                ),
-                            }
-                            .into_vec();
-                            batch.delete(key).expect("batch delete should be ok");
+                            batch
+                                .put_kv(key, input.previous_output().tx_hash().as_slice())
+                                .expect("batch put should be ok");
                         };
-                    }
+                        // delete tx history
+                        let key = match ss.script_type {
+                            ScriptType::Lock => Key::TxLockScript(
+                                &script,
+                                block_number,
+                                tx_index,
+                                cell_index,
+                                CellType::Input,
+                            ),
+                            ScriptType::Type => Key::TxTypeScript(
+                                &script,
+                                block_number,
+                                tx_index,
+                                cell_index,
+                                CellType::Input,
+                            ),
+                        }
+                        .into_vec();
+                        batch.delete(key).expect("batch delete should be ok");
+                    } else {
+                        // delete utxo
+                        let key = match ss.script_type {
+                            ScriptType::Lock => {
+                                Key::CellLockScript(&script, block_number, tx_index, cell_index)
+                            }
+                            ScriptType::Type => {
+                                Key::CellTypeScript(&script, block_number, tx_index, cell_index)
+                            }
+                        }
+                        .into_vec();
+                        batch.delete(key).expect("batch delete should be ok");
 
-                    // update script filter block number
-                    {
-                        let mut key = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
-                        key.extend_from_slice(script.as_slice());
-                        key.extend_from_slice(match ss.script_type {
-                            ScriptType::Lock => &[0],
-                            ScriptType::Type => &[1],
-                        });
-                        let value = to_number.to_be_bytes().to_vec();
-                        batch.put(key, value).expect("batch put should be ok");
-                    }
-                } else {
-                    unreachable!()
+                        // delete tx history
+                        let key = match ss.script_type {
+                            ScriptType::Lock => Key::TxLockScript(
+                                &script,
+                                block_number,
+                                tx_index,
+                                cell_index,
+                                CellType::Output,
+                            ),
+                            ScriptType::Type => Key::TxTypeScript(
+                                &script,
+                                block_number,
+                                tx_index,
+                                cell_index,
+                                CellType::Output,
+                            ),
+                        }
+                        .into_vec();
+                        batch.delete(key).expect("batch delete should be ok");
+                    };
+                }
+
+                // update script filter block number
+                {
+                    let mut key = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+                    key.extend_from_slice(script.as_slice());
+                    key.extend_from_slice(match ss.script_type {
+                        ScriptType::Lock => &[0],
+                        ScriptType::Type => &[1],
+                    });
+                    let value = to_number.to_be_bytes().to_vec();
+                    batch.put(key, value).expect("batch put should be ok");
                 }
             }
         }
@@ -912,94 +949,6 @@ impl Storage {
         }
 
         batch.commit().expect("batch commit should be ok");
-    }
-}
-
-pub struct Batch {
-    add: Vec<KV>,
-    delete: Vec<Vec<u8>>,
-    comm_arrays: CommunicationChannel,
-}
-
-impl Batch {
-    fn put_kv<K: Into<Vec<u8>>, V: Into<Vec<u8>>>(&mut self, key: K, value: V) -> Result<()> {
-        self.add.push(KV {
-            key: key.into(),
-            value: value.into(),
-        });
-        Ok(())
-    }
-
-    fn put<K: AsRef<[u8]>, V: AsRef<[u8]>>(&mut self, key: K, value: V) -> Result<()> {
-        self.add.push(KV {
-            key: key.as_ref().to_vec(),
-            value: value.as_ref().to_vec(),
-        });
-        Ok(())
-    }
-
-    fn delete<K: AsRef<[u8]>>(&mut self, key: K) -> Result<()> {
-        self.delete.push(key.as_ref().to_vec());
-        Ok(())
-    }
-
-    fn delete_many(&mut self, keys: Vec<Vec<u8>>) -> Result<()> {
-        self.comm_arrays
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete { keys })
-            .map(|_| ())
-            .map_err(|e| Error::Indexdb(format!("{:?}", e)))
-    }
-
-    fn commit(self) -> Result<()> {
-        if !self.add.is_empty() {
-            self.comm_arrays
-                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Put {
-                    kvs: self.add,
-                })
-                .map(|_| ())
-                .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
-        }
-
-        if !self.delete.is_empty() {
-            self.comm_arrays
-                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete {
-                    keys: self.delete,
-                })
-                .map(|_| ())
-                .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
-        }
-
-        Ok(())
-    }
-}
-
-impl Storage {
-    #[allow(clippy::type_complexity)]
-    pub fn collect_iterator(
-        &self,
-        start_key_bound: Vec<u8>,
-        order: CursorDirection,
-        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
-        limit: usize,
-        skip: usize,
-    ) -> Vec<KV> {
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound,
-                order,
-                take_while,
-                filter_map,
-                limit,
-                skip,
-            })
-            .unwrap();
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs
-        } else {
-            unreachable!()
-        }
     }
     pub fn init_genesis_block(&self, block: Block) {
         let genesis_hash = block.calc_header_hash();
