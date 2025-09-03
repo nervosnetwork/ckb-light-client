@@ -2,7 +2,14 @@ use std::{cell::RefCell, path::Path, sync::atomic::AtomicBool};
 
 use anyhow::{anyhow, bail, Context};
 
-use ckb_types::{core::{cell::{CellMeta, CellStatus}, HeaderView, TransactionInfo}, packed::{Byte32, CellOutput, Header, OutPoint}, prelude::{Entity, IntoHeaderView, IntoTransactionView, Unpack}};
+use ckb_types::{
+    core::{
+        cell::{CellMeta, CellStatus},
+        HeaderView, TransactionInfo,
+    },
+    packed::{Byte32, CellOutput, Header, OutPoint},
+    prelude::{Entity, IntoHeaderView, IntoTransactionView, Unpack},
+};
 pub use idb::CursorDirection;
 pub use light_client_db_common::KV;
 use light_client_db_common::{
@@ -11,7 +18,10 @@ use light_client_db_common::{
 };
 use log::debug;
 
-use crate::{error::{Error, Result}, storage::Key};
+use crate::{
+    error::{Error, Result},
+    storage::Key,
+};
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::js_sys::{Atomics, Int32Array, SharedArrayBuffer, Uint8Array};
 enum CommandRequestWithTakeWhileAndFilterMap {
