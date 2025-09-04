@@ -35,7 +35,8 @@ impl Storage {
             1,
             0,
         )
-        .is_empty()
+        .next()
+        .is_none()
     }
 
     pub fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
@@ -49,7 +50,6 @@ impl Storage {
             usize::MAX,
             0,
         )
-        .into_iter()
         .map(|kv| (kv.key, kv.value))
         .map(|(key, value)| {
             let script =
@@ -89,7 +89,6 @@ impl Storage {
                     usize::MAX,
                     0,
                 )
-                .into_iter()
                 .for_each(|key| batch.delete(key).expect("batch delete should be ok"));
                 for ss in scripts {
                     let key = [
@@ -171,7 +170,6 @@ impl Storage {
                 usize::MAX,
                 0,
             )
-            .into_iter()
             .map(|kv| {
                 BlockNumber::from_be_bytes(
                     AsRef::<[u8]>::as_ref(&kv.value)

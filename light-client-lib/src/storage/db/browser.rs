@@ -357,7 +357,7 @@ impl Storage {
         filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
-    ) -> Vec<KV> {
+    ) -> impl Iterator<Item = KV> {
         let value = self
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
@@ -370,7 +370,7 @@ impl Storage {
             })
             .unwrap();
         if let DbCommandResponse::Iterator { kvs } = value {
-            kvs
+            kvs.into_iter()
         } else {
             unreachable!()
         }
@@ -384,7 +384,7 @@ impl Storage {
         filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
-    ) -> Vec<Vec<u8>> {
+    ) -> impl Iterator<Item = Vec<u8>> {
         let value = self
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::IteratorKey {
@@ -397,7 +397,7 @@ impl Storage {
             })
             .unwrap();
         if let DbCommandResponse::IteratorKey { keys } = value {
-            keys
+            keys.into_iter()
         } else {
             unreachable!()
         }

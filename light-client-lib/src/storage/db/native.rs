@@ -101,7 +101,7 @@ impl Storage {
         _filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
-    ) -> Vec<KV> {
+    ) -> impl Iterator<Item = KV> + use<'_> {
         let mode = match order {
             CursorDirection::NextUnique => IteratorMode::From(&start_key_bound, Direction::Forward),
             CursorDirection::PrevUnique => IteratorMode::From(&start_key_bound, Direction::Reverse),
@@ -117,14 +117,13 @@ impl Storage {
                 },
                 mode,
             )
-            .take_while(|(key, _)| take_while(key))
+            .take_while(move |(key, _)| take_while(key))
             .take(limit)
             .skip(skip)
             .map(|(key, value)| KV {
                 key: key.to_vec(),
                 value: value.to_vec(),
             })
-            .collect::<Vec<_>>()
     }
     #[allow(clippy::type_complexity)]
     pub fn collect_iterator_key(
@@ -135,7 +134,7 @@ impl Storage {
         _filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
-    ) -> Vec<Vec<u8>> {
+    ) -> impl Iterator<Item = Vec<u8>> + use<'_> {
         let mode = match order {
             CursorDirection::NextUnique => IteratorMode::From(&start_key_bound, Direction::Forward),
             CursorDirection::PrevUnique => IteratorMode::From(&start_key_bound, Direction::Reverse),
@@ -151,11 +150,10 @@ impl Storage {
                 },
                 mode,
             )
-            .take_while(|(key, _)| take_while(key))
+            .take_while(move |(key, _)| take_while(key))
             .take(limit)
             .skip(skip)
             .map(|(key, _)| key.to_vec())
-            .collect::<Vec<_>>()
     }
 }
 
