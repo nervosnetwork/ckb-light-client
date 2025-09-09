@@ -4,6 +4,7 @@ on:
     branches: [ master, develop ]
   pull_request:
     branches: [ master, develop ]
+  workflow_dispatch: 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
@@ -76,6 +77,10 @@ jobs:
           echo "LIBCLANG_PATH=$($HOME)/scoop/apps/llvm/current/bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "$env:USERPROFILE\scoop\shims" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           scoop install llvm yasm
+      - name: Setup stack size on Windows
+        if: matrix.os == 'windows-2022'
+        run: |
+          $env:RUSTFLAGS="-C link-args=/STACK:67108864"
       - name: Build
         run: make build
       - name: UnitTest
