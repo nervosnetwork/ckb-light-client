@@ -710,7 +710,7 @@ pub fn get_cells(
         }),
         limit,
         skip,
-    );
+    ).collect::<Vec<_>>();
     debug!("get_cells: collect_iterator done");
     let mut cells = Vec::new();
     let mut last_key = Vec::new();
@@ -819,14 +819,14 @@ pub fn get_transactions(
 
     if search_key.group_by_transaction.unwrap_or_default() {
         let prefix_cloned = prefix.clone();
-        let mut kvs: Vec<_> = storage.collect_iterator(
+        let mut kvs = storage.collect_iterator(
             from_key,
             direction,
             Box::new(move |key| key.starts_with(&prefix_cloned)),
             Box::new(|key| Some(key.to_vec())),
             100,
             skip,
-        );
+        ).collect::<Vec<_>>();
         let mut tx_with_cells: Vec<TxWithCells> = Vec::new();
         let mut last_key = Vec::new();
 
@@ -944,7 +944,7 @@ pub fn get_transactions(
                 Box::new(|key| Some(key.to_vec())),
                 100,
                 1,
-            );
+            ).collect::<Vec<_>>();
         }
         Ok((Pagination {
             objects: tx_with_cells.into_iter().map(Tx::Grouped).collect(),
@@ -1041,7 +1041,7 @@ pub fn get_transactions(
             }),
             limit,
             skip,
-        );
+        ).collect::<Vec<_>>();
 
         let mut last_key = Vec::new();
         let mut txs = Vec::new();
@@ -1240,7 +1240,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
         }),
         usize::MAX,
         skip,
-    );
+    ).collect::<Vec<_>>();
 
     let mut capacity = 0;
     for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
