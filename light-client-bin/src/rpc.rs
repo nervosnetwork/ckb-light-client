@@ -110,6 +110,14 @@ pub trait NetRpc {
     fn get_peers(&self) -> Result<Vec<RemoteNode>>;
 }
 
+#[rpc(server)]
+pub trait DebugRpc {
+    /// Dumps jemalloc profiling data to a file
+    /// Returns the path to the generated profile file
+    #[rpc(name = "jemalloc_profiling_dump")]
+    fn jemalloc_profiling_dump(&self) -> Result<String>;
+}
+
 pub struct BlockFilterRpcImpl {
     pub(crate) swc: StorageWithChainData,
 }
@@ -128,6 +136,8 @@ pub struct NetRpcImpl {
     network_controller: NetworkController,
     peers: Arc<Peers>,
 }
+
+pub struct DebugRpcImpl;
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(
@@ -802,6 +812,47 @@ impl NetRpc for NetRpcImpl {
     }
 }
 
+impl DebugRpc for DebugRpcImpl {
+    fn jemalloc_profiling_dump(&self) -> Result<String> {
+        #[cfg(not(target_env = "msvc"))]
+        {
+            use std::ffi::CString;
+            use tikv_jemalloc_ctl::{epoch, raw};
+
+            // Trigger an epoch update to ensure current statistics
+            epoch::mib()
+                .map_err(|_| Error::invalid_params("Failed to get epoch mib"))?
+                .advance()
+                .map_err(|_| Error::invalid_params("Failed to advance epoch"))?;
+
+            // Generate a unique filename with timestamp
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs();
+            let filename = format!("/tmp/jeprof.{}.{}.heap", std::process::id(), timestamp);
+
+            // Dump the heap profile using prof.dump
+            let c_filename = CString::new(filename.clone())
+                .map_err(|_| Error::invalid_params("Invalid filename"))?;
+
+            let prof_dump_name = b"prof.dump\0";
+            unsafe {
+                raw::write(prof_dump_name, c_filename.as_ptr() as *const _)
+                    .map_err(|_| Error::invalid_params("Failed to dump heap profile"))?;
+            }
+
+            Ok(filename)
+        }
+        #[cfg(target_env = "msvc")]
+        {
+            Err(Error::invalid_params(
+                "Jemalloc profiling is not available on MSVC builds",
+            ))
+        }
+    }
+}
+
 impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
@@ -983,10 +1034,12 @@ impl Service {
             network_controller,
             peers,
         };
+        let debug_rpc_impl = DebugRpcImpl;
         io_handler.extend_with(block_filter_rpc_impl.to_delegate());
         io_handler.extend_with(chain_rpc_impl.to_delegate());
         io_handler.extend_with(transaction_rpc_impl.to_delegate());
         io_handler.extend_with(net_rpc_impl.to_delegate());
+        io_handler.extend_with(debug_rpc_impl.to_delegate());
 
         ServerBuilder::new(io_handler)
             .cors(DomainsValidation::AllowOnly(vec![
