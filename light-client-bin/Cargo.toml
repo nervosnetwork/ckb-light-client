@@ -32,6 +32,8 @@ rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
 ], default-features = false }
 env_logger = "0.11"
 anyhow = "1.0.56"
+dhat = "0.3.3"
+memory-stats = "1.2.0"
 
 [dev-dependencies]
 rand = "0.8"

@@ -9,7 +9,12 @@ mod tests;
 use cli::AppConfig;
 use env_logger::{Builder, Env, Target};
 
+#[global_allocator]
+static ALLOC: dhat::Alloc = dhat::Alloc;
+
 fn main() -> anyhow::Result<()> {
+    let _profiler = dhat::Profiler::new_heap();
+    
     let mut builder = Builder::from_env(Env::default());
     builder.target(Target::Stdout);
     builder

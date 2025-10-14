@@ -18,6 +18,7 @@ use ckb_types::{
     utilities::{build_filter_data, calc_filter_hash},
     U256,
 };
+use rocksdb::Options;
 use rocksdb::{
     ops::{Delete, GetPinned},
     prelude::{Get, Iterate, Open, Put, WriteOps},
@@ -52,7 +53,51 @@ pub struct Storage {
 
 impl Storage {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        let db = Arc::new(DB::open_default(path).expect("Failed to open rocksdb"));
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.set_max_total_wal_size(128 * 1024 * 1024);
+        opts.set_write_buffer_size(128 * 1024 * 1024);
+        opts.set_max_write_buffer_number(2);
+        opts.enable_statistics();
+        opts.set_stats_dump_period_sec(60);
+
+        // Configure block cache to limit memory usage during sync
+        // Use BlockBasedOptions with block cache to prevent excessive memory growth
+        use rocksdb::{BlockBasedOptions, Cache};
+        let block_cache = Cache::new_lru_cache(256 * 1024 * 1024);
+        let mut block_opts = BlockBasedOptions::default();
+        block_opts.set_block_cache(&block_cache);
+        opts.set_block_based_table_factory(&block_opts);
+        let db = Arc::new(DB::open(&opts, path).expect("Failed to open rocksdb"));
+
+        use rocksdb::ops::GetProperty;
+        std::thread::spawn({
+            let db = db.clone();
+            move || loop {
+                let keys = [
+                    "rocksdb.size-all-mem-tables",
+                    "rocksdb.cur-size-all-mem-tables",
+                    "rocksdb.estimate-table-readers-mem",
+                    "rocksdb.block-cache-usage",
+                    "rocksdb.stats",
+                    "rocksdb.block-cache-pinned-usage",
+                    "rocksdb.block-cache-capacity",
+                    "rocksdb.estimate-live-data-size",
+                ];
+                for key in keys {
+                    if let Ok(Some(value)) = db.property_value(key) {
+                        eprintln!("rocksdb: {:40}:{}", key, value);
+                    }
+                }
+                if let Some(usage) = memory_stats::memory_stats() {
+                    println!("Resident (physical) memory: {} bytes", usage.physical_mem);
+                    println!("Virtual memory: {} bytes", usage.virtual_mem);
+                }
+
+                std::thread::sleep(std::time::Duration::from_secs(10));
+            }
+        });
+
         Self { db }
     }
 
