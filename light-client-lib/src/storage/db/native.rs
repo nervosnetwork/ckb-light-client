@@ -21,7 +21,7 @@ use ckb_types::{
 use rocksdb::{
     ops::{Delete, GetPinned},
     prelude::{Get, Iterate, Open, Put, WriteOps},
-    DBPinnableSlice, Direction, IteratorMode, Snapshot, WriteBatch, DB,
+    DBPinnableSlice, Direction, IteratorMode, Options, Snapshot, WriteBatch, DB,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -52,7 +52,12 @@ pub struct Storage {
 
 impl Storage {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        let db = Arc::new(DB::open_default(path).expect("Failed to open rocksdb"));
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.set_max_total_wal_size(128 * 1024 * 1024);
+        opts.set_write_buffer_size(128 * 1024 * 1024);
+        opts.set_max_write_buffer_number(2);
+        let db = Arc::new(DB::open(&opts, path).expect("Failed to open rocksdb"));
         Self { db }
     }
 
