@@ -9,6 +9,10 @@ mod tests;
 use cli::AppConfig;
 use env_logger::{Builder, Env, Target};
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 fn main() -> anyhow::Result<()> {
     let mut builder = Builder::from_env(Env::default());
     builder.target(Target::Stdout);
