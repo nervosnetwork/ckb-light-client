@@ -717,6 +717,51 @@ impl Storage {
             .expect("db put matched blocks should be ok");
     }
 
+    pub fn cleanup_invalid_matched_blocks(&self) {
+        use ckb_types::prelude::Unpack;
+        use log::warn;
+
+        let tip_number: u64 = self.get_tip_header().raw().number().unpack();
+
+        loop {
+            let entry = self.get_earliest_matched_blocks();
+            if entry.is_none() {
+                break;
+            }
+
+            let (start_number, blocks_count, block_hashes) = entry.unwrap();
+            let mut should_remove = false;
+
+            for (block_hash, _) in &block_hashes {
+                if let Some(header) = self.get_header(block_hash) {
+                    let stored_number: u64 = header.number();
+                    if stored_number < start_number || stored_number >= start_number + blocks_count
+                    {
+                        warn!(
+                            "Invalid matched block {:#x} at number {} outside expected range [{}, {}), removing entry at start_number={}",
+                            block_hash, stored_number, start_number, start_number + blocks_count, start_number
+                        );
+                        should_remove = true;
+                        break;
+                    }
+                } else if start_number + 1000 < tip_number {
+                    warn!(
+                        "Matched block {:#x} not found in storage, entry at start_number={} is {} blocks behind tip, removing",
+                        block_hash, start_number, tip_number - start_number
+                    );
+                    should_remove = true;
+                    break;
+                }
+            }
+
+            if should_remove {
+                self.remove_matched_blocks(start_number);
+            } else {
+                break;
+            }
+        }
+    }
+
     pub fn add_fetched_header(&self, hwe: &HeaderWithExtension) {
         let mut batch = self.batch();
         let block_hash = hwe.header.calc_header_hash();

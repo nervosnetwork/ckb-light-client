@@ -1489,11 +1489,25 @@ impl Peers {
         matched_blocks
             .iter()
             .filter_map(|(key, value)| {
-                if !proof_requested_hashes.contains(key) && !value.0 {
-                    Some(key.pack())
-                } else {
-                    None
+                // Skip if already in a proof request
+                if proof_requested_hashes.contains(key) {
+                    return None;
                 }
+                // Skip if already proved
+                if value.0 {
+                    return None;
+                }
+                // Skip if marked as missing by peers (e.g., uncle blocks)
+                if let Some(fetch_info) = self.fetching_headers.get(&key.pack()) {
+                    if fetch_info.missing {
+                        log::warn!(
+                            "Skipping matched block {:#x} - marked as missing by peers (likely an uncle block)",
+                            key.pack()
+                        );
+                        return None;
+                    }
+                }
+                Some(key.pack())
             })
             .take(limit)
             .collect()

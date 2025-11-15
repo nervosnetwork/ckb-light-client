@@ -385,10 +385,14 @@ impl LightClientProtocol {
                     debug!("fork to number: {}", to_number);
                     let mut matched_blocks = self.peers.matched_blocks().write().await;
                     let mut start_number_opt = None;
-                    while let Some((start_number, _, _)) = self.storage.get_latest_matched_blocks()
+                    while let Some((start_number, blocks_count, _)) =
+                        self.storage.get_latest_matched_blocks()
                     {
-                        if start_number > to_number {
-                            debug!("remove matched blocks start from: {}", start_number);
+                        // Remove matched blocks if the range overlaps or is after the fork point
+                        // The range is [start_number, start_number + blocks_count - 1]
+                        if start_number + blocks_count > to_number {
+                            debug!("remove matched blocks start from: {} (range covers {} blocks, overlaps fork at {})",
+                                   start_number, blocks_count, to_number);
                             self.storage.remove_matched_blocks(start_number);
                         } else {
                             start_number_opt = Some(start_number);
