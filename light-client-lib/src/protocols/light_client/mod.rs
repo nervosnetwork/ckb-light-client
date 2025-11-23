@@ -388,10 +388,11 @@ impl LightClientProtocol {
                     while let Some((start_number, blocks_count, _)) =
                         self.storage.get_latest_matched_blocks()
                     {
-                        // Remove matched blocks if the range overlaps or is after the fork point
+                        // Remove matched blocks if the range contains blocks after the fork point
                         // The range is [start_number, start_number + blocks_count - 1]
-                        if start_number + blocks_count > to_number {
-                            debug!("remove matched blocks start from: {} (range covers {} blocks, overlaps fork at {})",
+                        // Fork point (to_number) is the last valid block, so remove ranges containing blocks > to_number
+                        if start_number + blocks_count > to_number + 1 {
+                            debug!("remove matched blocks start from: {} (range covers {} blocks, contains blocks after fork at {})",
                                    start_number, blocks_count, to_number);
                             self.storage.remove_matched_blocks(start_number);
                         } else {
