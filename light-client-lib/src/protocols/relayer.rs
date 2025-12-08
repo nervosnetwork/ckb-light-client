@@ -16,7 +16,7 @@ use web_time::{Duration, Instant};
 
 use crate::protocols::{Peers, BAD_MESSAGE_BAN_TIME};
 use crate::storage::Storage;
-use crate::types::RwLock;
+use crate::sync::{RwLock, RwLockExt};
 
 const CHECK_PENDING_TXS_TOKEN: u64 = 0;
 
@@ -167,17 +167,10 @@ impl CKBProtocolHandler for RelayProtocol {
             debug!("peer={} is ckb2023 enabled, ignore", peer);
             return;
         }
-        #[cfg(target_arch = "wasm32")]
         let flag = self
             .pending_txs
-            .read()
+            .read_ext()
             .await
-            .is_not_empty_and_updated_at(60);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let flag = self
-            .pending_txs
-            .read()
             .unwrap()
             .is_not_empty_and_updated_at(60);
 
@@ -186,16 +179,10 @@ impl CKBProtocolHandler for RelayProtocol {
                 .get_peer(peer)
                 .and_then(|p| extract_peer_id(&p.connected_addr))
                 .unwrap();
-            #[cfg(target_arch = "wasm32")]
             let tx_hashes = self
                 .pending_txs
-                .write()
+                .write_ext()
                 .await
-                .fetch_transaction_hashes_for_broadcast(peer_id);
-            #[cfg(not(target_arch = "wasm32"))]
-            let tx_hashes = self
-                .pending_txs
-                .write()
                 .unwrap()
                 .fetch_transaction_hashes_for_broadcast(peer_id);
             if !tx_hashes.is_empty() {
@@ -246,10 +233,7 @@ impl CKBProtocolHandler for RelayProtocol {
             message.item_name()
         );
         if let packed::RelayMessageUnionReader::GetRelayTransactions(reader) = message {
-            #[cfg(target_arch = "wasm32")]
-            let pending_txs = self.pending_txs.read().await;
-            #[cfg(not(target_arch = "wasm32"))]
-            let pending_txs = self.pending_txs.read().expect("read access should be OK");
+            let pending_txs = self.pending_txs.read_ext().await.expect("read access should be OK");
             let relay_txs: Vec<_> = reader
                 .tx_hashes()
                 .iter()
@@ -285,17 +269,10 @@ impl CKBProtocolHandler for RelayProtocol {
             CHECK_PENDING_TXS_TOKEN => {
                 // we check pending txs every 2 seconds, if the timestamp of the pending txs is updated in the last minute
                 // and connected relay protocol peers is empty, we try to open the protocol and broadcast the pending txs
-                #[cfg(target_arch = "wasm32")]
                 let flag = self
                     .pending_txs
-                    .read()
+                    .read_ext()
                     .await
-                    .is_not_empty_and_updated_at(60);
-
-                #[cfg(not(target_arch = "wasm32"))]
-                let flag = self
-                    .pending_txs
-                    .read()
                     .unwrap()
                     .is_not_empty_and_updated_at(60);
 
@@ -310,10 +287,7 @@ impl CKBProtocolHandler for RelayProtocol {
                         }
                     }
                 } else {
-                    #[cfg(target_arch = "wasm32")]
-                    let mut pending_txs = self.pending_txs.write().await;
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let mut pending_txs = self.pending_txs.write().unwrap();
+                    let mut pending_txs = self.pending_txs.write_ext().await.unwrap();
                     for (&peer, instant) in self.opened_peers.iter_mut() {
                         if let Some(peer_id) = nc
                             .get_peer(peer)

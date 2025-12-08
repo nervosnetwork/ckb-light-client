@@ -8,6 +8,8 @@ pub mod error;
 pub mod protocols;
 pub mod service;
 pub mod storage;
+pub mod sync;
+pub mod time;
 pub mod types;
 pub mod utils;
 pub mod verify;

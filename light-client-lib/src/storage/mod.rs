@@ -25,7 +25,7 @@ pub use db::{Batch, Storage};
 
 use crate::{
     protocols::{Peers, PendingTxs},
-    types::RwLock,
+    sync::RwLock,
 };
 
 pub const LAST_STATE_KEY: &str = "LAST_STATE";
