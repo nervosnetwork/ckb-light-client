@@ -1,3 +1,4 @@
+use crate::time::{Duration, Instant};
 use ckb_chain_spec::consensus::Consensus;
 use ckb_network::{
     async_trait, bytes::Bytes, extract_peer_id, BoxedCKBProtocolContext, CKBProtocolHandler,
@@ -9,7 +10,6 @@ use linked_hash_map::LinkedHashMap;
 use log::{debug, trace, warn};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use crate::time::{Duration, Instant};
 
 use crate::protocols::{Peers, BAD_MESSAGE_BAN_TIME};
 use crate::storage::Storage;
@@ -230,7 +230,11 @@ impl CKBProtocolHandler for RelayProtocol {
             message.item_name()
         );
         if let packed::RelayMessageUnionReader::GetRelayTransactions(reader) = message {
-            let pending_txs = self.pending_txs.read_ext().await.expect("read access should be OK");
+            let pending_txs = self
+                .pending_txs
+                .read_ext()
+                .await
+                .expect("read access should be OK");
             let relay_txs: Vec<_> = reader
                 .tx_hashes()
                 .iter()

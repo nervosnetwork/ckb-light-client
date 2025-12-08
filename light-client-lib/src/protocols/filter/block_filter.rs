@@ -2,6 +2,7 @@ use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
 use crate::sync::{RwLock, RwLockExt};
+use crate::time::{Duration, Instant};
 use crate::utils::network::prove_or_download_matched_blocks;
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{
@@ -12,7 +13,6 @@ use golomb_coded_set::{GCSFilterReader, SipHasher24Builder, M, P};
 use log::{debug, info, log_enabled, trace, warn, Level};
 use rand::seq::SliceRandom as _;
 use std::io::Cursor;
-use crate::time::{Duration, Instant};
 use std::sync::Arc;
 
 pub(crate) const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
@@ -90,7 +90,11 @@ impl FilterProtocol {
         self.peers
             .update_min_filtered_block_number(block_number)
             .await;
-        self.last_ask_time.write_ext().await.unwrap().replace(Instant::now());
+        self.last_ask_time
+            .write_ext()
+            .await
+            .unwrap()
+            .replace(Instant::now());
     }
     pub(crate) async fn try_send_get_block_filters(
         &self,

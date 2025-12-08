@@ -1647,7 +1647,8 @@ impl Peers {
     ) {
         let should_cached_check_point_index =
             self.calc_cached_check_point_index_when_sync_at(min_filtered_block_number + 1);
-        let current_cached_check_point_index = self.cached_block_filter_hashes.read_ext().await.unwrap().0;
+        let current_cached_check_point_index =
+            self.cached_block_filter_hashes.read_ext().await.unwrap().0;
         if current_cached_check_point_index != should_cached_check_point_index {
             let mut tmp = self.cached_block_filter_hashes.write_ext().await.unwrap();
             tmp.0 = should_cached_check_point_index;
@@ -1656,7 +1657,11 @@ impl Peers {
     }
 
     pub(crate) async fn get_cached_block_filter_hashes(&self) -> (u32, Vec<packed::Byte32>) {
-        self.cached_block_filter_hashes.read_ext().await.unwrap().clone()
+        self.cached_block_filter_hashes
+            .read_ext()
+            .await
+            .unwrap()
+            .clone()
     }
     pub(crate) async fn update_cached_block_filter_hashes(&self, hashes: Vec<packed::Byte32>) {
         self.cached_block_filter_hashes.write_ext().await.unwrap().1 = hashes;
