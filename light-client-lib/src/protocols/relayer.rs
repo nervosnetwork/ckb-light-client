@@ -1,4 +1,3 @@
-use ckb_chain_spec::consensus::Consensus;
 use ckb_network::{
     async_trait, bytes::Bytes, extract_peer_id, BoxedCKBProtocolContext, CKBProtocolHandler,
     PeerId, PeerIndex,
@@ -24,9 +23,7 @@ pub struct RelayProtocol {
     // Pending transactions which are waiting for relay
     pending_txs: Arc<RwLock<PendingTxs>>,
 
-    consensus: Consensus,
     storage: Storage,
-    v3: bool,
 }
 
 // a simple struct to store the pending transactions in memory with size limit
@@ -89,17 +86,13 @@ impl RelayProtocol {
     pub fn new(
         pending_txs: Arc<RwLock<PendingTxs>>,
         connected_peers: Arc<Peers>,
-        consensus: Consensus,
         storage: Storage,
-        v3: bool,
     ) -> Self {
         Self {
             opened_peers: HashMap::new(),
             pending_txs,
             connected_peers,
-            consensus,
             storage,
-            v3,
         }
     }
 }
@@ -141,29 +134,10 @@ impl CKBProtocolHandler for RelayProtocol {
             }
         };
 
-        let ckb2023 = self
-            .consensus
-            .hardfork_switch
-            .ckb2023
-            .is_vm_version_2_and_syscalls_3_enabled(epoch);
-
         debug!(
-            "RelayProtocol V{}({}).connected peer={}, epoch={}",
-            if self.v3 { '3' } else { '2' },
-            version,
-            peer,
-            epoch
+            "RelayProtocol.connected peer={}, version={}, epoch={}",
+            peer, version, epoch
         );
-
-        if self.v3 && !ckb2023 {
-            debug!("peer={} is not ckb2023 enabled, ignore", peer);
-            return;
-        }
-
-        if !self.v3 && ckb2023 {
-            debug!("peer={} is ckb2023 enabled, ignore", peer);
-            return;
-        }
         let flag = read_lock!(self.pending_txs).is_not_empty_and_updated_at(60);
 
         if flag {
