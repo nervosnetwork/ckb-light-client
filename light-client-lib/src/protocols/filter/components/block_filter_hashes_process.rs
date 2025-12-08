@@ -67,12 +67,8 @@ impl<'a> BlockFilterHashesProcess<'a> {
             .protocol
             .peers
             .calc_check_point_number(finalized_check_point_index);
-        #[cfg(target_arch = "wasm32")]
         let (cached_check_point_index, cached_hashes) =
             self.protocol.peers.get_cached_block_filter_hashes().await;
-        #[cfg(not(target_arch = "wasm32"))]
-        let (cached_check_point_index, cached_hashes) =
-            self.protocol.peers.get_cached_block_filter_hashes();
 
         let cached_check_point_number = self
             .protocol

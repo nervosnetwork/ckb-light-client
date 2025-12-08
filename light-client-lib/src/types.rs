@@ -91,3 +91,17 @@ macro_rules! write_lock {
         }
     }};
 }
+
+#[macro_export]
+macro_rules! mutex_lock {
+    ($lock:expr) => {{
+        #[cfg(target_arch = "wasm32")]
+        {
+            $lock.lock().await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            $lock.lock().unwrap()
+        }
+    }};
+}
