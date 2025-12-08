@@ -1,7 +1,7 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::Storage;
-use crate::types::RwLock;
+use crate::types::{Duration, Instant, RwLock};
 use crate::utils::network::prove_or_download_matched_blocks;
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{
@@ -12,11 +12,7 @@ use golomb_coded_set::{GCSFilterReader, SipHasher24Builder, M, P};
 use log::{debug, info, log_enabled, trace, warn, Level};
 use rand::seq::SliceRandom as _;
 use std::io::Cursor;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::Instant;
-use std::{sync::Arc, time::Duration};
-#[cfg(target_arch = "wasm32")]
-use web_time::Instant;
+use std::sync::Arc;
 
 pub(crate) const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
 pub(crate) const GET_BLOCK_FILTER_HASHES_TOKEN: u64 = 1;

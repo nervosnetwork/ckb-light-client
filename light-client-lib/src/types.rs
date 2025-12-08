@@ -51,3 +51,43 @@ pub type Mutex<T> = tokio::sync::Mutex<T>;
 pub type RwLock<T> = std::sync::RwLock<T>;
 #[cfg(not(target_arch = "wasm32"))]
 pub type Mutex<T> = std::sync::Mutex<T>;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::time::{Duration, Instant};
+/**
+ * Unified time types for cross-platform compatibility
+ */
+#[cfg(target_arch = "wasm32")]
+pub use web_time::{Duration, Instant};
+
+/**
+ * Macros for unified lock access patterns.
+ * These eliminate duplicate cfg blocks while maintaining zero-cost abstraction.
+ */
+#[macro_export]
+macro_rules! read_lock {
+    ($lock:expr) => {{
+        #[cfg(target_arch = "wasm32")]
+        {
+            $lock.read().await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            $lock.read().unwrap()
+        }
+    }};
+}
+
+#[macro_export]
+macro_rules! write_lock {
+    ($lock:expr) => {{
+        #[cfg(target_arch = "wasm32")]
+        {
+            $lock.write().await
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            $lock.write().unwrap()
+        }
+    }};
+}

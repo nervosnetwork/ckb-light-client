@@ -150,17 +150,23 @@ impl StorageWithChainData {
     pub fn add_fetch_tx(&self, tx_hash: H256, timestamp: u64) {
         self.peers.add_fetch_tx(tx_hash.pack(), timestamp);
     }
-}
-#[cfg(target_arch = "wasm32")]
-impl CellProvider for StorageWithChainData {
-    fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
-        match self.storage.cell(out_point, eager_load) {
-            CellStatus::Live(cell_meta) => CellStatus::Live(cell_meta),
-            _ => {
-                // Safe to call blocking_read() here, CellProvider::cell will only be called from sync APIs
-                if let Some((tx, _, _)) = self.pending_txs.blocking_read().get(&out_point.tx_hash())
-                {
-                    if let Some(cell_output) = tx.raw().outputs().get(out_point.index().unpack()) {
+
+    /// Helper method to get cell from pending transactions
+    /// Centralizes the logic that was duplicated across platform-specific CellProvider impls
+    fn cell_from_pending_txs(&self, out_point: &OutPoint) -> Option<CellMeta> {
+        // Platform-specific lock access
+        #[cfg(target_arch = "wasm32")]
+        let pending_txs = self.pending_txs.blocking_read();
+        #[cfg(not(target_arch = "wasm32"))]
+        let pending_txs = self.pending_txs.read().expect("poisoned");
+
+        pending_txs
+            .get(&out_point.tx_hash())
+            .and_then(|(tx, _, _)| {
+                tx.raw()
+                    .outputs()
+                    .get(out_point.index().unpack())
+                    .map(|cell_output| {
                         let output_data = tx
                             .raw()
                             .outputs_data()
@@ -168,21 +174,31 @@ impl CellProvider for StorageWithChainData {
                             .expect("output_data's index should be same as output")
                             .raw_data();
                         let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
-                        return CellStatus::Live(CellMeta {
+                        CellMeta {
                             out_point: out_point.clone(),
                             cell_output,
                             transaction_info: None,
                             data_bytes: output_data.len() as u64,
                             mem_cell_data: Some(output_data),
                             mem_cell_data_hash: Some(output_data_data_hash),
-                        });
-                    }
-                }
-                CellStatus::Unknown
-            }
+                        }
+                    })
+            })
+    }
+}
+
+impl CellProvider for StorageWithChainData {
+    fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
+        match self.storage.cell(out_point, eager_load) {
+            CellStatus::Live(cell_meta) => CellStatus::Live(cell_meta),
+            _ => self
+                .cell_from_pending_txs(out_point)
+                .map(CellStatus::Live)
+                .unwrap_or(CellStatus::Unknown),
         }
     }
 }
+
 #[cfg(target_arch = "wasm32")]
 impl CellDataProvider for StorageWithChainData {
     fn get_cell_data(&self, _out_point: &OutPoint) -> Option<Bytes> {
@@ -202,42 +218,6 @@ impl CellDataProvider for StorageWithChainData {
 
     fn get_cell_data_hash(&self, out_point: &OutPoint) -> Option<Byte32> {
         self.storage.get_cell_data_hash(out_point)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl CellProvider for StorageWithChainData {
-    fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
-        match self.storage.cell(out_point, eager_load) {
-            CellStatus::Live(cell_meta) => CellStatus::Live(cell_meta),
-            _ => {
-                if let Some((tx, _, _)) = self
-                    .pending_txs
-                    .read()
-                    .expect("poisoned")
-                    .get(&out_point.tx_hash())
-                {
-                    if let Some(cell_output) = tx.raw().outputs().get(out_point.index().unpack()) {
-                        let output_data = tx
-                            .raw()
-                            .outputs_data()
-                            .get(out_point.index().unpack())
-                            .expect("output_data's index should be same as output")
-                            .raw_data();
-                        let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
-                        return CellStatus::Live(CellMeta {
-                            out_point: out_point.clone(),
-                            cell_output,
-                            transaction_info: None,
-                            data_bytes: output_data.len() as u64,
-                            mem_cell_data: Some(output_data),
-                            mem_cell_data_hash: Some(output_data_data_hash),
-                        });
-                    }
-                }
-                CellStatus::Unknown
-            }
-        }
     }
 }
 

@@ -9,14 +9,11 @@ use linked_hash_map::LinkedHashMap;
 use log::{debug, trace, warn};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
-use std::time::{Duration, Instant};
-#[cfg(target_arch = "wasm32")]
-use web_time::{Duration, Instant};
 
 use crate::protocols::{Peers, BAD_MESSAGE_BAN_TIME};
 use crate::storage::Storage;
-use crate::types::RwLock;
+use crate::types::{Duration, Instant, RwLock};
+use crate::{read_lock, write_lock};
 
 const CHECK_PENDING_TXS_TOKEN: u64 = 0;
 
@@ -167,37 +164,15 @@ impl CKBProtocolHandler for RelayProtocol {
             debug!("peer={} is ckb2023 enabled, ignore", peer);
             return;
         }
-        #[cfg(target_arch = "wasm32")]
-        let flag = self
-            .pending_txs
-            .read()
-            .await
-            .is_not_empty_and_updated_at(60);
-
-        #[cfg(not(target_arch = "wasm32"))]
-        let flag = self
-            .pending_txs
-            .read()
-            .unwrap()
-            .is_not_empty_and_updated_at(60);
+        let flag = read_lock!(self.pending_txs).is_not_empty_and_updated_at(60);
 
         if flag {
             let peer_id = nc
                 .get_peer(peer)
                 .and_then(|p| extract_peer_id(&p.connected_addr))
                 .unwrap();
-            #[cfg(target_arch = "wasm32")]
-            let tx_hashes = self
-                .pending_txs
-                .write()
-                .await
-                .fetch_transaction_hashes_for_broadcast(peer_id);
-            #[cfg(not(target_arch = "wasm32"))]
-            let tx_hashes = self
-                .pending_txs
-                .write()
-                .unwrap()
-                .fetch_transaction_hashes_for_broadcast(peer_id);
+            let tx_hashes =
+                write_lock!(self.pending_txs).fetch_transaction_hashes_for_broadcast(peer_id);
             if !tx_hashes.is_empty() {
                 let content = packed::RelayTransactionHashes::new_builder()
                     .tx_hashes(tx_hashes.pack())
@@ -246,10 +221,7 @@ impl CKBProtocolHandler for RelayProtocol {
             message.item_name()
         );
         if let packed::RelayMessageUnionReader::GetRelayTransactions(reader) = message {
-            #[cfg(target_arch = "wasm32")]
-            let pending_txs = self.pending_txs.read().await;
-            #[cfg(not(target_arch = "wasm32"))]
-            let pending_txs = self.pending_txs.read().expect("read access should be OK");
+            let pending_txs = read_lock!(self.pending_txs);
             let relay_txs: Vec<_> = reader
                 .tx_hashes()
                 .iter()
@@ -285,19 +257,7 @@ impl CKBProtocolHandler for RelayProtocol {
             CHECK_PENDING_TXS_TOKEN => {
                 // we check pending txs every 2 seconds, if the timestamp of the pending txs is updated in the last minute
                 // and connected relay protocol peers is empty, we try to open the protocol and broadcast the pending txs
-                #[cfg(target_arch = "wasm32")]
-                let flag = self
-                    .pending_txs
-                    .read()
-                    .await
-                    .is_not_empty_and_updated_at(60);
-
-                #[cfg(not(target_arch = "wasm32"))]
-                let flag = self
-                    .pending_txs
-                    .read()
-                    .unwrap()
-                    .is_not_empty_and_updated_at(60);
+                let flag = read_lock!(self.pending_txs).is_not_empty_and_updated_at(60);
 
                 if flag && self.opened_peers.is_empty() {
                     let p2p_control = nc.p2p_control().expect("p2p_control should be exist");
@@ -310,10 +270,7 @@ impl CKBProtocolHandler for RelayProtocol {
                         }
                     }
                 } else {
-                    #[cfg(target_arch = "wasm32")]
-                    let mut pending_txs = self.pending_txs.write().await;
-                    #[cfg(not(target_arch = "wasm32"))]
-                    let mut pending_txs = self.pending_txs.write().unwrap();
+                    let mut pending_txs = write_lock!(self.pending_txs);
                     for (&peer, instant) in self.opened_peers.iter_mut() {
                         if let Some(peer_id) = nc
                             .get_peer(peer)
