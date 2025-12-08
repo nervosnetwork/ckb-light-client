@@ -2,6 +2,8 @@ use std::{fmt, result};
 
 use thiserror::Error;
 
+pub mod db;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("config error: {0}")]
@@ -11,20 +13,8 @@ pub enum Error {
     #[error("runtime error: {0}")]
     Runtime(String),
 
-    #[cfg(not(target_arch = "wasm32"))]
     #[error("db error: {0}")]
-    Db(#[from] rocksdb::Error),
-
-    #[cfg(target_arch = "wasm32")]
-    #[error("db error: {0}")]
-    Indexdb(String),
-}
-
-#[cfg(target_arch = "wasm32")]
-impl From<idb::Error> for Error {
-    fn from(value: idb::Error) -> Self {
-        Error::Indexdb(value.to_string())
-    }
+    Db(#[from] db::DatabaseError),
 }
 
 pub type Result<T> = result::Result<T, Error>;

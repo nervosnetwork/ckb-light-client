@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::time::Instant;
+use crate::time::Instant;
 
 use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_store::ChainStore as _;

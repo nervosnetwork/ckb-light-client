@@ -18,9 +18,7 @@ use ckb_types::{
 mod db;
 
 #[cfg(target_arch = "wasm32")]
-pub use db::{Batch, CursorDirection, Storage};
-
-#[cfg(not(target_arch = "wasm32"))]
+pub use db::CursorDirection;
 pub use db::{Batch, Storage};
 
 use crate::{

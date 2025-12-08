@@ -1,4 +1,4 @@
-use std::time::Duration;
+use crate::time::Duration;
 
 mod block_filter;
 mod components;

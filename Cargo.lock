@@ -774,6 +774,7 @@ name = "ckb-light-client-lib"
 version = "0.5.3"
 dependencies = [
  "anyhow",
+ "async-trait",
  "ckb-app-config",
  "ckb-chain",
  "ckb-chain-spec",

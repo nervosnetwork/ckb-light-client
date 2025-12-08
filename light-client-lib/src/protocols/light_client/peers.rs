@@ -1989,22 +1989,12 @@ impl Peers {
         if self.bad_message_allowed_each_hour == 0 {
             return true;
         }
-        #[cfg(target_arch = "wasm32")]
-        let result = self
-            .rate_limiter
-            .lock()
+        self.rate_limiter
+            .lock_ext()
             .await
+            .unwrap()
             .check_key(&peer_index)
-            .map_err(|_| ())
-            .is_err();
-        #[cfg(not(target_arch = "wasm32"))]
-        let result = self
-            .rate_limiter
-            .lock()
-            .map_err(|_| ())
-            .and_then(|inner| inner.check_key(&peer_index).map_err(|_| ()))
-            .is_err();
-        result
+            .is_err()
     }
 }
 

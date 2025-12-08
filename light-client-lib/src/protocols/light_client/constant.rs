@@ -1,4 +1,4 @@
-use std::time::Duration;
+use crate::time::Duration;
 
 pub const REFRESH_PEERS_TOKEN: u64 = 0;
 pub const FETCH_HEADER_TX_TOKEN: u64 = 1;
