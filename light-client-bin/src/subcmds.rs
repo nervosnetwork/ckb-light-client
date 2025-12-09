@@ -40,6 +40,10 @@ impl RunConfig {
             .expect("build consensus should be OK");
         storage.init_genesis_block(consensus.genesis_block().data());
 
+        // Cleanup any invalid matched blocks from previous runs (e.g., uncle blocks from chain reorgs)
+        log::info!("Cleaning up invalid matched blocks...");
+        storage.cleanup_invalid_matched_blocks();
+
         let pending_txs = Arc::new(RwLock::new(PendingTxs::default()));
         let max_outbound_peers = self.run_env.network.max_outbound_peers;
         let network_state = NetworkState::from_config(self.run_env.network)

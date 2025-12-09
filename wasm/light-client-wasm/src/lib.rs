@@ -154,6 +154,10 @@ pub async fn light_client(
 
     storage.init_genesis_block(genesis);
 
+    // Cleanup any invalid matched blocks from previous runs (e.g., uncle blocks from chain reorgs)
+    log::info!("Cleaning up invalid matched blocks...");
+    storage.cleanup_invalid_matched_blocks();
+
     let pending_txs = Arc::new(tokio::sync::RwLock::new(PendingTxs::default()));
     let max_outbound_peers = config.network.max_outbound_peers;
     let network_secret_key =
