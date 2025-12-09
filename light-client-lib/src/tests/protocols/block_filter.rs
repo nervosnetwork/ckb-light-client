@@ -60,7 +60,7 @@ async fn test_block_filter_ignore_start_number() {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
-                .number((min_filtered_block_number + 1))
+                .number(min_filtered_block_number + 1)
                 .build(),
             Default::default(),
             None,
@@ -73,7 +73,7 @@ async fn test_block_filter_ignore_start_number() {
     };
     let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
-        .start_number((min_filtered_block_number - 1))
+        .start_number(min_filtered_block_number - 1)
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
         .filters(vec![Bytes::from("abc").pack(), Bytes::from("def").pack()].pack())
         .build();
@@ -109,7 +109,7 @@ async fn test_block_filter_empty_filters() {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
-                .number((min_filtered_block_number + 1))
+                .number(min_filtered_block_number + 1)
                 .build(),
             Default::default(),
             None,
@@ -122,7 +122,7 @@ async fn test_block_filter_empty_filters() {
     };
     let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
-        .start_number((min_filtered_block_number + 1))
+        .start_number(min_filtered_block_number + 1)
         .block_hashes(vec![])
         .filters(vec![])
         .build();
@@ -159,7 +159,7 @@ async fn test_block_filter_invalid_filters_count() {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
-                .number((min_filtered_block_number + 1))
+                .number(min_filtered_block_number + 1)
                 .build(),
             Default::default(),
             None,
@@ -172,7 +172,7 @@ async fn test_block_filter_invalid_filters_count() {
     };
     let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
-        .start_number((min_filtered_block_number + 1))
+        .start_number(min_filtered_block_number + 1)
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
         .filters(vec![])
         .build();
@@ -324,7 +324,7 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
     );
     let message = {
         let content = packed::GetBlockFilters::new_builder()
-            .start_number((filtered_block_number + 1))
+            .start_number(filtered_block_number + 1)
             .build();
         packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -489,7 +489,7 @@ async fn test_block_filter_notify_ask_filters() {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
-                .number((min_filtered_block_number + 1))
+                .number(min_filtered_block_number + 1)
                 .build(),
             Default::default(),
             None,
@@ -639,7 +639,7 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     let tip_header = VerifiableHeader::new(
         HeaderBuilder::default()
             .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
-            .number((min_filtered_block_number + 2))
+            .number(min_filtered_block_number + 2)
             .build(),
         Default::default(),
         None,

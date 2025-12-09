@@ -1726,7 +1726,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             let block_number: u64 = block.header().raw().number().unpack();
             block
                 .as_advanced_builder()
-                .timestamp((100 + block_number))
+                .timestamp(100 + block_number)
                 .build()
         });
         assert_eq!(chain.shared().snapshot().tip_number(), last_number);

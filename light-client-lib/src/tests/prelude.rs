@@ -224,7 +224,7 @@ pub(crate) trait RunningChainExt: ChainExt {
                     .map(|(idx, _)| {
                         let out_point = packed::OutPoint::new_builder()
                             .tx_hash(tx.hash())
-                            .index((idx as u32))
+                            .index(idx as u32)
                             .build();
                         packed::CellDep::new_builder().out_point(out_point).build()
                     })

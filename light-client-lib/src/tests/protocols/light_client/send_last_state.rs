@@ -445,7 +445,7 @@ async fn update_to_continuous_but_forked_last_state() {
         let block_number: u64 = block.header().raw().number().unpack();
         block
             .as_advanced_builder()
-            .timestamp((100 + block_number))
+            .timestamp(100 + block_number)
             .build()
     });
 
@@ -503,7 +503,7 @@ async fn update_to_continuous_but_forked_last_state() {
             let block_number: u64 = block.header().raw().number().unpack();
             block
                 .as_advanced_builder()
-                .timestamp((200 + block_number))
+                .timestamp(200 + block_number)
                 .build()
         });
         assert_eq!(chain.shared().snapshot().tip_number(), num);
