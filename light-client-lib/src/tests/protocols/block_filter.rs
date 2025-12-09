@@ -59,8 +59,8 @@ async fn test_block_filter_ignore_start_number() {
     let peers = {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
-                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-                .number((min_filtered_block_number + 1).pack())
+                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+                .number((min_filtered_block_number + 1))
                 .build(),
             Default::default(),
             None,
@@ -73,7 +73,7 @@ async fn test_block_filter_ignore_start_number() {
     };
     let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
-        .start_number((min_filtered_block_number - 1).pack())
+        .start_number((min_filtered_block_number - 1))
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
         .filters(vec![Bytes::from("abc").pack(), Bytes::from("def").pack()].pack())
         .build();
@@ -108,8 +108,8 @@ async fn test_block_filter_empty_filters() {
     let peers = {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
-                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-                .number((min_filtered_block_number + 1).pack())
+                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+                .number((min_filtered_block_number + 1))
                 .build(),
             Default::default(),
             None,
@@ -122,9 +122,9 @@ async fn test_block_filter_empty_filters() {
     };
     let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
-        .start_number((min_filtered_block_number + 1).pack())
-        .block_hashes(vec![].pack())
-        .filters(vec![].pack())
+        .start_number((min_filtered_block_number + 1))
+        .block_hashes(vec![])
+        .filters(vec![])
         .build();
     let message = packed::BlockFilterMessage::new_builder()
         .set(content)
@@ -158,8 +158,8 @@ async fn test_block_filter_invalid_filters_count() {
     let peers = {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
-                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-                .number((min_filtered_block_number + 1).pack())
+                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+                .number((min_filtered_block_number + 1))
                 .build(),
             Default::default(),
             None,
@@ -172,9 +172,9 @@ async fn test_block_filter_invalid_filters_count() {
     };
     let mut protocol = chain.create_filter_protocol(peers);
     let content = packed::BlockFilters::new_builder()
-        .start_number((min_filtered_block_number + 1).pack())
+        .start_number((min_filtered_block_number + 1))
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
-        .filters(vec![].pack())
+        .filters(vec![])
         .build();
     let message = packed::BlockFilterMessage::new_builder()
         .set(content)
@@ -211,8 +211,8 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
     let peers = {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
-                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-                .number(proved_number.pack())
+                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+                .number(proved_number)
                 .build(),
             Default::default(),
             None,
@@ -225,7 +225,7 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
     };
     let mut protocol = chain.create_filter_protocol(Arc::clone(&peers));
     let content = packed::BlockFilters::new_builder()
-        .start_number(start_number.pack())
+        .start_number(start_number)
         .block_hashes(vec![H256(rand::random()).pack(), H256(rand::random()).pack()].pack())
         .filters(vec![Bytes::from("abc").pack(), Bytes::from("def").pack()].pack())
         .build();
@@ -303,7 +303,7 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
 
     let blocks_count = block_hashes.len();
     let content = packed::BlockFilters::new_builder()
-        .start_number(start_number.pack())
+        .start_number(start_number)
         .block_hashes(block_hashes.pack())
         .filters(filters.pack())
         .build();
@@ -324,7 +324,7 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
     );
     let message = {
         let content = packed::GetBlockFilters::new_builder()
-            .start_number((filtered_block_number + 1).pack())
+            .start_number((filtered_block_number + 1))
             .build();
         packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -416,7 +416,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
     };
 
     let content = packed::BlockFilters::new_builder()
-        .start_number(start_number.pack())
+        .start_number(start_number)
         .block_hashes(vec![block_hash_1.clone(), block_hash_2].pack())
         .filters(vec![filter_data_1, filter_data_2].pack())
         .build();
@@ -444,7 +444,7 @@ async fn test_block_filter_ok_with_blocks_matched() {
         let blocks_count = 2;
         let new_start_number = start_number - 1 + blocks_count + 1;
         let content = packed::GetBlockFilters::new_builder()
-            .start_number(new_start_number.pack())
+            .start_number(new_start_number)
             .build();
         packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -488,8 +488,8 @@ async fn test_block_filter_notify_ask_filters() {
     let peers = {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
-                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-                .number((min_filtered_block_number + 1).pack())
+                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+                .number((min_filtered_block_number + 1))
                 .build(),
             Default::default(),
             None,
@@ -511,7 +511,7 @@ async fn test_block_filter_notify_ask_filters() {
     let message = {
         let start_number: u64 = min_filtered_block_number + 1;
         let content = packed::GetBlockFilters::new_builder()
-            .start_number(start_number.pack())
+            .start_number(start_number)
             .build();
         packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -566,8 +566,8 @@ async fn test_block_filter_notify_not_reach_ask() {
     let peers = {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
-                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-                .number(5u64.pack())
+                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+                .number(5u64)
                 .build(),
             Default::default(),
             None,
@@ -606,8 +606,8 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
     let peers = {
         let tip_header = VerifiableHeader::new(
             HeaderBuilder::default()
-                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-                .number(min_filtered_block_number.pack())
+                .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+                .number(min_filtered_block_number)
                 .build(),
             Default::default(),
             None,
@@ -638,8 +638,8 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     let peer_index = PeerIndex::new(3);
     let tip_header = VerifiableHeader::new(
         HeaderBuilder::default()
-            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-            .number((min_filtered_block_number + 2).pack())
+            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+            .number((min_filtered_block_number + 2))
             .build(),
         Default::default(),
         None,
@@ -695,7 +695,7 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     let get_block_filters_message = {
         let start_number: u64 = min_filtered_block_number + 1;
         let content = packed::GetBlockFilters::new_builder()
-            .start_number(start_number.pack())
+            .start_number(start_number)
             .build();
         packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -800,7 +800,7 @@ async fn test_block_filter_without_enough_hashes() {
     };
 
     let content = packed::BlockFilters::new_builder()
-        .start_number(start_number.pack())
+        .start_number(start_number)
         .block_hashes(vec![block_hash_1.clone(), block_hash_2].pack())
         .filters(vec![filter_data_1, filter_data_2].pack())
         .build();

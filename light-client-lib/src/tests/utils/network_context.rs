@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use ckb_network::{
     async_trait, bytes::Bytes as P2pBytes, Behaviour, CKBProtocolContext, Error, Peer, PeerIndex,
-    ProtocolId, SupportProtocols, TargetSession,
+    ProtocolId, SessionId, SupportProtocols, TargetSession,
 };
 
 use crate::protocols::{Status, StatusCode};
@@ -223,8 +223,7 @@ impl CKBProtocolContext for MockProtocolContext {
     fn protocol_id(&self) -> ProtocolId {
         self.protocol.protocol_id()
     }
-
-    fn ckb2023(&self) -> bool {
-        unimplemented!();
+    fn full_relay_connected_peers(&self) -> Vec<SessionId> {
+        Vec::new()
     }
 }

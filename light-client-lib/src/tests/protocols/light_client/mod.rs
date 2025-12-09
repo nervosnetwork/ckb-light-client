@@ -64,7 +64,7 @@ async fn build_prove_request_content() {
     {
         let epoch = EpochNumberWithFraction::new(0, last_number, epoch_length);
         let header = HeaderBuilder::default()
-            .number(last_number.pack())
+            .number(last_number)
             .epoch(epoch.pack())
             .build();
         let last_total_difficulty = U256::from(last_total_difficulty);
@@ -77,9 +77,9 @@ async fn build_prove_request_content() {
             let new_last_number = last_number + 1;
             let epoch = EpochNumberWithFraction::new(0, new_last_number, epoch_length);
             HeaderBuilder::default()
-                .number(new_last_number.pack())
+                .number(new_last_number)
                 .epoch(epoch.pack())
-                .compact_target(default_compact_target.pack())
+                .compact_target(default_compact_target)
                 .build()
         };
         for diff in 1u64..10 {
@@ -121,7 +121,7 @@ async fn build_prove_request_content() {
             let verifiable_header = {
                 let epoch = EpochNumberWithFraction::new(0, new_last_number, epoch_length);
                 let header = HeaderBuilder::default()
-                    .number(new_last_number.pack())
+                    .number(new_last_number)
                     .epoch(epoch.pack())
                     .build();
                 let parent_chain_root = packed::HeaderDigest::new_builder()
@@ -139,7 +139,7 @@ async fn build_prove_request_content() {
             let verifiable_header = {
                 let epoch = EpochNumberWithFraction::new(0, new_last_number, epoch_length);
                 let header = HeaderBuilder::default()
-                    .number(new_last_number.pack())
+                    .number(new_last_number)
                     .epoch(epoch.pack())
                     .build();
                 let parent_chain_root = packed::HeaderDigest::new_builder()
@@ -173,8 +173,8 @@ async fn test_light_client_get_idle_matched_blocks() {
     let peer_index = PeerIndex::new(3);
     let tip_header = VerifiableHeader::new(
         HeaderBuilder::default()
-            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value().pack())
-            .number(3u64.pack())
+            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+            .number(3u64)
             .build(),
         Default::default(),
         None,
