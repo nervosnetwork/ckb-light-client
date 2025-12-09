@@ -1987,31 +1987,58 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             min_filtered_block_number
         );
 
+        // Matched blocks are removed if their range extends beyond the fork point.
+        // The removal condition is: start_number + blocks_count > to_number + 1
+        // Since blocks_count = 4, matched blocks are kept only if: start_number <= to_number - 3
+        // where to_number is the fork point (prev_last_number - rollback_blocks_count)
+        //
+        // Special case: if last_number == prev_last_number and rollback_blocks_count == 0,
+        // there's no reorg, so no matched blocks are removed.
+        let no_reorg = (rollback_blocks_count == 0) && (last_number == prev_last_number);
+
         let earliest_matched_blocks_opt = storage.get_earliest_matched_blocks();
-        if earliest_matched_number > min_filtered_block_number {
-            assert!(earliest_matched_blocks_opt.is_none());
-        } else {
+        let latest_matched_blocks_opt = storage.get_latest_matched_blocks();
+
+        if no_reorg {
+            // No reorg happened, so matched blocks should still exist
             assert!(earliest_matched_blocks_opt.is_some());
             assert_eq!(
                 earliest_matched_blocks_opt.unwrap().0,
                 earliest_matched_number
             );
-        }
-        let latest_matched_blocks_opt = storage.get_latest_matched_blocks();
-        if prev_last_number <= earliest_matched_number && last_number != prev_last_number {
-            assert!(
-                latest_matched_blocks_opt.is_none(),
-                "prev: {}, earliest: {}, latest: {}",
-                prev_last_number,
-                earliest_matched_number,
-                latest_matched_blocks_opt.unwrap().0
-            );
-        } else {
             assert!(latest_matched_blocks_opt.is_some());
-            assert_eq!(
-                latest_matched_blocks_opt.unwrap().0,
-                min_filtered_block_number
-            );
+            assert_eq!(latest_matched_blocks_opt.unwrap().0, prev_last_number);
+        } else {
+            // Reorg happened, calculate which matched blocks were removed
+            let to_number = min_filtered_block_number;
+            let blocks_count = 4u64;
+            let latest_kept_matched_block = if to_number >= blocks_count - 1 {
+                to_number - (blocks_count - 1)
+            } else {
+                0
+            };
+
+            if earliest_matched_number > latest_kept_matched_block {
+                // All matched blocks were removed
+                assert!(earliest_matched_blocks_opt.is_none());
+                assert!(
+                    latest_matched_blocks_opt.is_none(),
+                    "prev: {}, earliest: {}, to_number: {}, latest_kept: {}",
+                    prev_last_number,
+                    earliest_matched_number,
+                    to_number,
+                    latest_kept_matched_block
+                );
+            } else {
+                assert!(earliest_matched_blocks_opt.is_some());
+                assert_eq!(
+                    earliest_matched_blocks_opt.unwrap().0,
+                    earliest_matched_number
+                );
+                assert!(latest_matched_blocks_opt.is_some());
+                let expected_latest = cmp::min(prev_last_number, latest_kept_matched_block);
+                assert_eq!(latest_matched_blocks_opt.unwrap().0, expected_latest);
+            }
         }
         assert_eq!(
             peers.matched_blocks().read().await.is_empty(),
