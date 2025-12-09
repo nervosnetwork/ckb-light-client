@@ -105,12 +105,8 @@ impl<'a> BlockFiltersProcess<'a> {
         let (mut parent_block_filter_hash, expected_block_filter_hashes) =
             if start_number <= finalized_check_point_number {
                 // Use cached block filter hashes to check the block filters.
-                #[cfg(target_arch = "wasm32")]
                 let (cached_check_point_index, mut cached_block_filter_hashes) =
                     self.filter.peers.get_cached_block_filter_hashes().await;
-                #[cfg(not(target_arch = "wasm32"))]
-                let (cached_check_point_index, mut cached_block_filter_hashes) =
-                    self.filter.peers.get_cached_block_filter_hashes();
 
                 let cached_check_point_number = self
                     .filter
@@ -250,13 +246,9 @@ impl<'a> BlockFiltersProcess<'a> {
                 .storage
                 .update_block_number(filtered_block_number)
         }
-        #[cfg(target_arch = "wasm32")]
         self.filter
             .update_min_filtered_block_number(filtered_block_number)
             .await;
-        #[cfg(not(target_arch = "wasm32"))]
-        self.filter
-            .update_min_filtered_block_number(filtered_block_number);
 
         let could_request_more_block_filters = self
             .filter

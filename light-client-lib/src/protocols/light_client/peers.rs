@@ -19,8 +19,11 @@ use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota,
 
 use super::prelude::*;
 use crate::{
+    mutex_lock,
     protocols::{Status, StatusCode, BAD_MESSAGE_ALLOWED_EACH_HOUR, MESSAGE_TIMEOUT},
+    read_lock,
     types::{Mutex, RwLock},
+    write_lock,
 };
 
 pub type BadMessageRateLimiter<T> = RateLimiter<T, DefaultKeyedStateStore<T>, DefaultClock>;
@@ -1299,10 +1302,7 @@ impl Peers {
         self.mark_fetching_headers_timeout(index);
         self.mark_fetching_txs_timeout(index);
         self.inner.remove(&index);
-        #[cfg(target_arch = "wasm32")]
-        self.rate_limiter.lock().await.retain_recent();
-        #[cfg(not(target_arch = "wasm32"))]
-        let _ignore_error = self.rate_limiter.lock().map(|inner| inner.retain_recent());
+        mutex_lock!(self.rate_limiter).retain_recent();
     }
 
     pub(crate) fn get_peers_index(&self) -> Vec<PeerIndex> {
@@ -1644,53 +1644,25 @@ impl Peers {
             Err(StatusCode::PeerIsNotFound.into())
         }
     }
-    #[cfg(target_arch = "wasm32")]
     pub(crate) async fn update_min_filtered_block_number(
         &self,
         min_filtered_block_number: BlockNumber,
     ) {
         let should_cached_check_point_index =
             self.calc_cached_check_point_index_when_sync_at(min_filtered_block_number + 1);
-        let current_cached_check_point_index = self.cached_block_filter_hashes.read().await.0;
+        let current_cached_check_point_index = read_lock!(self.cached_block_filter_hashes).0;
         if current_cached_check_point_index != should_cached_check_point_index {
-            let mut tmp = self.cached_block_filter_hashes.write().await;
-            tmp.0 = should_cached_check_point_index;
-            tmp.1.clear();
-        }
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn update_min_filtered_block_number(&self, min_filtered_block_number: BlockNumber) {
-        let should_cached_check_point_index =
-            self.calc_cached_check_point_index_when_sync_at(min_filtered_block_number + 1);
-        let current_cached_check_point_index =
-            self.cached_block_filter_hashes.read().expect("poisoned").0;
-        if current_cached_check_point_index != should_cached_check_point_index {
-            let mut tmp = self.cached_block_filter_hashes.write().expect("poisoned");
+            let mut tmp = write_lock!(self.cached_block_filter_hashes);
             tmp.0 = should_cached_check_point_index;
             tmp.1.clear();
         }
     }
 
-    #[cfg(target_arch = "wasm32")]
     pub(crate) async fn get_cached_block_filter_hashes(&self) -> (u32, Vec<packed::Byte32>) {
-        self.cached_block_filter_hashes.read().await.clone()
-    }
-    #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn get_cached_block_filter_hashes(&self) -> (u32, Vec<packed::Byte32>) {
-        self.cached_block_filter_hashes
-            .read()
-            .expect("poisoned")
-            .clone()
+        read_lock!(self.cached_block_filter_hashes).clone()
     }
     pub(crate) async fn update_cached_block_filter_hashes(&self, hashes: Vec<packed::Byte32>) {
-        #[cfg(target_arch = "wasm32")]
-        {
-            self.cached_block_filter_hashes.write().await.1 = hashes;
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            self.cached_block_filter_hashes.write().expect("poisoned").1 = hashes;
-        }
+        write_lock!(self.cached_block_filter_hashes).1 = hashes;
     }
 
     pub(crate) async fn if_cached_block_filter_hashes_require_update(
@@ -1698,10 +1670,7 @@ impl Peers {
         finalized_check_point_index: u32,
     ) -> Option<BlockNumber> {
         let (cached_index, cached_length) = {
-            #[cfg(target_arch = "wasm32")]
-            let tmp = self.cached_block_filter_hashes.read().await;
-            #[cfg(not(target_arch = "wasm32"))]
-            let tmp = self.cached_block_filter_hashes.read().expect("poisoned");
+            let tmp = read_lock!(self.cached_block_filter_hashes);
             (tmp.0, tmp.1.len())
         };
         if cached_index >= finalized_check_point_index {
@@ -1884,10 +1853,7 @@ impl Peers {
             // Check:
             // - If cached block filter hashes is same check point as the required,
             // - If all block filter hashes in that check point are downloaded.
-            #[cfg(target_arch = "wasm32")]
             let cached_data = self.get_cached_block_filter_hashes().await;
-            #[cfg(not(target_arch = "wasm32"))]
-            let cached_data = self.get_cached_block_filter_hashes();
 
             let current_cached_check_point_index = cached_data.0;
             should_cached_check_point_index == current_cached_check_point_index
@@ -2026,22 +1992,10 @@ impl Peers {
         if self.bad_message_allowed_each_hour == 0 {
             return true;
         }
-        #[cfg(target_arch = "wasm32")]
-        let result = self
-            .rate_limiter
-            .lock()
-            .await
+        mutex_lock!(self.rate_limiter)
             .check_key(&peer_index)
             .map_err(|_| ())
-            .is_err();
-        #[cfg(not(target_arch = "wasm32"))]
-        let result = self
-            .rate_limiter
-            .lock()
-            .map_err(|_| ())
-            .and_then(|inner| inner.check_key(&peer_index).map_err(|_| ()))
-            .is_err();
-        result
+            .is_err()
     }
 }
 
