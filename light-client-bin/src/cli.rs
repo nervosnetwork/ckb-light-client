@@ -13,20 +13,34 @@ pub(crate) struct RunConfig {
     pub(crate) run_env: RunEnv,
 }
 
+pub fn binary_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
+pub fn git_hash() -> &'static str {
+    concat!(env!("VERGEN_GIT_SHA"), env!("GIT_DIRTY_SUFFIX"))
+}
+
+pub fn build_time() -> &'static str {
+    env!("VERGEN_BUILD_TIMESTAMP")
+}
+
+fn version_info() -> &'static str {
+    concat!(
+        env!("CARGO_PKG_VERSION"),
+        " (",
+        env!("VERGEN_GIT_SHA"),
+        env!("GIT_DIRTY_SUFFIX"),
+        " ",
+        env!("VERGEN_BUILD_TIMESTAMP"),
+        ")"
+    )
+}
+
 impl AppConfig {
     pub(crate) fn load() -> Result<Self> {
-        let version = concat!(
-            env!("CARGO_PKG_VERSION"),
-            " (",
-            env!("VERGEN_GIT_SHA"),
-            env!("GIT_DIRTY_SUFFIX"),
-            " ",
-            env!("VERGEN_BUILD_TIMESTAMP"),
-            ")"
-        );
-
         let cmd = clap::Command::new("CKB Light Client")
-            .version(version)
+            .version(version_info())
             .author(clap::crate_authors!("\n"))
             .about(clap::crate_description!())
             .subcommand_required(true)
