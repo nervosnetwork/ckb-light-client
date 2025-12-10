@@ -15,8 +15,18 @@ pub(crate) struct RunConfig {
 
 impl AppConfig {
     pub(crate) fn load() -> Result<Self> {
+        let version = concat!(
+            env!("CARGO_PKG_VERSION"),
+            " (",
+            env!("VERGEN_GIT_SHA"),
+            env!("GIT_DIRTY_SUFFIX"),
+            " ",
+            env!("VERGEN_BUILD_TIMESTAMP"),
+            ")"
+        );
+
         let cmd = clap::Command::new("CKB Light Client")
-            .version(clap::crate_version!())
+            .version(version)
             .author(clap::crate_authors!("\n"))
             .about(clap::crate_description!())
             .subcommand_required(true)
