@@ -273,8 +273,8 @@ async fn headers_should_be_sorted() {
                 packed::GetLastStateProof::new_builder()
                     .last_hash(last_header.header().hash())
                     .start_hash(genesis_block.hash())
-                    .start_number(genesis_block.number().pack())
-                    .last_n_blocks(protocol.last_n_blocks().pack())
+                    .start_number(genesis_block.number())
+                    .last_n_blocks(protocol.last_n_blocks())
                     .difficulty_boundary(U256::zero().pack())
                     .build()
             };
@@ -574,8 +574,8 @@ async fn valid_proof_with_no_matched_sample() {
                 packed::GetLastStateProof::new_builder()
                     .last_hash(last_header.header().hash())
                     .start_hash(start_header.hash())
-                    .start_number(start_header.number().pack())
-                    .last_n_blocks(protocol.last_n_blocks().pack())
+                    .start_number(start_header.number())
+                    .last_n_blocks(protocol.last_n_blocks())
                     .difficulty_boundary(difficulty_boundary.pack())
                     .difficulties(difficulties.pack())
                     .build()
@@ -1726,7 +1726,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             let block_number: u64 = block.header().raw().number().unpack();
             block
                 .as_advanced_builder()
-                .timestamp((100 + block_number).pack())
+                .timestamp(100 + block_number)
                 .build()
         });
         assert_eq!(chain.shared().snapshot().tip_number(), last_number);
@@ -1838,7 +1838,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             let block_number: u64 = block.header().raw().number().unpack();
             block
                 .as_advanced_builder()
-                .timestamp((500 + block_number).pack())
+                .timestamp(500 + block_number)
                 .build()
         });
         assert_eq!(chain.shared().snapshot().tip_number(), last_number);

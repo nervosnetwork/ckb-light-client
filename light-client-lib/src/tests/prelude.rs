@@ -224,7 +224,7 @@ pub(crate) trait RunningChainExt: ChainExt {
                     .map(|(idx, _)| {
                         let out_point = packed::OutPoint::new_builder()
                             .tx_hash(tx.hash())
-                            .index((idx as u32).pack())
+                            .index(idx as u32)
                             .build();
                         packed::CellDep::new_builder().out_point(out_point).build()
                     })
@@ -387,8 +387,8 @@ pub(crate) trait RunningChainExt: ChainExt {
             packed::GetLastStateProof::new_builder()
                 .last_hash(last_header.header().hash())
                 .start_hash(start_header.hash())
-                .start_number(start_header.number().pack())
-                .last_n_blocks(last_n_blocks.pack())
+                .start_number(start_header.number())
+                .last_n_blocks(last_n_blocks)
                 .difficulty_boundary(difficulty_boundary.pack())
                 .difficulties(difficulties.pack())
                 .build()

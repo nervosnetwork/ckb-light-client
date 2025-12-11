@@ -268,7 +268,7 @@ impl FilterProtocol {
             start_number
         );
         let content = packed::GetBlockFilters::new_builder()
-            .start_number(start_number.pack())
+            .start_number(start_number)
             .build();
         let message = packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -291,7 +291,7 @@ impl FilterProtocol {
             start_number
         );
         let content = packed::GetBlockFilterHashes::new_builder()
-            .start_number(start_number.pack())
+            .start_number(start_number)
             .build();
         let message = packed::BlockFilterMessage::new_builder()
             .set(content)
@@ -314,7 +314,7 @@ impl FilterProtocol {
             start_number
         );
         let content = packed::GetBlockFilterCheckPoints::new_builder()
-            .start_number(start_number.pack())
+            .start_number(start_number)
             .build();
         let message = packed::BlockFilterMessage::new_builder()
             .set(content)

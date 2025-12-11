@@ -205,7 +205,7 @@ impl CKBProtocolHandler for RelayProtocol {
                         .map(|(tx, cycles, _)| {
                             packed::RelayTransaction::new_builder()
                                 .transaction(tx)
-                                .cycles(cycles.pack())
+                                .cycles(cycles)
                                 .build()
                         })
                 })

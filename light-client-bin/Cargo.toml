@@ -9,15 +9,15 @@ homepage = "https://github.com/nervosnetwork/ckb-light-client"
 repository = "https://github.com/nervosnetwork/ckb-light-client"
 
 [dependencies]
-ckb-async-runtime = "0.202.0"
-ckb-chain-spec = "0.202.0"
-ckb-network = "0.202.0"
-ckb-stop-handler = "0.202.0"
-ckb-resource = "0.202.0"
-ckb-jsonrpc-types = "0.202.0"
-ckb-types = "0.202.0"
-ckb-traits = "0.202.0"
-ckb-systemtime = "0.202.0"
+ckb-async-runtime = "1"
+ckb-chain-spec = "1"
+ckb-network = "1"
+ckb-stop-handler = "1"
+ckb-resource = "1"
+ckb-jsonrpc-types = "1"
+ckb-types = "1"
+ckb-traits = "1"
+ckb-systemtime = "1"
 
 ckb-light-client-lib = { path = "../light-client-lib" }
 clap = { version = "4", features = ["cargo"] }

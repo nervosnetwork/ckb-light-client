@@ -43,31 +43,31 @@ fn rpc() {
     // setup test data
     let lock_script1 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"lock_script1".to_vec()).pack())
         .build();
 
     let lock_script2 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Type.into())
+        .hash_type(ScriptHashType::Type)
         .args(Bytes::from(b"lock_script2".to_vec()).pack())
         .build();
 
     let lock_script3 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Type.into())
+        .hash_type(ScriptHashType::Type)
         .args(Bytes::from(b"lock_script3".to_vec()).pack())
         .build();
 
     let type_script1 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"type_script1".to_vec()).pack())
         .build();
 
     let type_script2 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Type.into())
+        .hash_type(ScriptHashType::Type)
         .args(Bytes::from(b"type_script2".to_vec()).pack())
         .build();
 
@@ -112,7 +112,7 @@ fn rpc() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
-                .number(0.pack())
+                .number(0)
                 .build(),
         )
         .build();
@@ -213,7 +213,7 @@ fn rpc() {
             .header(
                 HeaderBuilder::default()
                     .epoch(EpochNumberWithFraction::new(0, pre_block.number() + 1, 1000).pack())
-                    .number((pre_block.number() + 1).pack())
+                    .number(pre_block.number() + 1)
                     .parent_hash(pre_block.hash())
                     .build(),
             )
@@ -752,14 +752,14 @@ fn rpc() {
     // test get_header rpc
     let extra_header = HeaderBuilder::default()
         .epoch(EpochNumberWithFraction::new(0, 500, 1000).pack())
-        .number(500.pack())
+        .number(500)
         .build();
     let fetched_headers: Vec<H256> = [0xaa11, 0xaa77, 0xaa88]
         .into_iter()
         .map(|nonce| {
-            let header = Header::new_builder().nonce(nonce.pack()).build();
+            let header = Header::new_builder().nonce(nonce).build();
             let hash = header.calc_header_hash().unpack();
-            let extension = (nonce + 1).to_le_bytes().to_vec();
+            let extension = (nonce + 1u128).to_le_bytes().to_vec();
             storage.add_fetched_header(&HeaderWithExtension {
                 header: header,
                 extension: Some(extension.pack()),
@@ -827,7 +827,7 @@ fn rpc() {
         rv,
         FetchStatus::Fetched {
             data: Header::new_builder()
-                .nonce(0xaa11.pack())
+                .nonce(0xaa11)
                 .build()
                 .into_view()
                 .into()
@@ -1075,7 +1075,7 @@ fn get_cells_capacity_bug() {
     // setup test data
     let lock_script1 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"lock_script1".to_vec()).pack())
         .build();
 
@@ -1101,7 +1101,7 @@ fn get_cells_capacity_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
-                .number(0.pack())
+                .number(0)
                 .build(),
         )
         .build();
@@ -1117,7 +1117,7 @@ fn get_cells_capacity_bug() {
 
     let lock_script2 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"lock_script2".to_vec()).pack())
         .build();
 
@@ -1143,7 +1143,7 @@ fn get_cells_capacity_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
-                .number(1.pack())
+                .number(1)
                 .build(),
         )
         .build();
@@ -1173,7 +1173,7 @@ fn get_cells_capacity_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 2, 1000).pack())
-                .number(2.pack())
+                .number(2)
                 .build(),
         )
         .build();
@@ -1200,13 +1200,13 @@ fn get_cells_after_rollback_bug() {
     // setup test data
     let lock_script1 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"lock_script1".to_vec()).pack())
         .build();
 
     let lock_script2 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"lock_script2".to_vec()).pack())
         .build();
 
@@ -1232,7 +1232,7 @@ fn get_cells_after_rollback_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
-                .number(0.pack())
+                .number(0)
                 .build(),
         )
         .build();
@@ -1275,7 +1275,7 @@ fn get_cells_after_rollback_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
-                .number(1.pack())
+                .number(1)
                 .build(),
         )
         .build();
@@ -1306,7 +1306,7 @@ fn get_cells_after_rollback_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 2, 1000).pack())
-                .number(2.pack())
+                .number(2)
                 .build(),
         )
         .build();
@@ -1627,13 +1627,13 @@ fn test_chain_txs_in_same_block_bug() {
     // setup test data
     let lock_script1 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"lock_script1".to_vec()).pack())
         .build();
 
     let lock_script2 = ScriptBuilder::default()
         .code_hash(H256(rand::random()).pack())
-        .hash_type(ScriptHashType::Data.into())
+        .hash_type(ScriptHashType::Data)
         .args(Bytes::from(b"lock_script2".to_vec()).pack())
         .build();
 
@@ -1659,7 +1659,7 @@ fn test_chain_txs_in_same_block_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 0, 1000).pack())
-                .number(0.pack())
+                .number(0)
                 .build(),
         )
         .build();
@@ -1707,7 +1707,7 @@ fn test_chain_txs_in_same_block_bug() {
         .header(
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
-                .number(1.pack())
+                .number(1)
                 .build(),
         )
         .build();
