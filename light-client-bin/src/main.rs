@@ -20,7 +20,10 @@ fn main() -> anyhow::Result<()> {
         .try_init()
         .expect("env_logger builder init should be ok");
 
-    log::info!("Starting ...");
+    log::info!("Starting CKB Light Client ...");
+    log::info!("Version: {}", cli::binary_version());
+    log::info!("Git Hash: {}", cli::git_hash());
+    log::info!("Built Time: {}", cli::build_time());
 
     AppConfig::load()?.execute()?;
 
