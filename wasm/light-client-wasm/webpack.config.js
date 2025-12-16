@@ -16,7 +16,7 @@ module.exports = {
     plugins: [
         new WasmPackPlugin({
             crateDirectory: path.resolve(__dirname, "."),
-            outName: "light-client-db-worker",
+            outName: "light-client-wasm",
             extraArgs: "--target web"
         }),
         // new webpack.ProvidePlugin({
