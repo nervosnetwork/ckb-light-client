@@ -37,7 +37,6 @@ export default function Worker() {
 
             const inlineWorkerFunctionCode = `
 export default function inlineWorker(scriptText) {
-  // 检测是否在 Node.js 环境
   if (typeof process !== 'undefined' && process.versions && process.versions.node) {
     const { Worker } = require('worker_threads');
     const fs = require('fs');
@@ -45,19 +44,15 @@ export default function inlineWorker(scriptText) {
     const os = require('os');
     const crypto = require('crypto');
     
-    // 生成临时文件路径
     const hash = crypto.createHash('md5').update(scriptText).digest('hex').slice(0, 8);
     const tempDir = os.tmpdir();
     const tempFilePath = path.join(tempDir, \`worker-\${hash}-\${Date.now()}.mjs\`);
     
-    // 写入临时文件
     fs.writeFileSync(tempFilePath, scriptText, 'utf-8');
     console.log('[inline-worker] Created temporary worker file:', tempFilePath);
     
-    // 使用文件路径创建 Worker
     const worker = new Worker(tempFilePath, ${JSON.stringify(options)});
     
-    // 清理临时文件（在 worker 终止或错误时）
     const cleanup = () => {
       try {
         if (fs.existsSync(tempFilePath)) {
@@ -78,7 +73,6 @@ export default function inlineWorker(scriptText) {
     
     return worker;
   } else {
-    // 浏览器环境
     const blob = new Blob([scriptText], {type: 'text/javascript'});
     const url = URL.createObjectURL(blob);
     const worker = new Worker(url, ${JSON.stringify(options)});

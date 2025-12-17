@@ -25,11 +25,11 @@ self.on("message", async (evt) => {
         loaded = true;
         return;
     }
-    const data = evt.data as LightClientFunctionCall;
+    const data = evt as LightClientFunctionCall;
     try {
         self.postMessage({
             ok: true,
-            data: ((wasmModule as any)[data.name])(...evt.data.args)
+            data: ((wasmModule as any)[data.name])(...evt.args)
         })
     } catch (e) {
         self.postMessage({
