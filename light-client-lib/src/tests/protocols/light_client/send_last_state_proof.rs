@@ -1819,11 +1819,11 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
 
         assert_eq!(storage.get_min_filtered_block_number(), prev_last_number);
         assert_eq!(
-            storage.get_earliest_matched_blocks().unwrap().0,
+            storage.get_earliest_matched_blocks().unwrap().start_number,
             earliest_matched_number
         );
         assert_eq!(
-            storage.get_latest_matched_blocks().unwrap().0,
+            storage.get_latest_matched_blocks().unwrap().start_number,
             prev_last_number
         );
     }
@@ -2003,11 +2003,14 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             // No reorg happened, so matched blocks should still exist
             assert!(earliest_matched_blocks_opt.is_some());
             assert_eq!(
-                earliest_matched_blocks_opt.unwrap().0,
+                earliest_matched_blocks_opt.unwrap().start_number,
                 earliest_matched_number
             );
             assert!(latest_matched_blocks_opt.is_some());
-            assert_eq!(latest_matched_blocks_opt.unwrap().0, prev_last_number);
+            assert_eq!(
+                latest_matched_blocks_opt.unwrap().start_number,
+                prev_last_number
+            );
         } else {
             // Reorg happened, calculate which matched blocks were removed
             let to_number = min_filtered_block_number;

@@ -57,6 +57,26 @@ pub struct ScriptStatus {
     pub block_number: BlockNumber,
 }
 
+/// Represents a single matched block in a range
+#[derive(Debug, Clone)]
+pub struct MatchedBlock {
+    /// The block hash
+    pub hash: Byte32,
+    /// Whether this block has been proved
+    pub proved: bool,
+}
+
+/// Represents a range of matched blocks
+#[derive(Debug, Clone)]
+pub struct MatchedBlocks {
+    /// The starting block number of this range
+    pub start_number: u64,
+    /// Total number of blocks in the range
+    pub blocks_count: u64,
+    /// List of matched blocks with their proved status
+    pub blocks: Vec<MatchedBlock>,
+}
+
 pub enum SetScriptsCommand {
     All,
     Partial,

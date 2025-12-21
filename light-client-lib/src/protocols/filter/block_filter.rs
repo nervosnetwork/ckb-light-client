@@ -143,22 +143,26 @@ impl FilterProtocol {
             debug!("found best proved peer {}", peer);
 
             let mut matched_blocks = self.peers.matched_blocks().write().await;
-            if let Some((db_start_number, blocks_count, db_blocks)) =
-                self.storage.get_earliest_matched_blocks()
-            {
+            if let Some(db_matched_blocks) = self.storage.get_earliest_matched_blocks() {
                 debug!(
                     "try recover matched blocks from storage, start_number={}, \
                              blocks_count={}, matched_count: {}",
-                    db_start_number,
-                    blocks_count,
+                    db_matched_blocks.start_number,
+                    db_matched_blocks.blocks_count,
                     matched_blocks.len(),
                 );
                 let option = matched_blocks.is_empty();
 
                 if option {
                     // recover matched blocks from storage
-                    self.peers
-                        .add_matched_blocks(&mut matched_blocks, db_blocks);
+                    self.peers.add_matched_blocks(
+                        &mut matched_blocks,
+                        db_matched_blocks
+                            .blocks
+                            .into_iter()
+                            .map(|b| (b.hash, b.proved))
+                            .collect(),
+                    );
                     let tip_header = self.storage.get_tip_header();
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.peers),

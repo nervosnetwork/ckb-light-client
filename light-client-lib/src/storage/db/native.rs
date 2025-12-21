@@ -1,9 +1,9 @@
 use super::super::{
     extract_raw_data, parse_matched_blocks, BlockNumber, Byte32, CellIndex, CellType, CpIndex,
-    HeaderWithExtension, Key, KeyPrefix, OutputIndex, Script, ScriptStatus, ScriptType,
-    SetScriptsCommand, TxIndex, Value, WrappedBlockView, FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY,
-    LAST_N_HEADERS_KEY, LAST_STATE_KEY, MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX,
-    MIN_FILTERED_BLOCK_NUMBER,
+    HeaderWithExtension, Key, KeyPrefix, MatchedBlock, MatchedBlocks, OutputIndex, Script,
+    ScriptStatus, ScriptType, SetScriptsCommand, TxIndex, Value, WrappedBlockView,
+    FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY, LAST_N_HEADERS_KEY, LAST_STATE_KEY,
+    MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX, MIN_FILTERED_BLOCK_NUMBER,
 };
 use crate::error::Result;
 use ckb_traits::{CellDataProvider, HeaderProvider};
@@ -18,6 +18,7 @@ use ckb_types::{
     utilities::{build_filter_data, calc_filter_hash},
     U256,
 };
+use log::info;
 use rocksdb::{
     ops::{Delete, GetPinned},
     prelude::{Get, Iterate, Open, Put, WriteOps},
@@ -278,8 +279,7 @@ impl Storage {
         batch.commit().expect("batch commit should be ok");
     }
 
-    #[allow(clippy::type_complexity)]
-    fn get_matched_blocks(&self, direction: Direction) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+    fn get_matched_blocks(&self, direction: Direction) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         let iter_from = match direction {
             Direction::Forward => key_prefix.clone(),
@@ -297,18 +297,25 @@ impl Storage {
                 let mut u64_bytes = [0u8; 8];
                 u64_bytes.copy_from_slice(&key[key_prefix.len()..]);
                 let start_number = u64::from_be_bytes(u64_bytes);
-                let (blocks_count, blocks) = parse_matched_blocks(&value);
-                (start_number, blocks_count, blocks)
+                let (blocks_count, raw_blocks) = parse_matched_blocks(&value);
+                let blocks = raw_blocks
+                    .into_iter()
+                    .map(|(hash, proved)| MatchedBlock { hash, proved })
+                    .collect();
+                MatchedBlocks {
+                    start_number,
+                    blocks_count,
+                    blocks,
+                }
             })
             .next()
     }
 
-    #[allow(clippy::type_complexity)]
-    pub fn get_earliest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+    pub fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
         self.get_matched_blocks(Direction::Forward)
     }
-    #[allow(clippy::type_complexity)]
-    pub fn get_latest_matched_blocks(&self) -> Option<(u64, u64, Vec<(Byte32, bool)>)> {
+
+    pub fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
         self.get_matched_blocks(Direction::Reverse)
     }
 
@@ -728,18 +735,21 @@ impl Storage {
             if entry.is_none() {
                 break;
             }
+            dbg!(&entry);
 
-            let (start_number, blocks_count, block_hashes) = entry.unwrap();
+            let matched_blocks = entry.unwrap();
+            let start_number = matched_blocks.start_number;
+            let blocks_count = matched_blocks.blocks_count;
             let mut should_remove = false;
 
-            for (block_hash, _) in &block_hashes {
-                if let Some(header) = self.get_header(block_hash) {
+            for block in &matched_blocks.blocks {
+                if let Some(header) = self.get_header(&block.hash) {
                     let stored_number: u64 = header.number();
                     if stored_number < start_number || stored_number >= start_number + blocks_count
                     {
                         warn!(
                             "Invalid matched block {:#x} at number {} outside expected range [{}, {}), removing entry at start_number={}",
-                            block_hash, stored_number, start_number, start_number + blocks_count, start_number
+                            block.hash, stored_number, start_number, start_number + blocks_count, start_number
                         );
                         should_remove = true;
                         break;
@@ -747,7 +757,7 @@ impl Storage {
                 } else if start_number + 1000 < tip_number {
                     warn!(
                         "Matched block {:#x} not found in storage, entry at start_number={} is {} blocks behind tip, removing",
-                        block_hash, start_number, tip_number - start_number
+                        block.hash, start_number, tip_number - start_number
                     );
                     should_remove = true;
                     break;
