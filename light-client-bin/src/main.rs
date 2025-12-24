@@ -9,7 +9,7 @@ mod tests;
 use cli::AppConfig;
 use env_logger::{Builder, Env, Target};
 
-#[cfg(not(target_env = "msvc"))]
+#[cfg(all(not(target_env = "msvc"), not(target_os = "android")))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
