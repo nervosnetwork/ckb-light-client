@@ -968,11 +968,10 @@ impl Service {
         storage: Storage,
         peers: Arc<Peers>,
         pending_txs: Arc<RwLock<PendingTxs>>,
-        consensus: Consensus,
+        consensus: Arc<Consensus>,
     ) -> Server {
         let mut io_handler = IoHandler::new();
         let swc = StorageWithChainData::new(storage, Arc::clone(&peers), Arc::clone(&pending_txs));
-        let consensus = Arc::new(consensus);
         let block_filter_rpc_impl = BlockFilterRpcImpl { swc: swc.clone() };
         let chain_rpc_impl = ChainRpcImpl {
             swc: swc.clone(),

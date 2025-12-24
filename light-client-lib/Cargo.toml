@@ -9,7 +9,11 @@ homepage = "https://github.com/nervosnetwork/ckb-light-client"
 repository = "https://github.com/nervosnetwork/ckb-light-client"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "rlib", "staticlib"]
+
+[features]
+jni-bridge = []
+portable = ["rocksdb/portable"]
 
 [dependencies]
 ckb-app-config = "1"
@@ -47,11 +51,18 @@ anyhow = "1.0.56"
 thiserror = "1.0.30"
 toml = "0.5.8"
 tokio = { version = "1.20" }
+serde_json = "1.0"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
     "snappy",
 ], default-features = false }
+ckb-async-runtime = "1"
+ckb-stop-handler = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+android_logger = "0.13"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time = "1.1.0"
@@ -61,7 +72,6 @@ serde-wasm-bindgen = "0.6.5"
 light-client-db-common = { path = "../wasm/light-client-db-common" }
 web-sys = "0.3.72"
 console_error_panic_hook = { version = "0.1.7" }
-serde_json = "1.0.134"
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3.45"

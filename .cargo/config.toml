@@ -1,0 +1,15 @@
+# Android cross-compilation configuration
+# The actual toolchain paths are set by build-android.sh via environment variables
+
+[target.aarch64-linux-android]
+# Environment variables will set the linker and ar
+
+# Pass Android-specific flags to RocksDB compilation
+[env]
+# Ensure RocksDB doesn't detect unavailable Android features
+ROCKSDB_DISABLE_FALLOCATE = "1"
+ROCKSDB_DISABLE_SYNC_FILE_RANGE = "1"
+ROCKSDB_DISABLE_PTHREAD_MUTEX_ADAPTIVE_NP = "1"
+ROCKSDB_DISABLE_SCHED_GETCPU = "1"
+ROCKSDB_DISABLE_AUXV = "1"
+ROCKSDB_DISABLE_MALLOC_USABLE_SIZE = "1"
