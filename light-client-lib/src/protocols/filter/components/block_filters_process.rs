@@ -33,6 +33,8 @@ impl<'a> BlockFiltersProcess<'a> {
     }
 
     pub async fn execute(self) -> Status {
+        debug!("block filters process execute");
+
         if self.filter.storage.is_filter_scripts_empty() {
             info!("ignoring, filter scripts may have been cleared during syncing");
             return Status::ok();

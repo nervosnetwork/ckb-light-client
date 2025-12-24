@@ -39,6 +39,7 @@ impl<'a> SendBlocksProofProcess<'a> {
 
     pub(crate) async fn execute(self) -> Status {
         let status = self.execute_internally().await;
+        debug!("block proof status: {}", status);
         self.protocol
             .peers()
             .update_blocks_proof_request(self.peer_index, None, false);
@@ -98,6 +99,9 @@ impl<'a> SendBlocksProofProcess<'a> {
             .to_entity()
             .into_iter()
             .collect::<Vec<_>>();
+
+        debug!("got block proof: missing {:?}", &missing_block_hashes);
+
         if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
             error!("peer {} send an unknown proof", self.peer_index);
             return StatusCode::UnexpectedResponse.into();
@@ -224,6 +228,52 @@ impl<'a> SendBlocksProofProcess<'a> {
         self.protocol
             .peers()
             .mark_fetching_headers_missing(&missing_block_hashes);
+
+        // Remove missing blocks from matched_blocks to prevent batch stall
+        // This is safe because:
+        // 1. If these are uncle blocks from an old fork, they've already been re-filtered
+        // 2. If from a recent reorg, SendLastStateProof will detect it and trigger
+        //    rollback_to_block(), which resets min_filtered_block_number and re-runs filters
+        // 3. New main chain blocks at the same heights will be checked during re-filtering
+        if original_request.should_get_blocks() && !missing_block_hashes.is_empty() {
+            let mut matched_blocks = self.protocol.peers().matched_blocks().write().await;
+            let mut removed_count = 0;
+
+            for missing_hash in &missing_block_hashes {
+                if matched_blocks.remove(&missing_hash.unpack()).is_some() {
+                    removed_count += 1;
+                    debug!(
+                        "Removed missing block {:#x} from matched_blocks \
+                         (likely uncle block or peer doesn't have it)",
+                        missing_hash
+                    );
+                }
+            }
+
+            if removed_count > 0 {
+                info!(
+                    "Removed {} missing block(s) from matched_blocks. \
+                     If due to reorg, filters will re-run from fork point to check new blocks.",
+                    removed_count
+                );
+
+                // Check if batch is now complete (all remaining blocks have been downloaded)
+                let all_downloaded = self
+                    .protocol
+                    .peers()
+                    .all_matched_blocks_downloaded(&matched_blocks);
+
+                if all_downloaded && !matched_blocks.is_empty() {
+                    info!(
+                        "Batch complete after removing missing blocks, {} blocks ready",
+                        matched_blocks.len()
+                    );
+                } else if matched_blocks.is_empty() {
+                    debug!("matched_blocks now empty after removing missing blocks");
+                }
+            }
+        }
+
         Status::ok()
     }
 }

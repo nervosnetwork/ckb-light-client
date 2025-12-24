@@ -735,7 +735,6 @@ impl Storage {
             if entry.is_none() {
                 break;
             }
-            dbg!(&entry);
 
             let matched_blocks = entry.unwrap();
             let start_number = matched_blocks.start_number;
