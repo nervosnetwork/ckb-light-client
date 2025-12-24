@@ -141,8 +141,8 @@ pub async fn main_loop(log_level: &str) {
                                 match wait_for_command_sync(&input_i32_arr, InputCommand::Waiting)
                                     .unwrap()
                                 {
-                                    s @ (InputCommand::Waiting
-                                    | InputCommand::OpenDatabase
+                                    InputCommand::Waiting => {},
+                                    s @ (InputCommand::OpenDatabase
                                     | InputCommand::Shutdown
                                     | InputCommand::ResponseTakeWhile) => {
                                         log::warn!(
