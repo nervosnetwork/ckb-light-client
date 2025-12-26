@@ -77,16 +77,12 @@ pub struct MatchedBlocks {
     pub blocks: Vec<MatchedBlock>,
 }
 
+#[derive(Default)]
 pub enum SetScriptsCommand {
+    #[default]
     All,
     Partial,
     Delete,
-}
-
-impl Default for SetScriptsCommand {
-    fn default() -> Self {
-        Self::All
-    }
 }
 
 #[derive(PartialEq, Eq, Hash)]
@@ -437,7 +433,7 @@ fn parse_matched_blocks(data: &[u8]) -> (u64, Vec<(Byte32, bool)>) {
     let mut u64_bytes = [0u8; 8];
     u64_bytes.copy_from_slice(&data[0..8]);
     let blocks_count = u64::from_le_bytes(u64_bytes);
-    assert!((data.len() - 8) % 33 == 0);
+    assert!((data.len() - 8).is_multiple_of(33));
     let matched_len = (data.len() - 8) / 33;
     let matched_blocks = (0..matched_len)
         .map(|i| {

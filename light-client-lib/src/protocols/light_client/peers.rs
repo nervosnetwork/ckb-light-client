@@ -113,8 +113,10 @@ pub struct LastState {
  * @endum
  * ```
  */
-#[derive(Clone)]
+#[allow(clippy::large_enum_variant)]
+#[derive(Clone, Default)]
 pub enum PeerState {
+    #[default]
     Initialized,
     RequestFirstLastState {
         when_sent: u64,
@@ -569,7 +571,7 @@ impl CheckPoints {
         if check_points.is_empty() {
             return Err(StatusCode::CheckPointsIsEmpty.into());
         }
-        if start_number % self.check_point_interval != 0 {
+        if !start_number.is_multiple_of(self.check_point_interval) {
             let errmsg = format!(
                 "check points should at `{} * N` but got {}",
                 self.check_point_interval, start_number
@@ -775,12 +777,6 @@ impl LatestBlockFilterHashes {
         } else {
             Ok(None)
         }
-    }
-}
-
-impl Default for PeerState {
-    fn default() -> Self {
-        Self::Initialized
     }
 }
 
@@ -1163,7 +1159,7 @@ impl Peers {
     }
 
     pub(crate) fn required_peers_count(&self) -> usize {
-        let required_peers_count = ((self.get_max_outbound_peers() + 1) / 2) as usize;
+        let required_peers_count = self.get_max_outbound_peers().div_ceil(2) as usize;
         if required_peers_count == 0 {
             panic!("max outbound peers shouldn't be zero!");
         }

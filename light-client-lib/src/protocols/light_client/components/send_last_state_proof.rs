@@ -488,32 +488,32 @@ impl EpochDifficultyTrend {
     ) -> EpochDifficultyTrendDetails {
         let (increased, decreased) = match (limit, self) {
             (EstimatedLimit::Min, Self::Unchanged) => {
-                let decreased = (n + 1) / 2;
+                let decreased = n.div_ceil(2);
                 let increased = n - decreased;
                 (increased, decreased)
             }
             (EstimatedLimit::Max, Self::Unchanged) => {
-                let increased = (n + 1) / 2;
+                let increased = n.div_ceil(2);
                 let decreased = n - increased;
                 (increased, decreased)
             }
             (EstimatedLimit::Min, Self::Increased { .. }) => {
-                let decreased = (n - k + 1) / 2;
+                let decreased = (n - k).div_ceil(2);
                 let increased = n - decreased;
                 (increased, decreased)
             }
             (EstimatedLimit::Max, Self::Increased { .. }) => {
-                let increased = (n - k + 1) / 2 + k;
+                let increased = (n - k).div_ceil(2) + k;
                 let decreased = n - increased;
                 (increased, decreased)
             }
             (EstimatedLimit::Min, Self::Decreased { .. }) => {
-                let decreased = (n - k + 1) / 2 + k;
+                let decreased = (n - k).div_ceil(2) + k;
                 let increased = n - decreased;
                 (increased, decreased)
             }
             (EstimatedLimit::Max, Self::Decreased { .. }) => {
-                let increased = (n - k + 1) / 2;
+                let increased = (n - k).div_ceil(2);
                 let decreased = n - increased;
                 (increased, decreased)
             }
