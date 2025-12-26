@@ -151,9 +151,6 @@ impl FilterProtocol {
                     db_matched_blocks.blocks_count,
                     matched_blocks.len(),
                 );
-                db_matched_blocks.blocks.iter().for_each(|b| {
-                    debug!("db matched block: {}, proved={}", b.hash, b.proved);
-                });
                 let option = matched_blocks.is_empty();
 
                 if option {

@@ -2035,12 +2035,15 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             } else {
                 assert!(earliest_matched_blocks_opt.is_some());
                 assert_eq!(
-                    earliest_matched_blocks_opt.unwrap().0,
+                    earliest_matched_blocks_opt.unwrap().start_number,
                     earliest_matched_number
                 );
                 assert!(latest_matched_blocks_opt.is_some());
                 let expected_latest = cmp::min(prev_last_number, latest_kept_matched_block);
-                assert_eq!(latest_matched_blocks_opt.unwrap().0, expected_latest);
+                assert_eq!(
+                    latest_matched_blocks_opt.unwrap().start_number,
+                    expected_latest
+                );
             }
         }
         assert_eq!(

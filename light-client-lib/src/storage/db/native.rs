@@ -18,7 +18,6 @@ use ckb_types::{
     utilities::{build_filter_data, calc_filter_hash},
     U256,
 };
-use log::info;
 use rocksdb::{
     ops::{Delete, GetPinned},
     prelude::{Get, Iterate, Open, Put, WriteOps},

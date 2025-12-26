@@ -705,6 +705,11 @@ impl LightClientProtocol {
     }
 
     async fn get_idle_blocks(&mut self, nc: &BoxedCKBProtocolContext) {
+        // Clean up old missing headers (uncle blocks) older than 1 hour
+        // to prevent unbounded memory growth in fetching_headers
+        const MAX_MISSING_AGE_MS: u64 = 3_600_000; // 1 hour
+        self.peers.cleanup_old_missing_headers(MAX_MISSING_AGE_MS);
+
         let tip_header = self.storage.get_tip_header();
         let matched_blocks = self.peers.matched_blocks().read().await;
 
