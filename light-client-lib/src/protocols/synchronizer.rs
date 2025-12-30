@@ -65,12 +65,17 @@ impl CKBProtocolHandler for SyncProtocol {
                 if !matched_blocks.is_empty()
                     && self.peers.all_matched_blocks_downloaded(&matched_blocks)
                 {
-                    let (start_number, blocks_count, db_blocks) = self
+                    let matched_blocks_data = self
                         .storage
                         .get_earliest_matched_blocks()
                         .expect("get matched blocks from storage");
-                    let db_blocks: HashSet<_> =
-                        db_blocks.into_iter().map(|(hash, _)| hash).collect();
+                    let start_number = matched_blocks_data.start_number;
+                    let blocks_count = matched_blocks_data.blocks_count;
+                    let db_blocks: HashSet<_> = matched_blocks_data
+                        .blocks
+                        .into_iter()
+                        .map(|b| b.hash)
+                        .collect();
 
                     self.storage.remove_matched_blocks(start_number);
                     let blocks = self.peers.clear_matched_blocks(&mut matched_blocks);
@@ -90,11 +95,15 @@ impl CKBProtocolHandler for SyncProtocol {
                         .update_block_number(start_number + blocks_count - 1);
 
                     // send more GetBlocksProof/GetBlocks requests
-                    if let Some((_start_number, _blocks_count, db_blocks)) =
-                        self.storage.get_earliest_matched_blocks()
-                    {
-                        self.peers
-                            .add_matched_blocks(&mut matched_blocks, db_blocks);
+                    if let Some(db_matched_blocks) = self.storage.get_earliest_matched_blocks() {
+                        self.peers.add_matched_blocks(
+                            &mut matched_blocks,
+                            db_matched_blocks
+                                .blocks
+                                .into_iter()
+                                .map(|b| (b.hash, b.proved))
+                                .collect(),
+                        );
                         let tip_header = self.storage.get_tip_header();
                         prove_or_download_matched_blocks(
                             Arc::clone(&self.peers),

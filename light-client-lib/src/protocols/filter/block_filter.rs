@@ -143,22 +143,76 @@ impl FilterProtocol {
             debug!("found best proved peer {}", peer);
 
             let mut matched_blocks = self.peers.matched_blocks().write().await;
-            if let Some((db_start_number, blocks_count, db_blocks)) =
-                self.storage.get_earliest_matched_blocks()
-            {
+            if let Some(db_matched_blocks) = self.storage.get_earliest_matched_blocks() {
                 debug!(
                     "try recover matched blocks from storage, start_number={}, \
                              blocks_count={}, matched_count: {}",
-                    db_start_number,
-                    blocks_count,
+                    db_matched_blocks.start_number,
+                    db_matched_blocks.blocks_count,
                     matched_blocks.len(),
                 );
                 let option = matched_blocks.is_empty();
 
                 if option {
-                    // recover matched blocks from storage
+                    debug!("matched_blocks is empty");
+
+                    // Filter out blocks already marked as missing (e.g., uncle blocks)
+                    let filtered_blocks: Vec<_> = db_matched_blocks
+                        .blocks
+                        .iter()
+                        .filter(|b| {
+                            if let Some((_added_ts, _first_sent, missing)) =
+                                self.peers.get_header_fetch_info(&b.hash)
+                            {
+                                debug!(
+                                    "header fetch info for block {:#x}:added_ts={}, first_sent={}, missing={}",
+                                    b.hash,
+                                    _added_ts,
+                                    _first_sent,
+                                    missing
+                                );
+                                if missing {
+                                    debug!(
+                                        "Skipping block {:#x} from DB - marked as missing",
+                                        b.hash
+                                    );
+                                    return false;
+                                }
+                            } else {
+                                trace!("not found header fetch info for block {:#x}", b.hash);
+                            }
+                            true
+                        })
+                        .map(|b| (b.hash.clone(), b.proved))
+                        .collect();
+
+                    if filtered_blocks.is_empty() {
+                        // All blocks in this DB range are missing - remove it and load next
+                        info!(
+                            "All {} blocks in DB range {} are missing (uncle blocks), removing",
+                            db_matched_blocks.blocks.len(),
+                            db_matched_blocks.start_number
+                        );
+                        self.storage
+                            .remove_matched_blocks(db_matched_blocks.start_number);
+
+                        // Also remove these blocks from fetching_headers to prevent memory leak
+                        for block in &db_matched_blocks.blocks {
+                            self.peers.remove_fetching_header(&block.hash);
+                        }
+
+                        // Will load next range on next iteration
+                        return;
+                    } else {
+                        debug!(
+                            "add filtered blocks into matched_blocks, count={}",
+                            filtered_blocks.len()
+                        );
+                    }
+
+                    // recover matched blocks from storage (only non-missing ones)
                     self.peers
-                        .add_matched_blocks(&mut matched_blocks, db_blocks);
+                        .add_matched_blocks(&mut matched_blocks, filtered_blocks);
                     let tip_header = self.storage.get_tip_header();
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.peers),
@@ -174,6 +228,11 @@ impl FilterProtocol {
                         );
                         self.send_get_block_filters(nc, *peer, start_number);
                     }
+                } else {
+                    debug!("matched blocks are not empty:");
+                    matched_blocks.iter().for_each(|matched_block| {
+                        debug!("matched_block: {}, {:?}", matched_block.0, matched_block.1);
+                    });
                 }
             } else if self.should_ask(immediately).await && could_ask_more {
                 debug!(
@@ -262,10 +321,9 @@ impl FilterProtocol {
         peer: PeerIndex,
         start_number: BlockNumber,
     ) {
-        trace!(
+        debug!(
             "request block filter from peer {}, starts at {}",
-            peer,
-            start_number
+            peer, start_number
         );
         let content = packed::GetBlockFilters::new_builder()
             .start_number(start_number)

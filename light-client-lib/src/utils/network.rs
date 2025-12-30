@@ -13,6 +13,7 @@ pub(crate) fn prove_or_download_matched_blocks(
     nc: &dyn CKBProtocolContext,
     init_blocks_in_transit_per_peer: usize,
 ) {
+    info!("in prove_or_download-matched blocks");
     let best_peers: Vec<_> = peers.get_best_proved_peers(best_tip);
     let last_hash = best_tip.calc_header_hash();
 
@@ -33,9 +34,10 @@ pub(crate) fn prove_or_download_matched_blocks(
                 peers.get_matched_blocks_to_prove(matched_blocks, GET_BLOCKS_PROOF_LIMIT);
             if !blocks_to_prove.is_empty() {
                 debug!(
-                    "send get blocks proof request to peer: {}, count={}",
+                    "send get blocks proof request to peer: {}, count={}, {:?}",
                     peer_index,
-                    blocks_to_prove.len()
+                    blocks_to_prove.len(),
+                    blocks_to_prove,
                 );
                 let content = packed::GetBlocksProof::new_builder()
                     .block_hashes(blocks_to_prove.pack())

@@ -1216,9 +1216,23 @@ impl Peers {
     }
     pub(crate) fn mark_fetching_headers_missing(&self, block_hashes: &[Byte32]) {
         for block_hash in block_hashes {
-            if let Some(mut value) = self.fetching_headers.get_mut(block_hash) {
-                value.missing = true;
-            }
+            self.fetching_headers
+                .entry(block_hash.clone())
+                .and_modify(|info| {
+                    // Block was already in fetching_headers, mark as missing
+                    info.missing = true;
+                })
+                .or_insert_with(|| {
+                    // Block not in fetching_headers (e.g., loaded from matched_blocks DB)
+                    // Insert with missing=true to prevent infinite retry loop
+                    // This will be cleaned up when the DB range is removed
+                    FetchInfo {
+                        added_ts: unix_time_as_millis(),
+                        first_sent: 0,
+                        timeout: false,
+                        missing: true,
+                    }
+                });
         }
     }
     pub(crate) fn mark_fetching_txs_missing(&self, tx_hashes: &[Byte32]) {
@@ -1228,6 +1242,32 @@ impl Peers {
             }
         }
     }
+
+    /// Clean up old missing entries from fetching_headers to prevent unbounded memory growth
+    /// This is called periodically to remove uncle blocks that were marked as missing
+    /// but are no longer needed (older than max_age_ms)
+    pub(crate) fn cleanup_old_missing_headers(&self, max_age_ms: u64) {
+        let now = unix_time_as_millis();
+        let mut removed_count = 0;
+
+        self.fetching_headers.retain(|_hash, info| {
+            if info.missing && now.saturating_sub(info.added_ts) > max_age_ms {
+                removed_count += 1;
+                false // Remove this entry
+            } else {
+                true // Keep this entry
+            }
+        });
+
+        if removed_count > 0 {
+            log::debug!(
+                "Cleaned up {} old missing headers (age > {}ms)",
+                removed_count,
+                max_age_ms
+            );
+        }
+    }
+
     // mark all fetching hashes (headers/txs) as timeout
     pub(crate) fn mark_fetching_headers_timeout(&self, peer_index: PeerIndex) {
         if let Some(peer) = self.get_peer(&peer_index) {

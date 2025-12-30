@@ -1,6 +1,6 @@
 use ckb_network::{BoxedCKBProtocolContext, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
-use log::trace;
+use log::{debug, trace};
 use rand::seq::SliceRandom as _;
 
 use crate::protocols::{FilterProtocol, Status, StatusCode};
@@ -28,6 +28,7 @@ impl<'a> BlockFilterHashesProcess<'a> {
     }
 
     pub async fn execute(self) -> Status {
+        debug!("process BlockFilterHashes message");
         let peer_state = if let Some(peer_state) = self.protocol.peers.get_state(&self.peer_index) {
             peer_state
         } else {
@@ -51,7 +52,7 @@ impl<'a> BlockFilterHashesProcess<'a> {
             .map(|item| item.to_entity())
             .collect::<Vec<_>>();
 
-        trace!(
+        debug!(
             "peer {}: last-state: {}, add block filter hashes (start: {}, len: {}) \
             and parent block filter hash is {:#x}",
             self.peer_index,
