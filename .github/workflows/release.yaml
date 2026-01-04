@@ -80,45 +80,19 @@ jobs:
         scoop install llvm yasm
     - if: matrix.os == 'ubuntu-22.04' && matrix.build_type == 'portable'
       name: Build linux portable (x86_64)
-      run: |
-        export PWD_DIR=$(pwd)
-        curl -LO https://www.openssl.org/source/openssl-1.1.1s.tar.gz
-        tar -xzf openssl-1.1.1s.tar.gz
-        cd openssl-1.1.1s
-        ./Configure linux-x86_64 shared
-        make
-        cd ..
-        export OPENSSL_LIB_DIR=${PWD_DIR}/openssl-1.1.1s
-        export OPENSSL_INCLUDE_DIR=${PWD_DIR}/openssl-1.1.1s/include
-        export OPENSSL_STATIC=1
-        cargo build --release --features portable
+      run: cargo build --release --features portable,vendored-openssl
     - if: matrix.os == 'ubuntu-22.04' && matrix.build_type == 'standard'
       name: Build linux (x86_64)
       run: cargo build --release
     - if: matrix.os == 'ubuntu-22.04-arm' && matrix.build_type == 'portable'
       name: Build linux portable (aarch64)
-      run: |
-        export PWD_DIR=$(pwd)
-        curl -LO https://www.openssl.org/source/openssl-1.1.1s.tar.gz
-        tar -xzf openssl-1.1.1s.tar.gz
-        cd openssl-1.1.1s
-        ./Configure linux-aarch64 shared
-        make
-        cd ..
-        export OPENSSL_LIB_DIR=${PWD_DIR}/openssl-1.1.1s
-        export OPENSSL_INCLUDE_DIR=${PWD_DIR}/openssl-1.1.1s/include
-        export OPENSSL_STATIC=1
-        cargo build --release --features portable
+      run: cargo build --release --features portable,vendored-openssl
     - if: matrix.os == 'ubuntu-22.04-arm' && matrix.build_type == 'standard'
       name: Build linux (aarch64)
       run: cargo build --release
     - if: matrix.os == 'macos-15-intel' && matrix.build_type == 'portable'
       name: Build macos portable (x86_64)
-      run: |
-        export OPENSSL_LIB_DIR=/usr/local/opt/openssl@1.1/lib
-        export OPENSSL_INCLUDE_DIR=/usr/local/opt/openssl@1.1/include
-        export OPENSSL_STATIC=1
-        cargo build --release --features portable
+      run: cargo build --release --features portable,vendored-openssl
     - if: matrix.os == 'macos-15' && matrix.build_type == 'standard'
       name: Build macos (aarch64)
       run: |
@@ -126,7 +100,7 @@ jobs:
         export OPENSSL_INCLUDE_DIR=/opt/homebrew/opt/openssl@1.1/include
         export OPENSSL_STATIC=1
         cargo build --release
-    - if: matrix.os == 'windows-2022'
+    - if: matrix.os == 'windows-2022' && matrix.build_type == 'standard'
       name: Build windows
       run: cargo build --release
     - name: Get the Version
