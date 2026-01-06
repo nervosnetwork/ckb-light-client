@@ -11,3 +11,9 @@ pub mod storage;
 pub mod types;
 pub mod utils;
 pub mod verify;
+
+#[cfg(any(
+    all(feature = "rocksdb", feature = "rusqlite"),
+    not(any(feature = "rocksdb", feature = "rusqlite"))
+))]
+compile_error!("Exact one of features `rocksdb` and `rusqlite` can be selected");
