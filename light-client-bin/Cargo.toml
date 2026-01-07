@@ -1,44 +1,46 @@
 [package]
-name = "ckb-light-client"
-version = "0.5.4"
 authors = ["Nervos Core Dev <dev@nervos.org>"]
-edition = "2021"
-license = "MIT"
 description = "A CKB light client based on FlyClient."
+edition = "2021"
 homepage = "https://github.com/nervosnetwork/ckb-light-client"
+license = "MIT"
+name = "ckb-light-client"
 repository = "https://github.com/nervosnetwork/ckb-light-client"
+version = "0.5.4"
 
 [dependencies]
 ckb-async-runtime = "1"
 ckb-chain-spec = "1"
-ckb-network = "1"
-ckb-stop-handler = "1"
-ckb-resource = "1"
 ckb-jsonrpc-types = "1"
-ckb-types = "1"
-ckb-traits = "1"
+ckb-network = "1"
+ckb-resource = "1"
+ckb-stop-handler = "1"
 ckb-systemtime = "1"
+ckb-traits = "1"
+ckb-types = "1"
 
-ckb-light-client-lib = { path = "../light-client-lib" }
-clap = { version = "4", features = ["cargo"] }
-log = "0.4"
-ctrlc = { version = "3.2.1", features = ["termination"] }
+ckb-light-client-lib = {path = "../light-client-lib"}
+clap = {version = "4", features = ["cargo"]}
+ctrlc = {version = "3.2.1", features = ["termination"]}
 jsonrpc-core = "18.0"
 jsonrpc-derive = "18.0"
 jsonrpc-http-server = "18.0"
 jsonrpc-server-utils = "18.0"
-rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
-    "snappy",
-], default-features = false }
-env_logger = "0.11"
+log = "0.4"
+rocksdb = {package = "ckb-rocksdb", version = "=0.21.1", features = [
+  "snappy",
+], default-features = false, optional = true}
+rusqlite = {version = "0.38.0", features = ["bundled"], optional = true}
+
 anyhow = "1.0.56"
+env_logger = "0.11"
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
 
 [build-dependencies]
-vergen-gitcl = { version = "1", default-features = false }
 chrono = "0.4"
+vergen-gitcl = {version = "1", default-features = false}
 
 [dev-dependencies]
 rand = "0.8"
@@ -46,12 +48,12 @@ serde_json = "1.0"
 tempfile = "3.0"
 
 [features]
-default = []
-portable = ["rocksdb/portable"]
+default = ["rocksdb"]
 march-native = ["rocksdb/march-native"]
+portable = ["rocksdb/portable"]
 
 # [profile.release]
 # overflow-checks = true
 
 [badges]
-maintenance = { status = "experimental" }
+maintenance = {status = "experimental"}

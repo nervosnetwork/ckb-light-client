@@ -801,6 +801,7 @@ dependencies = [
  "jsonrpc-server-utils",
  "log",
  "rand 0.8.5",
+ "rusqlite",
  "serde_json",
  "tempfile",
  "tikv-jemallocator",

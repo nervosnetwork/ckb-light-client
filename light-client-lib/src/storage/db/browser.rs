@@ -637,7 +637,7 @@ impl Storage {
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
                 start_key_bound: iter_from,
-                order: CursorDirection::NextUnique,
+                order: direction,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
                 filter_map: Box::new(|s| Some(s.to_vec())),
                 limit: 1,

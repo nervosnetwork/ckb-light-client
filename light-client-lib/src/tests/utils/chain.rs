@@ -13,11 +13,13 @@ use crate::{
     storage::Storage,
     tests::{prelude::*, ALWAYS_SUCCESS_SCRIPT},
 };
+use tempfile::TempDir;
 
 /// Mock a chain without starting services.
 pub(crate) struct MockChain {
     storage: Storage,
     consensus: Consensus,
+    tempdir: TempDir,
 }
 
 /// Mock a chain and start its services.
@@ -25,6 +27,8 @@ pub(crate) struct MockRunningChain {
     storage: Storage,
     chain_controller: ChainController,
     shared: Shared,
+    #[allow(dead_code)]
+    tempdir: TempDir,
 }
 
 impl ChainExt for MockChain {
@@ -66,7 +70,11 @@ impl MockChain {
             .build_consensus()
             .expect("build consensus should be OK");
         storage.init_genesis_block(consensus.genesis_block().data());
-        MockChain { storage, consensus }
+        MockChain {
+            storage,
+            consensus,
+            tempdir: tmp_dir,
+        }
     }
 
     pub(crate) fn new_with_default_pow(prefix: &str) -> Self {
@@ -81,7 +89,11 @@ impl MockChain {
     }
 
     pub(crate) fn start(self) -> MockRunningChain {
-        let Self { storage, consensus } = self;
+        let Self {
+            storage,
+            consensus,
+            tempdir,
+        } = self;
 
         let config = BlockAssemblerConfig {
             // always success
@@ -114,6 +126,7 @@ impl MockChain {
             storage,
             chain_controller,
             shared,
+            tempdir,
         }
     }
 }

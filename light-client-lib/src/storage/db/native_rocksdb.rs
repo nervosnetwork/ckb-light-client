@@ -3,7 +3,10 @@ use super::super::{
     KeyPrefix, MatchedBlock, MatchedBlocks, Script, FILTER_SCRIPTS_KEY, MATCHED_FILTER_BLOCKS_KEY,
     MIN_FILTERED_BLOCK_NUMBER,
 };
-use crate::{error::Result, storage::{ScriptStatus, ScriptType, SetScriptsCommand, TxIndex}};
+use crate::{
+    error::Result,
+    storage::{ScriptStatus, ScriptType, SetScriptsCommand, TxIndex},
+};
 use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
     bytes::Bytes,

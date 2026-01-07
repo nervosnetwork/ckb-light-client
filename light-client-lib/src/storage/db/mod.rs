@@ -3,10 +3,17 @@ mod native_rocksdb;
 #[cfg(all(not(target_arch = "wasm32"), feature = "rocksdb"))]
 pub use native_rocksdb::{Batch, Storage};
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "rusqlite"))]
+mod native_rusqlite;
+#[cfg(all(not(target_arch = "wasm32"), feature = "rusqlite"))]
+pub use native_rusqlite::{Batch, Storage};
+
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(target_arch = "wasm32")]
 pub use browser::{Batch, CursorDirection, Storage};
+
+
 #[cfg(not(target_arch = "wasm32"))]
 use ckb_traits::HeaderProvider;
 use ckb_types::prelude::Reader;
