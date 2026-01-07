@@ -13,7 +13,6 @@ mod browser;
 #[cfg(target_arch = "wasm32")]
 pub use browser::{Batch, CursorDirection, Storage};
 
-
 #[cfg(not(target_arch = "wasm32"))]
 use ckb_traits::HeaderProvider;
 use ckb_types::prelude::Reader;
@@ -181,7 +180,7 @@ impl Storage {
         self.get_pinned(&key)
             .expect("db get last n headers should be ok")
             .map(|data| {
-                assert!(AsRef::<[u8]>::as_ref(&data).len() % 40 == 0);
+                assert!(AsRef::<[u8]>::as_ref(&data).len().is_multiple_of(40));
                 let mut headers = Vec::with_capacity(&AsRef::<[u8]>::as_ref(&data).len() / 40);
                 for part in AsRef::<[u8]>::as_ref(&data).chunks(40) {
                     let number = u64::from_le_bytes(part[0..8].try_into().unwrap());

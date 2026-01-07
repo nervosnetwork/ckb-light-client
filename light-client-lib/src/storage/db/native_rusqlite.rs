@@ -775,10 +775,7 @@ impl Batch {
                         [key, value],
                     )?;
                 } else {
-                    tx.execute(
-                        "UPDATE data SET value = ?2 WHERE key = ?1",
-                        [key, value],
-                    )?;
+                    tx.execute("UPDATE data SET value = ?2 WHERE key = ?1", [key, value])?;
                 }
                 tx.commit()?;
             }
