@@ -18,7 +18,7 @@ use ckb_types::{
     prelude::*,
 };
 
-use rusqlite::{params, Connection, OpenFlags};
+use rusqlite::{params, Connection};
 use std::{
     path::Path,
     sync::{Arc, Mutex},
@@ -40,15 +40,13 @@ pub enum CursorDirection {
 }
 
 impl Storage {
-    pub fn new<P: AsRef<Path>>(path: P) -> Self {
-        let path = path.as_ref().join("light-client.db");
-        let conn = Connection::open_with_flags(
-            path,
-            OpenFlags::SQLITE_OPEN_READ_WRITE
-                | OpenFlags::SQLITE_OPEN_CREATE
-                | OpenFlags::SQLITE_OPEN_URI,
-        )
-        .expect("Unable to open database");
+    pub fn new<P: AsRef<Path>>(raw_path: P) -> Self {
+        if !raw_path.as_ref().exists() {
+            std::fs::create_dir_all(raw_path.as_ref()).expect("Unable to creatr directory for database");
+        }
+        let path = raw_path.as_ref().join("light-client.db");
+
+        let conn = Connection::open(path).expect("Unable to open database");
         conn.execute_batch(
             r"
         CREATE TABLE IF NOT EXISTS data (

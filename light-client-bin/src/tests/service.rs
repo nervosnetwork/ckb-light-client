@@ -25,7 +25,7 @@ use ckb_light_client_lib::{
 };
 
 use crate::{
-    rpc::{
+    rpc_rocksdb::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, TransactionRpc,
         TransactionRpcImpl,
     },

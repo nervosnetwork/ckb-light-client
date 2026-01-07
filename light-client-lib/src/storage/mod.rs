@@ -17,10 +17,11 @@ use ckb_types::{
 
 mod db;
 
-#[cfg(target_arch = "wasm32")]
-pub use db::{Batch, CursorDirection, Storage};
+#[cfg(any(target_arch = "wasm32", feature = "rusqlite"))]
+pub use db::CursorDirection;
+#[cfg(feature = "rusqlite")]
+pub use db::KV;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub use db::{Batch, Storage};
 
 use crate::{

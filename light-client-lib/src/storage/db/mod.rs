@@ -6,7 +6,7 @@ pub use native_rocksdb::{Batch, Storage};
 #[cfg(all(not(target_arch = "wasm32"), feature = "rusqlite"))]
 mod native_rusqlite;
 #[cfg(all(not(target_arch = "wasm32"), feature = "rusqlite"))]
-pub use native_rusqlite::{Batch, Storage};
+pub use native_rusqlite::{Batch, CursorDirection, Storage, KV};
 
 #[cfg(target_arch = "wasm32")]
 mod browser;

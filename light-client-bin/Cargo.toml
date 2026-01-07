@@ -19,7 +19,7 @@ ckb-systemtime = "1"
 ckb-traits = "1"
 ckb-types = "1"
 
-ckb-light-client-lib = {path = "../light-client-lib"}
+ckb-light-client-lib = {path = "../light-client-lib", default-features = false}
 clap = {version = "4", features = ["cargo"]}
 ctrlc = {version = "3.2.1", features = ["termination"]}
 jsonrpc-core = "18.0"
@@ -51,7 +51,8 @@ tempfile = "3.0"
 default = ["rocksdb"]
 march-native = ["rocksdb/march-native"]
 portable = ["rocksdb/portable"]
-
+rocksdb = ["dep:rocksdb", "ckb-light-client-lib/rocksdb"]
+rusqlite = ["ckb-light-client-lib/rusqlite", "dep:rusqlite"]
 # [profile.release]
 # overflow-checks = true
 
