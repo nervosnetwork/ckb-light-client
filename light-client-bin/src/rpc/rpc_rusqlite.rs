@@ -7,6 +7,7 @@ use ckb_light_client_lib::{
     },
     storage::{self, extract_raw_data, CursorDirection, Key, KeyPrefix, KV, LAST_STATE_KEY},
 };
+use log::trace;
 
 use crate::rpc::{BlockFilterRpc, BlockFilterRpcImpl};
 use ckb_jsonrpc_types::{JsonBytes, Uint32};
@@ -97,11 +98,13 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                 |key| key.starts_with(&prefix),
                 |key, value| {
                     let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
+                    trace!("get cells iterator at {:?} {:?}", key, value);
                     let (output_index, _tx_index, block_number) = extract_data_from_key(key);
                     let tx_data = &storage
                         .get(Key::TxHash(&tx_hash).into_vec())
                         .unwrap()
                         .expect("stored tx")[12..];
+                    trace!("tx hash = {:?}, tx data = {:?}", tx_hash, tx_data);
                     let tx = packed::Transaction::from_slice(tx_data)
                         .expect("from stored tx slice should be OK");
                     let output = tx
@@ -122,6 +125,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                                     .as_slice()
                                     .starts_with(prefix)
                                 {
+                                    trace!("skipped at {}", line!());
                                     return None;
                                 }
                             }
@@ -131,6 +135,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                                         .as_slice()
                                         .starts_with(prefix)
                                 {
+                                    trace!("skipped at {}", line!());
                                     return None;
                                 }
                             }
@@ -142,6 +147,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                             ScriptType::Lock => {
                                 let script_len = extract_raw_data(&output.lock()).len();
                                 if script_len < r0 || script_len > r1 {
+                                    trace!("skipped at {}", line!());
                                     return None;
                                 }
                             }
@@ -152,6 +158,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                                     .map(|script| extract_raw_data(&script).len())
                                     .unwrap_or_default();
                                 if script_len < r0 || script_len > r1 {
+                                    trace!("skipped at {}", line!());
                                     return None;
                                 }
                             }
@@ -160,6 +167,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
 
                     if let Some([r0, r1]) = filter_output_data_len_range {
                         if output_data.len() < r0 || output_data.len() >= r1 {
+                            trace!("skipped at {}", line!());
                             return None;
                         }
                     }
@@ -167,12 +175,14 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                     if let Some([r0, r1]) = filter_output_capacity_range {
                         let capacity: core::Capacity = output.capacity().unpack();
                         if capacity < r0 || capacity >= r1 {
+                            trace!("skipped at {}", line!());
                             return None;
                         }
                     }
 
                     if let Some([r0, r1]) = filter_block_range {
                         if block_number < r0 || block_number >= r1 {
+                            trace!("skipped at {}", line!());
                             return None;
                         }
                     }
@@ -185,6 +195,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
                 skip,
             )
             .map_err(|e| Error::invalid_params(&format!("Unable to search transactions: {}", e)))?;
+        trace!("get_cells: collect_iterator done");
         let mut cells = Vec::new();
         let mut last_key = Vec::new();
         for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
@@ -226,6 +237,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             }
         }
 
+        trace!("get_cells last_key={:?}", last_key);
         Ok(Pagination {
             objects: cells,
             last_cursor: JsonBytes::from_vec(last_key),

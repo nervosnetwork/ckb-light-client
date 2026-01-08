@@ -18,15 +18,13 @@ use ckb_types::{
     prelude::*,
 };
 
+use parking_lot::ReentrantMutex;
 use rusqlite::{params, Connection};
-use std::{
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{cell::RefCell, path::Path, sync::Arc};
 
 #[derive(Clone)]
 pub struct Storage {
-    pub(crate) conn: Arc<Mutex<Connection>>,
+    pub(crate) conn: Arc<ReentrantMutex<RefCell<Connection>>>,
 }
 pub struct KV {
     pub key: Vec<u8>,
@@ -58,7 +56,7 @@ impl Storage {
         )
         .expect("Unable to initialize database and create table");
         Self {
-            conn: Arc::new(Mutex::new(conn)),
+            conn: Arc::new(ReentrantMutex::new(RefCell::new(conn))),
         }
     }
 
@@ -71,7 +69,8 @@ impl Storage {
         limit: usize,
         skip: usize,
     ) -> rusqlite::Result<Vec<KV>> {
-        let conn = self.conn.lock().unwrap();
+        let lock_guard = self.conn.lock();
+        let conn = lock_guard.borrow();
         let sql = match order {
             CursorDirection::Ascending => {
                 "SELECT key, value FROM data WHERE key >= ?1 ORDER BY key ASC"
@@ -125,7 +124,8 @@ impl Storage {
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,
     {
-        let mut guard = self.conn.lock().unwrap();
+        let lock_guard = self.conn.lock();
+        let mut guard = lock_guard.borrow_mut();
         let tx = guard.transaction()?;
         if tx.query_one(
             "SELECT COUNT(*) FROM data WHERE key = ?1",
@@ -148,7 +148,8 @@ impl Storage {
     }
 
     pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Vec<u8>>> {
-        let guard = self.conn.lock().unwrap();
+        let lock_guard = self.conn.lock();
+        let guard = lock_guard.borrow();
         match guard.query_one(
             "SELECT value FROM data WHERE key = ?1",
             [key.as_ref().to_vec()],
@@ -167,7 +168,8 @@ impl Storage {
     }
 
     pub fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<()> {
-        let guard = self.conn.lock().unwrap();
+        let lock_guard = self.conn.lock();
+        let guard = lock_guard.borrow();
         guard.execute("DELETE FROM data WHERE key = ?1", [key.as_ref().to_vec()])?;
         Ok(())
     }
@@ -727,7 +729,7 @@ impl Storage {
 pub struct Batch {
     add: Vec<(Vec<u8>, Vec<u8>)>,
     delete: Vec<Vec<u8>>,
-    db: Arc<Mutex<Connection>>,
+    db: Arc<ReentrantMutex<RefCell<Connection>>>,
 }
 
 impl Batch {
@@ -748,7 +750,8 @@ impl Batch {
     }
 
     pub fn delete_many(&mut self, keys: Vec<Vec<u8>>) -> Result<()> {
-        let guard = self.db.lock().unwrap();
+        let lock_guard = self.db.lock();
+        let guard = lock_guard.borrow();
         let mut stmt = guard.prepare("DELETE FROM data WHERE key = ?1")?;
 
         for item in keys.into_iter() {
@@ -758,8 +761,8 @@ impl Batch {
     }
 
     pub fn commit(self) -> Result<()> {
-        let mut guard = self.db.lock().unwrap();
-
+        let lock_guard = self.db.lock();
+        let mut guard = lock_guard.borrow_mut();
         if !self.add.is_empty() {
             for (key, value) in self.add.into_iter() {
                 let tx = guard.transaction()?;
