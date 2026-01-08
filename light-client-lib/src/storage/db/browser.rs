@@ -759,7 +759,7 @@ impl Storage {
                 let value = self
                     .channel
                     .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                        start_key_bound: key_prefix.clone(),
+                        start_key_bound: start_key.clone(),
                         order: CursorDirection::PrevUnique,
                         take_while: Box::new(move |raw_key: &[u8]| {
                             raw_key.starts_with(&key_prefix)

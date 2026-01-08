@@ -577,7 +577,7 @@ impl Storage {
 
                 let value = self
                     .collect_iterator(
-                        &key_prefix,
+                        &start_key,
                         CursorDirection::Descending,
                         |raw_key: &[u8]| {
                             raw_key.starts_with(&key_prefix)

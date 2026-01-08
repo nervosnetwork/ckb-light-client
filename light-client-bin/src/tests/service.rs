@@ -25,7 +25,7 @@ use ckb_light_client_lib::{
 };
 
 use crate::{
-    rpc_rocksdb::{
+    rpc::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, TransactionRpc,
         TransactionRpcImpl,
     },
@@ -36,7 +36,7 @@ use crate::{
 
 #[test]
 fn rpc() {
-    let storage = new_storage("rpc");
+    let (storage, _tmpdir) = new_storage("rpc");
     let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
 
@@ -1068,7 +1068,7 @@ fn rpc() {
 
 #[test]
 fn get_cells_capacity_bug() {
-    let storage = new_storage("get_cells_capacity_bug");
+    let (storage, _tmpdir) = new_storage("get_cells_capacity_bug");
     let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
 
@@ -1193,7 +1193,7 @@ fn get_cells_capacity_bug() {
 
 #[test]
 fn get_cells_after_rollback_bug() {
-    let storage = new_storage("get_cells_after_rollback_bug");
+    let (storage, _tmpdir) = new_storage("get_cells_after_rollback_bug");
     let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
 
@@ -1386,7 +1386,7 @@ fn get_cells_after_rollback_bug() {
 
 #[test]
 fn test_set_scripts_clear_matched_blocks() {
-    let storage = new_storage("set-scripts-clear-matched-blocks");
+    let (storage, _tmpdir) = new_storage("set-scripts-clear-matched-blocks");
     let peers = create_peers();
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
@@ -1436,7 +1436,7 @@ fn test_set_scripts_clear_matched_blocks() {
 
 #[test]
 fn test_set_scripts_command() {
-    let storage = new_storage("set-scripts-command");
+    let (storage, _tmpdir) = new_storage("set-scripts-command");
     let peers = create_peers();
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
@@ -1523,7 +1523,7 @@ fn test_set_scripts_command() {
 
 #[test]
 fn test_set_scripts_partial_min_filtered_block_number_bug() {
-    let storage = new_storage("set_scripts_partial_min_filtered_block_number_bug");
+    let (storage, _tmpdir) = new_storage("set_scripts_partial_min_filtered_block_number_bug");
     let peers = create_peers();
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
@@ -1573,7 +1573,7 @@ fn test_set_scripts_partial_min_filtered_block_number_bug() {
 
 #[test]
 fn test_set_scripts_delete_min_filtered_block_number_bug() {
-    let storage = new_storage("set_scripts_delete_min_filtered_block_number_bug");
+    let (storage, _tmpdir) = new_storage("set_scripts_delete_min_filtered_block_number_bug");
     let peers = create_peers();
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
@@ -1620,7 +1620,7 @@ fn test_set_scripts_delete_min_filtered_block_number_bug() {
 
 #[test]
 fn test_chain_txs_in_same_block_bug() {
-    let storage = new_storage("chain_txs_in_same_block_bug");
+    let (storage, _tmpdir) = new_storage("chain_txs_in_same_block_bug");
     let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
     let rpc = BlockFilterRpcImpl { swc };
 
