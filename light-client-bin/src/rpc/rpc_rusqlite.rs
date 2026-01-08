@@ -800,7 +800,7 @@ pub fn build_query_options(
                         vec![0xff; MAX_PREFIX_SEARCH_SIZE - args_len],
                     ]
                     .concat(),
-                    CursorDirection::Ascending,
+                    CursorDirection::Descending,
                     0,
                 )
             },
