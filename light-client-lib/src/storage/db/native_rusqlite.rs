@@ -42,7 +42,8 @@ pub enum CursorDirection {
 impl Storage {
     pub fn new<P: AsRef<Path>>(raw_path: P) -> Self {
         if !raw_path.as_ref().exists() {
-            std::fs::create_dir_all(raw_path.as_ref()).expect("Unable to creatr directory for database");
+            std::fs::create_dir_all(raw_path.as_ref())
+                .expect("Unable to creatr directory for database");
         }
         let path = raw_path.as_ref().join("light-client.db");
 
