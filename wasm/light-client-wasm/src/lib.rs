@@ -8,6 +8,8 @@ use std::{
     },
 };
 
+use ckb_light_client_lib::storage::db::StorageHighLevelOperations;
+
 use ckb_light_client_lib::{
     error::Error,
     protocols::{

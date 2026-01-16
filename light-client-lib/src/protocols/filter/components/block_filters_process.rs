@@ -1,5 +1,6 @@
 use crate::protocols::FilterProtocol;
 use crate::protocols::{Status, StatusCode};
+use crate::storage::db::StorageHighLevelOperations;
 use crate::utils::network::prove_or_download_matched_blocks;
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{BoxedCKBProtocolContext, PeerIndex};
@@ -9,7 +10,6 @@ use ckb_types::{packed, prelude::*};
 use log::{debug, info, trace, warn};
 use rand::seq::SliceRandom;
 use std::{cmp, sync::Arc};
-use crate::storage::db::StorageHighLevelOperations;
 
 pub struct BlockFiltersProcess<'a> {
     message: packed::BlockFiltersReader<'a>,

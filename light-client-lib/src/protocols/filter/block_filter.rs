@@ -1,5 +1,6 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
+use crate::storage::db::StorageHighLevelOperations;
 use crate::storage::Storage;
 use crate::types::{Duration, Instant, RwLock};
 use crate::utils::network::prove_or_download_matched_blocks;
@@ -14,7 +15,6 @@ use log::{debug, info, log_enabled, trace, warn, Level};
 use rand::seq::SliceRandom as _;
 use std::io::Cursor;
 use std::sync::Arc;
-use crate::storage::db::StorageHighLevelOperations;
 
 pub(crate) const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
 pub(crate) const GET_BLOCK_FILTER_HASHES_TOKEN: u64 = 1;

@@ -16,6 +16,7 @@ use rocksdb::{
 };
 
 use crate::rpc::{BlockFilterRpc, BlockFilterRpcImpl};
+use ckb_light_client_lib::storage::db::StorageHighLevelOperations;
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
     fn set_scripts(
