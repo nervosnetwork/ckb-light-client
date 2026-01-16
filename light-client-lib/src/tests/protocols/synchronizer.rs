@@ -14,6 +14,7 @@ use crate::{
         utils::{MockChain, MockNetworkContext},
     },
 };
+use crate::storage::db::StorageHighLevelOperations;
 
 #[tokio::test]
 async fn test_sync_add_block() {

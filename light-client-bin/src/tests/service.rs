@@ -23,7 +23,7 @@ use ckb_light_client_lib::{
     },
     storage::{self, HeaderWithExtension, StorageWithChainData},
 };
-
+use ckb_light_client_lib::storage::db::StorageHighLevelOperations;
 use crate::{
     rpc::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, TransactionRpc,

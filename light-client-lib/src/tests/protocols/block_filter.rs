@@ -21,6 +21,7 @@ use crate::{
         utils::{setup, MockChain, MockNetworkContext},
     },
 };
+use crate::storage::db::StorageHighLevelOperations;
 
 #[tokio::test]
 async fn test_block_filter_malformed_message() {

@@ -2,7 +2,7 @@ use ckb_types::packed::Script;
 
 use crate::storage;
 use crate::tests::utils::new_storage;
-
+use crate::storage::db::StorageHighLevelOperations;
 #[test]
 fn test_forget_update_min_filtred_number() {
     let (storage, _tmpdir) = new_storage("forget_update_min_filtred_block");

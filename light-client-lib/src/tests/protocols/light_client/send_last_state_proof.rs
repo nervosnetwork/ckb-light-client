@@ -6,7 +6,7 @@ use ckb_types::{
     H256, U256,
 };
 use log::debug;
-
+use crate::storage::db::StorageHighLevelOperations;
 use crate::{
     protocols::{light_client::prelude::*, LastState, ProveRequest, ProveState, StatusCode},
     tests::{

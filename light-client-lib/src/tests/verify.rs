@@ -11,6 +11,7 @@ use crate::{
     tests::{prelude::*, utils::MockChain},
     verify::verify_tx,
 };
+use crate::storage::db::StorageHighLevelOperations;
 
 #[test]
 fn verify_valid_transaction() {
