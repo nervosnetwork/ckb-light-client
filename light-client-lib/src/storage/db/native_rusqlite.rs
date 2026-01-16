@@ -5,7 +5,10 @@ use super::super::{
 };
 use crate::{
     error::Result,
-    storage::{ScriptStatus, ScriptType, SetScriptsCommand, TxIndex},
+    storage::{
+        db::{GetMatchedBlocksDirection, StorageHighLevelFunctions},
+        ScriptStatus, ScriptType, SetScriptsCommand, TxIndex,
+    },
 };
 use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
@@ -173,8 +176,10 @@ impl Storage {
         guard.execute("DELETE FROM data WHERE key = ?1", [key.as_ref().to_vec()])?;
         Ok(())
     }
+}
 
-    pub fn is_filter_scripts_empty(&self) -> bool {
+impl StorageHighLevelFunctions for Storage {
+    fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         self.collect_iterator(
             &key_prefix,
@@ -193,7 +198,7 @@ impl Storage {
         .is_empty()
     }
 
-    pub fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
+    fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 
         self.collect_iterator(
@@ -234,7 +239,7 @@ impl Storage {
         .collect()
     }
 
-    pub fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
+    fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
         let mut should_filter_genesis_block = false;
         let mut batch = self.batch();
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
@@ -369,7 +374,7 @@ impl Storage {
     }
 
     // get scripts hash that should be filtered below the given block number
-    pub fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
+    fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 
         let value = self
@@ -435,11 +440,11 @@ impl Storage {
         batch.commit().unwrap();
     }
 
-    fn get_matched_blocks(&self, direction: CursorDirection) -> Option<MatchedBlocks> {
+    fn get_matched_blocks(&self, direction: GetMatchedBlocksDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         let iter_from = match direction {
-            CursorDirection::Ascending => key_prefix.clone(),
-            CursorDirection::Descending => {
+            GetMatchedBlocksDirection::Forward => key_prefix.clone(),
+            GetMatchedBlocksDirection::Reverse => {
                 let mut key = key_prefix.clone();
                 key.extend(u64::MAX.to_be_bytes());
                 key
@@ -449,7 +454,10 @@ impl Storage {
         let value = self
             .collect_iterator(
                 &iter_from,
-                direction,
+                match direction {
+                    GetMatchedBlocksDirection::Forward => CursorDirection::Ascending,
+                    GetMatchedBlocksDirection::Reverse => CursorDirection::Descending,
+                },
                 |x| x.starts_with(&key_prefix),
                 |k, v| {
                     Some(KV {
@@ -483,15 +491,15 @@ impl Storage {
             .next()
     }
 
-    pub fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        self.get_matched_blocks(CursorDirection::Ascending)
+    fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        self.get_matched_blocks(GetMatchedBlocksDirection::Forward)
     }
 
-    pub fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        self.get_matched_blocks(CursorDirection::Descending)
+    fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        self.get_matched_blocks(GetMatchedBlocksDirection::Reverse)
     }
 
-    pub fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
+    fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
         let start_key = Key::CheckPointIndex(start_index).into_vec();
         let key_prefix = [KeyPrefix::CheckPointIndex as u8];
 
@@ -518,7 +526,7 @@ impl Storage {
             .collect()
     }
 
-    pub fn update_block_number(&self, block_number: BlockNumber) {
+    fn update_block_number(&self, block_number: BlockNumber) {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mut batch = self.batch();
 
@@ -556,10 +564,7 @@ impl Storage {
         batch.commit().expect("batch commit should be ok");
     }
 
-    /// Rollback filtered block data to specified block number
-    ///
-    /// N.B. The specified block will be removed.
-    pub fn rollback_to_block(&self, to_number: BlockNumber) {
+    fn rollback_to_block(&self, to_number: BlockNumber) {
         let scripts = self.get_filter_scripts();
         let mut batch = self.batch();
 

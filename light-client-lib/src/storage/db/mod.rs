@@ -26,12 +26,38 @@ use ckb_types::{
 use std::collections::{HashMap, HashSet};
 
 use crate::storage::{
-    CellIndex, CellType, CpIndex, HeaderWithExtension, Key, OutputIndex, ScriptType, TxIndex,
-    Value, WrappedBlockView, GENESIS_BLOCK_KEY, LAST_N_HEADERS_KEY, LAST_STATE_KEY,
-    MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX, MIN_FILTERED_BLOCK_NUMBER,
+    CellIndex, CellType, CpIndex, HeaderWithExtension, Key, MatchedBlocks, OutputIndex,
+    ScriptStatus, ScriptType, SetScriptsCommand, TxIndex, Value, WrappedBlockView,
+    GENESIS_BLOCK_KEY, LAST_N_HEADERS_KEY, LAST_STATE_KEY, MATCHED_FILTER_BLOCKS_KEY,
+    MAX_CHECK_POINT_INDEX, MIN_FILTERED_BLOCK_NUMBER,
 };
 use ckb_types::prelude::Entity;
 use ckb_types::U256;
+
+pub enum GetMatchedBlocksDirection {
+    Forward,
+    Reverse,
+}
+
+pub trait StorageHighLevelFunctions {
+    fn is_filter_scripts_empty(&self) -> bool;
+    fn get_filter_scripts(&self) -> Vec<ScriptStatus>;
+    fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand);
+    fn update_min_filtered_block_number_by_scripts(&self);
+    // get scripts hash that should be filtered below the given block number
+    fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32>;
+    fn clear_matched_blocks(&self);
+    fn get_matched_blocks(&self, direction: GetMatchedBlocksDirection) -> Option<MatchedBlocks>;
+    fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks>;
+    fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks>;
+    fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32>;
+    fn update_block_number(&self, block_number: BlockNumber);
+    /// Rollback filtered block data to specified block number
+    ///
+    /// N.B. The specified block will be removed.
+    fn rollback_to_block(&self, to_number: BlockNumber);
+}
+
 impl Storage {
     pub fn init_genesis_block(&self, block: Block) {
         let genesis_hash = block.calc_header_hash();

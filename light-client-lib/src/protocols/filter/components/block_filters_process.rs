@@ -9,6 +9,7 @@ use ckb_types::{packed, prelude::*};
 use log::{debug, info, trace, warn};
 use rand::seq::SliceRandom;
 use std::{cmp, sync::Arc};
+use crate::storage::db::StorageHighLevelFunctions;
 
 pub struct BlockFiltersProcess<'a> {
     message: packed::BlockFiltersReader<'a>,

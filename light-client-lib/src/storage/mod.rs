@@ -15,7 +15,7 @@ use ckb_types::{
     H256,
 };
 
-mod db;
+pub mod db;
 
 #[cfg(any(target_arch = "wasm32", feature = "rusqlite"))]
 pub use db::CursorDirection;

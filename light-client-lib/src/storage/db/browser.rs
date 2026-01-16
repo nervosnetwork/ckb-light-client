@@ -24,6 +24,7 @@ use log::debug;
 use crate::{
     error::{Error, Result},
     storage::{
+        db::{GetMatchedBlocksDirection, StorageHighLevelFunctions},
         extract_raw_data, parse_matched_blocks, CellIndex, CpIndex, Key, KeyPrefix, MatchedBlock,
         MatchedBlocks, TxIndex, FILTER_SCRIPTS_KEY, MATCHED_FILTER_BLOCKS_KEY,
         MIN_FILTERED_BLOCK_NUMBER,
@@ -355,7 +356,10 @@ impl Storage {
             .map(|_| ())
             .map_err(|e| Error::Indexdb(format!("{:?}", e)))
     }
-    pub fn is_filter_scripts_empty(&self) -> bool {
+}
+
+impl StorageHighLevelFunctions for Storage {
+    fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 
         let value = match self.channel.dispatch_database_command(
@@ -378,7 +382,7 @@ impl Storage {
             unreachable!()
         }
     }
-    pub fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
+    fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
         let value = self
@@ -420,7 +424,7 @@ impl Storage {
             unreachable!()
         }
     }
-    pub fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
+    fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
         let mut should_filter_genesis_block = false;
         let mut batch = self.batch();
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
@@ -554,7 +558,7 @@ impl Storage {
             unreachable!()
         }
     }
-    pub fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
+    fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 
         let key_prefix_clone = key_prefix.clone();
@@ -619,16 +623,15 @@ impl Storage {
             unreachable!()
         }
     }
-    fn get_matched_blocks(&self, direction: CursorDirection) -> Option<MatchedBlocks> {
+    fn get_matched_blocks(&self, direction: GetMatchedBlocksDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         let iter_from = match direction {
-            CursorDirection::NextUnique => key_prefix.clone(),
-            CursorDirection::PrevUnique => {
+            GetMatchedBlocksDirection::Forward => key_prefix.clone(),
+            GetMatchedBlocksDirection::Reverse => {
                 let mut key = key_prefix.clone();
                 key.extend(u64::MAX.to_be_bytes());
                 key
             }
-            _ => panic!("Invalid direction"),
         };
 
         let key_prefix_clone = key_prefix.clone();
@@ -637,7 +640,10 @@ impl Storage {
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
                 start_key_bound: iter_from,
-                order: direction,
+                order: match direction {
+                    GetMatchedBlocksDirection::Forward => CursorDirection::NextUnique,
+                    GetMatchedBlocksDirection::Reverse => CursorDirection::PrevUnique,
+                },
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
                 filter_map: Box::new(|s| Some(s.to_vec())),
                 limit: 1,
@@ -668,8 +674,8 @@ impl Storage {
         }
     }
 
-    pub fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        let result = self.get_matched_blocks(CursorDirection::NextUnique);
+    fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        let result = self.get_matched_blocks(GetMatchedBlocksDirection::Forward);
         debug!(
             "Called get earliest matched blocks: {:?}, task id {:?}",
             result,
@@ -678,10 +684,10 @@ impl Storage {
         result
     }
 
-    pub fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        self.get_matched_blocks(CursorDirection::PrevUnique)
+    fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        self.get_matched_blocks(GetMatchedBlocksDirection::Reverse)
     }
-    pub fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
+    fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
         let start_key = Key::CheckPointIndex(start_index).into_vec();
         let key_prefix = [KeyPrefix::CheckPointIndex as u8];
 
@@ -706,7 +712,7 @@ impl Storage {
             unreachable!()
         }
     }
-    pub fn update_block_number(&self, block_number: BlockNumber) {
+    fn update_block_number(&self, block_number: BlockNumber) {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mut batch = self.batch();
 
@@ -740,7 +746,7 @@ impl Storage {
             batch.commit().expect("batch commit should be ok");
         }
     }
-    pub fn rollback_to_block(&self, to_number: BlockNumber) {
+    fn rollback_to_block(&self, to_number: BlockNumber) {
         let scripts = self.get_filter_scripts();
         let mut batch = self.batch();
 
