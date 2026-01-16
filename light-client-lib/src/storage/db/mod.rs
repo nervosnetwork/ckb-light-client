@@ -39,7 +39,7 @@ pub enum GetMatchedBlocksDirection {
     Reverse,
 }
 
-pub trait StorageHighLevelFunctions {
+pub trait StorageHighLevelOperations {
     fn is_filter_scripts_empty(&self) -> bool;
     fn get_filter_scripts(&self) -> Vec<ScriptStatus>;
     fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand);

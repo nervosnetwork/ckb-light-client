@@ -14,7 +14,7 @@ use log::{debug, info, log_enabled, trace, warn, Level};
 use rand::seq::SliceRandom as _;
 use std::io::Cursor;
 use std::sync::Arc;
-use crate::storage::db::StorageHighLevelFunctions;
+use crate::storage::db::StorageHighLevelOperations;
 
 pub(crate) const GET_BLOCK_FILTERS_TOKEN: u64 = 0;
 pub(crate) const GET_BLOCK_FILTER_HASHES_TOKEN: u64 = 1;

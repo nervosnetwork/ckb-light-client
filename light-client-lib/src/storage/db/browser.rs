@@ -24,7 +24,7 @@ use log::debug;
 use crate::{
     error::{Error, Result},
     storage::{
-        db::{GetMatchedBlocksDirection, StorageHighLevelFunctions},
+        db::{GetMatchedBlocksDirection, StorageHighLevelOperations},
         extract_raw_data, parse_matched_blocks, CellIndex, CpIndex, Key, KeyPrefix, MatchedBlock,
         MatchedBlocks, TxIndex, FILTER_SCRIPTS_KEY, MATCHED_FILTER_BLOCKS_KEY,
         MIN_FILTERED_BLOCK_NUMBER,
@@ -358,7 +358,7 @@ impl Storage {
     }
 }
 
-impl StorageHighLevelFunctions for Storage {
+impl StorageHighLevelOperations for Storage {
     fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 

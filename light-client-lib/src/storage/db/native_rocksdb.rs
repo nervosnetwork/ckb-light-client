@@ -6,7 +6,7 @@ use super::super::{
 use crate::{
     error::Result,
     storage::{
-        db::{GetMatchedBlocksDirection, StorageHighLevelFunctions},
+        db::{GetMatchedBlocksDirection, StorageHighLevelOperations},
         ScriptStatus, ScriptType, SetScriptsCommand, TxIndex,
     },
 };
@@ -99,7 +99,7 @@ impl Storage {
         self.db.delete(key).map_err(Into::into)
     }
 }
-impl StorageHighLevelFunctions for Storage {
+impl StorageHighLevelOperations for Storage {
     fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);

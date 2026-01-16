@@ -11,7 +11,7 @@ use super::BAD_MESSAGE_BAN_TIME;
 use crate::protocols::Peers;
 use crate::storage::Storage;
 use crate::utils::network::prove_or_download_matched_blocks;
-use crate::storage::db::StorageHighLevelFunctions;
+use crate::storage::db::StorageHighLevelOperations;
 
 pub struct SyncProtocol {
     storage: Storage,

@@ -2,7 +2,7 @@ use ckb_network::{BoxedCKBProtocolContext, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
 use log::{debug, trace};
 use rand::seq::SliceRandom as _;
-use crate::storage::db::StorageHighLevelFunctions;
+use crate::storage::db::StorageHighLevelOperations;
 use crate::protocols::{FilterProtocol, Status, StatusCode};
 
 pub struct BlockFilterHashesProcess<'a> {
