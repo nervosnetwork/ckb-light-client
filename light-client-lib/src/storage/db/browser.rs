@@ -18,13 +18,14 @@ use light_client_db_common::{
     idb_cursor_direction_to_ckb, read_command_payload, write_command_with_payload,
     DbCommandRequest, DbCommandResponse, InputCommand, OutputCommand, KV,
 };
-
+use crate::storage::db::{StorageGeneralOperations, StorageGetPinnedRelatedOperations};
+use crate::storage::db::StorageBatchRelatedOperations;
 use log::debug;
 
 use crate::{
     error::{Error, Result},
     storage::{
-        db::{GetMatchedBlocksDirection, StorageHighLevelOperations},
+        db::{GeneralDirection, StorageHighLevelOperations},
         extract_raw_data, parse_matched_blocks, CellIndex, CpIndex, Key, KeyPrefix, MatchedBlock,
         MatchedBlocks, TxIndex, FILTER_SCRIPTS_KEY, MATCHED_FILTER_BLOCKS_KEY,
         MIN_FILTERED_BLOCK_NUMBER,
@@ -359,6 +360,60 @@ impl Storage {
 }
 
 impl StorageHighLevelOperations for Storage {
+    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
+        self.get(Key::BlockHash(hash).into_vec())
+            .map(|v| {
+                v.map(|v| {
+                    Header::from_slice(&v[..Header::TOTAL_SIZE])
+                        .expect("stored Header")
+                        .into_view()
+                })
+            })
+            .expect("db get should be ok")
+    }
+    fn put<K, V>(&self, key: K, value: V) -> Result<()>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        self.put(key, value)
+    }
+
+    fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<()> {
+        self.delete(key)
+    }
+    fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Vec<u8>>> {
+        self.get(key)
+    }
+    fn collect_iterator(
+        &self,
+        start_key_bound: Vec<u8>,
+        order: GeneralDirection,
+        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
+        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        limit: usize,
+        skip: usize,
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        let value = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
+                start_key_bound,
+                order: match order {
+                    GeneralDirection::Forward => CursorDirection::NextUnique,
+                    GeneralDirection::Reverse => CursorDirection::PrevUnique,
+                },
+                take_while,
+                filter_map,
+                limit,
+                skip,
+            })
+            .unwrap();
+        if let DbCommandResponse::Iterator { kvs } = value {
+            kvs.into_iter().map(|x| (x.key, x.value)).collect()
+        } else {
+            unreachable!()
+        }
+    }
     fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
 
@@ -623,11 +678,11 @@ impl StorageHighLevelOperations for Storage {
             unreachable!()
         }
     }
-    fn get_matched_blocks(&self, direction: GetMatchedBlocksDirection) -> Option<MatchedBlocks> {
+    fn get_matched_blocks(&self, direction: GeneralDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         let iter_from = match direction {
-            GetMatchedBlocksDirection::Forward => key_prefix.clone(),
-            GetMatchedBlocksDirection::Reverse => {
+            GeneralDirection::Forward => key_prefix.clone(),
+            GeneralDirection::Reverse => {
                 let mut key = key_prefix.clone();
                 key.extend(u64::MAX.to_be_bytes());
                 key
@@ -641,8 +696,8 @@ impl StorageHighLevelOperations for Storage {
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
                 start_key_bound: iter_from,
                 order: match direction {
-                    GetMatchedBlocksDirection::Forward => CursorDirection::NextUnique,
-                    GetMatchedBlocksDirection::Reverse => CursorDirection::PrevUnique,
+                    GeneralDirection::Forward => CursorDirection::NextUnique,
+                    GeneralDirection::Reverse => CursorDirection::PrevUnique,
                 },
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
                 filter_map: Box::new(|s| Some(s.to_vec())),
@@ -675,7 +730,7 @@ impl StorageHighLevelOperations for Storage {
     }
 
     fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        let result = self.get_matched_blocks(GetMatchedBlocksDirection::Forward);
+        let result = self.get_matched_blocks(GeneralDirection::Forward);
         debug!(
             "Called get earliest matched blocks: {:?}, task id {:?}",
             result,
@@ -685,7 +740,7 @@ impl StorageHighLevelOperations for Storage {
     }
 
     fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        self.get_matched_blocks(GetMatchedBlocksDirection::Reverse)
+        self.get_matched_blocks(GeneralDirection::Reverse)
     }
     fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
         let start_key = Key::CheckPointIndex(start_index).into_vec();
@@ -912,6 +967,52 @@ impl StorageHighLevelOperations for Storage {
 
         batch.commit().expect("batch commit should be ok");
     }
+    fn cell(&self, out_point: &OutPoint, _eager_load: bool) -> CellStatus {
+        if let Some((block_number, tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
+            let block_hash = Byte32::from_slice(
+                &self
+                    .get(Key::BlockNumber(block_number).into_vec())
+                    .expect("db get should be ok")
+                    .expect("stored block number / hash mapping"),
+            )
+            .expect("stored block hash should be OK");
+
+            let header = Header::from_slice(
+                &self
+                    .get(Key::BlockHash(&block_hash).into_vec())
+                    .expect("db get should be ok")
+                    .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
+            )
+            .expect("stored header should be OK")
+            .into_view();
+
+            let output_index = out_point.index().unpack();
+            let tx = tx.into_view();
+            if let Some(cell_output) = tx.outputs().get(output_index) {
+                let output_data = tx
+                    .outputs_data()
+                    .get(output_index)
+                    .expect("output_data's index should be same as output")
+                    .raw_data();
+                let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
+                let cell_meta = CellMeta {
+                    out_point: out_point.clone(),
+                    cell_output,
+                    transaction_info: Some(TransactionInfo {
+                        block_hash,
+                        block_epoch: header.epoch(),
+                        block_number,
+                        index: tx_index as usize,
+                    }),
+                    data_bytes: output_data.len() as u64,
+                    mem_cell_data: Some(output_data),
+                    mem_cell_data_hash: Some(output_data_data_hash),
+                };
+                return CellStatus::Live(cell_meta);
+            }
+        }
+        CellStatus::Unknown
+    }
 }
 
 pub struct Batch {
@@ -969,92 +1070,5 @@ impl Batch {
         }
 
         Ok(())
-    }
-}
-
-impl Storage {
-    #[allow(clippy::type_complexity)]
-    pub fn collect_iterator(
-        &self,
-        start_key_bound: Vec<u8>,
-        order: CursorDirection,
-        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
-        limit: usize,
-        skip: usize,
-    ) -> Vec<KV> {
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound,
-                order,
-                take_while,
-                filter_map,
-                limit,
-                skip,
-            })
-            .unwrap();
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs
-        } else {
-            unreachable!()
-        }
-    }
-    pub fn cell(&self, out_point: &OutPoint, _eager_load: bool) -> CellStatus {
-        if let Some((block_number, tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
-            let block_hash = Byte32::from_slice(
-                &self
-                    .get(Key::BlockNumber(block_number).into_vec())
-                    .expect("db get should be ok")
-                    .expect("stored block number / hash mapping"),
-            )
-            .expect("stored block hash should be OK");
-
-            let header = Header::from_slice(
-                &self
-                    .get(Key::BlockHash(&block_hash).into_vec())
-                    .expect("db get should be ok")
-                    .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
-            )
-            .expect("stored header should be OK")
-            .into_view();
-
-            let output_index = out_point.index().unpack();
-            let tx = tx.into_view();
-            if let Some(cell_output) = tx.outputs().get(output_index) {
-                let output_data = tx
-                    .outputs_data()
-                    .get(output_index)
-                    .expect("output_data's index should be same as output")
-                    .raw_data();
-                let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
-                let cell_meta = CellMeta {
-                    out_point: out_point.clone(),
-                    cell_output,
-                    transaction_info: Some(TransactionInfo {
-                        block_hash,
-                        block_epoch: header.epoch(),
-                        block_number,
-                        index: tx_index as usize,
-                    }),
-                    data_bytes: output_data.len() as u64,
-                    mem_cell_data: Some(output_data),
-                    mem_cell_data_hash: Some(output_data_data_hash),
-                };
-                return CellStatus::Live(cell_meta);
-            }
-        }
-        CellStatus::Unknown
-    }
-    pub fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
-        self.get(Key::BlockHash(hash).into_vec())
-            .map(|v| {
-                v.map(|v| {
-                    Header::from_slice(&v[..Header::TOTAL_SIZE])
-                        .expect("stored Header")
-                        .into_view()
-                })
-            })
-            .expect("db get should be ok")
     }
 }

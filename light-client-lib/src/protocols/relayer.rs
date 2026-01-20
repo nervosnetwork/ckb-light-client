@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::protocols::{Peers, BAD_MESSAGE_BAN_TIME};
 use crate::storage::Storage;
+use crate::storage::db::StorageGetPinnedRelatedOperations;
 use crate::types::{Duration, Instant, RwLock};
 use crate::{read_lock, write_lock};
 

@@ -10,8 +10,8 @@ use ckb_shared::{Shared, SharedBuilder};
 use ckb_types::{core, prelude::*};
 
 use crate::{
-    storage::Storage,
-    tests::{prelude::*, ALWAYS_SUCCESS_SCRIPT},
+    storage::{Storage, db::StorageBatchRelatedOperations},
+    tests::{ALWAYS_SUCCESS_SCRIPT, prelude::*},
 };
 use tempfile::TempDir;
 

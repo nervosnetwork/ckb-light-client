@@ -17,15 +17,11 @@ use ckb_types::{
 
 pub mod db;
 
-#[cfg(any(target_arch = "wasm32", feature = "rusqlite"))]
-pub use db::CursorDirection;
-#[cfg(feature = "rusqlite")]
-pub use db::KV;
-
 pub use db::{Batch, Storage};
 
 use crate::{
     protocols::{Peers, PendingTxs},
+    storage::db::StorageHighLevelOperations,
     types::RwLock,
 };
 
@@ -121,14 +117,14 @@ impl FilterDataProvider for WrappedBlockView<'_> {
 }
 
 #[derive(Clone)]
-pub struct StorageWithChainData {
-    pub(crate) storage: Storage,
+pub struct StorageWithChainData<S: StorageHighLevelOperations + Clone> {
+    pub(crate) storage: S,
     pub(crate) peers: Arc<Peers>,
     pending_txs: Arc<RwLock<PendingTxs>>,
 }
 
-impl StorageWithChainData {
-    pub fn new(storage: Storage, peers: Arc<Peers>, pending_txs: Arc<RwLock<PendingTxs>>) -> Self {
+impl<S: StorageHighLevelOperations + Clone> StorageWithChainData<S> {
+    pub fn new(storage: S, peers: Arc<Peers>, pending_txs: Arc<RwLock<PendingTxs>>) -> Self {
         Self {
             storage,
             peers,
@@ -136,7 +132,7 @@ impl StorageWithChainData {
         }
     }
 
-    pub fn storage(&self) -> &Storage {
+    pub fn storage(&self) -> &S {
         &self.storage
     }
 
@@ -204,7 +200,7 @@ impl StorageWithChainData {
     }
 }
 
-impl CellProvider for StorageWithChainData {
+impl<S: StorageHighLevelOperations + Clone> CellProvider for StorageWithChainData<S> {
     fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
         match self.storage.cell(out_point, eager_load) {
             CellStatus::Live(cell_meta) => CellStatus::Live(cell_meta),
@@ -217,7 +213,7 @@ impl CellProvider for StorageWithChainData {
 }
 
 #[cfg(target_arch = "wasm32")]
-impl CellDataProvider for StorageWithChainData {
+impl<S: StorageHighLevelOperations + Clone> CellDataProvider for StorageWithChainData<S> {
     fn get_cell_data(&self, _out_point: &OutPoint) -> Option<Bytes> {
         unreachable!()
     }
@@ -228,7 +224,7 @@ impl CellDataProvider for StorageWithChainData {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl CellDataProvider for StorageWithChainData {
+impl<S: StorageHighLevelOperations + CellDataProvider + Clone> CellDataProvider for StorageWithChainData<S> {
     fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
         self.storage.get_cell_data(out_point)
     }
@@ -238,7 +234,7 @@ impl CellDataProvider for StorageWithChainData {
     }
 }
 
-impl HeaderProvider for StorageWithChainData {
+impl<S: StorageHighLevelOperations + Clone> HeaderProvider for StorageWithChainData<S> {
     fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
         self.storage
             .get_header(hash)
@@ -246,7 +242,7 @@ impl HeaderProvider for StorageWithChainData {
     }
 }
 
-impl ExtensionProvider for StorageWithChainData {
+impl<S: StorageHighLevelOperations + Clone> ExtensionProvider for StorageWithChainData<S> {
     fn get_block_extension(&self, hash: &Byte32) -> Option<packed::Bytes> {
         self.storage
             .get(Key::BlockHash(hash).into_vec())
@@ -267,7 +263,7 @@ impl ExtensionProvider for StorageWithChainData {
     }
 }
 
-impl HeaderFieldsProvider for StorageWithChainData {
+impl<S: StorageHighLevelOperations + Clone> HeaderFieldsProvider for StorageWithChainData<S> {
     fn get_header_fields(&self, hash: &Byte32) -> Option<HeaderFields> {
         self.get_header(hash).map(|header| HeaderFields {
             hash: header.hash(),

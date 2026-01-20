@@ -21,7 +21,7 @@ use ckb_light_client_lib::{
         FetchStatus, Order, ScriptStatus, ScriptType, SearchKey, SearchKeyFilter,
         SetScriptsCommand, Status, TransactionWithStatus, TxStatus,
     },
-    storage::{self, HeaderWithExtension, StorageWithChainData},
+    storage::{self, HeaderWithExtension, StorageWithChainData, db::{StorageBatchRelatedOperations, StorageGeneralOperations, StorageGetPinnedRelatedOperations}},
 };
 use ckb_light_client_lib::storage::db::StorageHighLevelOperations;
 use crate::{

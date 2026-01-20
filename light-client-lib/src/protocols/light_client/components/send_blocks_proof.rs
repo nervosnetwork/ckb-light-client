@@ -8,7 +8,7 @@ use ckb_types::{
 use log::{debug, error, info};
 use rand::seq::SliceRandom;
 
-use crate::storage::HeaderWithExtension;
+use crate::storage::{HeaderWithExtension, db::StorageBatchRelatedOperations};
 
 use super::{
     super::{LightClientProtocol, Status, StatusCode},

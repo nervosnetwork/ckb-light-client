@@ -19,6 +19,7 @@ use ckb_types::{
 };
 use log::{error, info};
 
+use crate::storage::db::StorageGeneralOperations;
 use crate::{
     protocols::{
         FilterProtocol, LastState, LightClientProtocol, Peers, ProveRequest, SyncProtocol,

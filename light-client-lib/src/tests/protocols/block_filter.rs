@@ -13,6 +13,7 @@ use ckb_types::{
 };
 
 use crate::storage::SetScriptsCommand;
+use crate::storage::db::StorageGeneralOperations;
 use crate::storage::{ScriptStatus, ScriptType};
 use crate::{
     protocols::{BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN},

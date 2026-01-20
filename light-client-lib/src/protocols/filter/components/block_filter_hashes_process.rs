@@ -1,5 +1,5 @@
 use crate::protocols::{FilterProtocol, Status, StatusCode};
-use crate::storage::db::StorageHighLevelOperations;
+use crate::storage::db::{StorageGeneralOperations, StorageHighLevelOperations};
 use ckb_network::{BoxedCKBProtocolContext, PeerIndex};
 use ckb_types::{core::BlockNumber, packed, prelude::*};
 use log::{debug, trace};

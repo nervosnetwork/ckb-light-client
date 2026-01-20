@@ -11,13 +11,11 @@ use ckb_types::{
 
 use crate::{
     protocols::{
-        light_client::constant::{FETCH_HEADER_TX_TOKEN, REFRESH_PEERS_TOKEN},
-        FetchInfo, StatusCode,
-    },
-    tests::{
+        FetchInfo, StatusCode, light_client::constant::{FETCH_HEADER_TX_TOKEN, REFRESH_PEERS_TOKEN}
+    }, storage::db::StorageGeneralOperations, tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
-    },
+    }
 };
 
 #[tokio::test(flavor = "multi_thread")]

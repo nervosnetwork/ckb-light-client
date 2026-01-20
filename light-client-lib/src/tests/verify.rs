@@ -7,7 +7,7 @@ use ckb_types::{
 };
 
 use crate::{
-    storage::{ScriptStatus, ScriptType, StorageWithChainData},
+    storage::{ScriptStatus, ScriptType, StorageWithChainData, db::{StorageBatchRelatedOperations, StorageGetPinnedRelatedOperations}},
     tests::{prelude::*, utils::MockChain},
     verify::verify_tx,
 };

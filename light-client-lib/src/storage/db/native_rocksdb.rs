@@ -6,7 +6,10 @@ use super::super::{
 use crate::{
     error::Result,
     storage::{
-        db::{GetMatchedBlocksDirection, StorageHighLevelOperations},
+        db::{
+            GeneralDirection, StorageBatchRelatedOperations, StorageGeneralOperations,
+            StorageGetPinnedRelatedOperations, StorageHighLevelOperations,
+        },
         ScriptStatus, ScriptType, SetScriptsCommand, TxIndex,
     },
 };
@@ -100,6 +103,9 @@ impl Storage {
     }
 }
 impl StorageHighLevelOperations for Storage {
+    fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Vec<u8>>> {
+        self.get(key)
+    }
     fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let mode = IteratorMode::From(key_prefix.as_ref(), Direction::Forward);
@@ -277,11 +283,11 @@ impl StorageHighLevelOperations for Storage {
         batch.commit().expect("batch commit should be ok");
     }
 
-    fn get_matched_blocks(&self, direction: GetMatchedBlocksDirection) -> Option<MatchedBlocks> {
+    fn get_matched_blocks(&self, direction: GeneralDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         let iter_from = match direction {
-            GetMatchedBlocksDirection::Forward => key_prefix.clone(),
-            GetMatchedBlocksDirection::Reverse => {
+            GeneralDirection::Forward => key_prefix.clone(),
+            GeneralDirection::Reverse => {
                 let mut key = key_prefix.clone();
                 key.extend(u64::MAX.to_be_bytes());
                 key
@@ -290,8 +296,8 @@ impl StorageHighLevelOperations for Storage {
         let mode = IteratorMode::From(
             iter_from.as_ref(),
             match direction {
-                GetMatchedBlocksDirection::Forward => Direction::Forward,
-                GetMatchedBlocksDirection::Reverse => Direction::Reverse,
+                GeneralDirection::Forward => Direction::Forward,
+                GeneralDirection::Reverse => Direction::Reverse,
             },
         );
         self.db
@@ -316,11 +322,11 @@ impl StorageHighLevelOperations for Storage {
     }
 
     fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        self.get_matched_blocks(GetMatchedBlocksDirection::Forward)
+        self.get_matched_blocks(GeneralDirection::Forward)
     }
 
     fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
-        self.get_matched_blocks(GetMatchedBlocksDirection::Reverse)
+        self.get_matched_blocks(GeneralDirection::Reverse)
     }
 
     fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
@@ -513,6 +519,52 @@ impl StorageHighLevelOperations for Storage {
         }
 
         batch.commit().expect("batch commit should be ok");
+    }
+
+    fn collect_iterator(
+        &self,
+        start_key_bound: Vec<u8>,
+        order: GeneralDirection,
+        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
+        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        limit: usize,
+        skip: usize,
+    ) -> Vec<(Vec<u8>, Vec<u8>)> {
+        self.db
+            .snapshot()
+            .iterator(IteratorMode::From(
+                &start_key_bound,
+                match order {
+                    GeneralDirection::Forward => Direction::Forward,
+                    GeneralDirection::Reverse => Direction::Reverse,
+                },
+            ))
+            .take_while(|(key, _)| take_while(&key))
+            .filter_map(|(key, value)| filter_map(&key).map(|v| (v.into_boxed_slice(), value)))
+            .take(limit)
+            .skip(skip)
+            .map(|(key, value)| (key.to_vec(), value.to_vec()))
+            .collect()
+    }
+
+    fn cell(&self, out_point: &OutPoint, eager_load: bool) -> CellStatus {
+        CellProvider::cell(self, out_point, eager_load)
+    }
+
+    fn put<K, V>(&self, key: K, value: V) -> Result<()>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        self.put(key, value)
+    }
+
+    fn delete<K: AsRef<[u8]>>(&self, key: K) -> Result<()> {
+        self.delete(key)
+    }
+
+    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
+        HeaderProvider::get_header(self, hash)
     }
 }
 

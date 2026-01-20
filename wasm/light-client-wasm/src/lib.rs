@@ -8,8 +8,9 @@ use std::{
     },
 };
 
-use ckb_light_client_lib::storage::db::StorageHighLevelOperations;
-
+use ckb_light_client_lib::storage::db::{
+    GeneralDirection, StorageGeneralOperations, StorageHighLevelOperations,
+};
 use ckb_light_client_lib::{
     error::Error,
     protocols::{
@@ -22,8 +23,7 @@ use ckb_light_client_lib::{
         SetScriptsCommand, Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
     },
     storage::{
-        self, extract_raw_data, CursorDirection, Key, KeyPrefix, Storage, StorageWithChainData,
-        LAST_STATE_KEY,
+        self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithChainData, LAST_STATE_KEY,
     },
     types::RunEnv,
     verify::verify_tx,
@@ -44,13 +44,14 @@ use ckb_stop_handler::broadcast_exit_signals;
 use ckb_systemtime::{unix_time_as_millis, Instant};
 use ckb_types::{core, packed, prelude::*, H256};
 
+use ckb_light_client_lib::storage::db::StorageGetPinnedRelatedOperations;
 use std::sync::OnceLock;
-
+use ckb_light_client_lib::storage::db::StorageBatchRelatedOperations;
 static MAINNET_CONFIG: &str = include_str!("../../../config/mainnet.toml");
 
 static TESTNET_CONFIG: &str = include_str!("../../../config/testnet.toml");
 
-static STORAGE_WITH_DATA: OnceLock<StorageWithChainData> = OnceLock::new();
+static STORAGE_WITH_DATA: OnceLock<StorageWithChainData<Storage>> = OnceLock::new();
 
 static NET_CONTROL: OnceLock<NetworkController> = OnceLock::new();
 
@@ -703,7 +704,7 @@ pub fn get_cells(
     debug!("get_cells: collect_iterator done");
     let mut cells = Vec::new();
     let mut last_key = Vec::new();
-    for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+    for (key, value) in kvs.into_iter() {
         let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
         let (output_index, tx_index, block_number) = extract_data_from_key(&key);
         let tx = packed::Transaction::from_slice(
@@ -820,7 +821,7 @@ pub fn get_transactions(
         let mut last_key = Vec::new();
 
         'outer: while !kvs.is_empty() {
-            for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+            for (key, value) in kvs.into_iter() {
                 let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
                 if tx_with_cells.len() == limit
                     && tx_with_cells.last_mut().unwrap().transaction.hash != tx_hash.unpack()
@@ -1035,7 +1036,7 @@ pub fn get_transactions(
         let mut last_key = Vec::new();
         let mut txs = Vec::new();
 
-        for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+        for (key, value) in kvs.into_iter() {
             let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
             let tx = packed::Transaction::from_slice(
                 &storage
@@ -1232,7 +1233,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
     );
 
     let mut capacity = 0;
-    for (key, value) in kvs.into_iter().map(|kv| (kv.key, kv.value)) {
+    for (key, value) in kvs.into_iter() {
         let tx_hash = packed::Byte32::from_slice(&value).expect("stored tx hash");
         let output_index = u32::from_be_bytes(
             key[key.len() - 4..]
@@ -1387,7 +1388,7 @@ pub fn build_query_options(
     type_prefix: KeyPrefix,
     order: Order,
     after_cursor: Option<JsonBytes>,
-) -> Result<(Vec<u8>, Vec<u8>, CursorDirection, usize), JsValue> {
+) -> Result<(Vec<u8>, Vec<u8>, GeneralDirection, usize), JsValue> {
     let mut prefix = match search_key.script_type {
         ScriptType::Lock => vec![lock_prefix as u8],
         ScriptType::Type => vec![type_prefix as u8],
@@ -1404,8 +1405,8 @@ pub fn build_query_options(
 
     let (from_key, direction, skip) = match order {
         Order::Asc => after_cursor.map_or_else(
-            || (prefix.clone(), CursorDirection::NextUnique, 0),
-            |json_bytes| (json_bytes.as_bytes().into(), CursorDirection::NextUnique, 1),
+            || (prefix.clone(), GeneralDirection::Forward, 0),
+            |json_bytes| (json_bytes.as_bytes().into(), GeneralDirection::Forward, 1),
         ),
         Order::Desc => after_cursor.map_or_else(
             || {
@@ -1415,11 +1416,11 @@ pub fn build_query_options(
                         vec![0xff; MAX_PREFIX_SEARCH_SIZE - args_len],
                     ]
                     .concat(),
-                    CursorDirection::PrevUnique,
+                    GeneralDirection::Reverse,
                     0,
                 )
             },
-            |json_bytes| (json_bytes.as_bytes().into(), CursorDirection::PrevUnique, 1),
+            |json_bytes| (json_bytes.as_bytes().into(), GeneralDirection::Reverse, 1),
         ),
     };
 

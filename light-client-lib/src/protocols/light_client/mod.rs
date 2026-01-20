@@ -44,7 +44,7 @@ use super::{
     status::{Status, StatusCode},
     BAD_MESSAGE_BAN_TIME,
 };
-use crate::storage::db::StorageHighLevelOperations;
+use crate::storage::db::{StorageBatchRelatedOperations, StorageGeneralOperations, StorageGetPinnedRelatedOperations, StorageHighLevelOperations};
 
 use crate::protocols::{GET_BLOCKS_PROOF_LIMIT, GET_TRANSACTIONS_PROOF_LIMIT, LAST_N_BLOCKS};
 use crate::storage::Storage;
