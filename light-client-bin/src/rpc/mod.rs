@@ -1,8 +1,3 @@
-// #[cfg(feature = "rocksdb")]
-// mod rpc_rocksdb;
-
-// #[cfg(feature = "rusqlite")]
-// mod rpc_rusqlite;
 use ckb_light_client_lib::storage;
 use ckb_light_client_lib::{
     protocols::PendingTxs,
@@ -17,6 +12,7 @@ use ckb_light_client_lib::{
     types::RwLock,
     verify::verify_tx,
 };
+use ckb_types::prelude::Reader;
 use ckb_systemtime::unix_time_as_millis;
 use jsonrpc_core::{Error, IoHandler, Result};
 use jsonrpc_http_server::{AccessControlAllowOrigin, DomainsValidation, Server, ServerBuilder};
@@ -659,7 +655,6 @@ impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterR
             limit,
             skip,
         );
-        // .map_err(|e| Error::invalid_params(&format!("Unable to search transactions: {}", e)))?;
         trace!("get_cells: collect_iterator done");
         let mut cells = Vec::new();
         let mut last_key = Vec::new();
@@ -1158,7 +1153,6 @@ impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterR
             usize::MAX,
             skip,
         );
-        // .map_err(|e| Error::invalid_params(format!("Unable to search cells: {}", e)))?;
 
         let mut capacity = 0;
         for (key, value) in kvs.into_iter() {
@@ -1198,7 +1192,7 @@ impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterR
         })
     }
 }
-use ckb_types::prelude::Reader;
+
 const MAX_PREFIX_SEARCH_SIZE: usize = u16::MAX as usize;
 
 // a helper fn to build query options from search paramters, returns prefix, from_key, direction and skip offset
