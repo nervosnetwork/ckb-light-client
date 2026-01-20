@@ -785,6 +785,7 @@ dependencies = [
  "ckb-chain-spec",
  "ckb-jsonrpc-types",
  "ckb-light-client-lib",
+ "ckb-light-client-rpc",
  "ckb-network",
  "ckb-resource",
  "ckb-rocksdb",
@@ -862,6 +863,22 @@ dependencies = [
  "wasm-bindgen-test",
  "web-sys",
  "web-time",
+]
+
+[[package]]
+name = "ckb-light-client-rpc"
+version = "0.5.4"
+dependencies = [
+ "ckb-chain-spec",
+ "ckb-jsonrpc-types",
+ "ckb-light-client-lib",
+ "ckb-network",
+ "ckb-rocksdb",
+ "ckb-systemtime",
+ "ckb-traits",
+ "ckb-types",
+ "log",
+ "rusqlite",
 ]
 
 [[package]]

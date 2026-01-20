@@ -11,7 +11,7 @@ fmt:
 clippy:
 	# cargo clippy --workspace --locked -- --deny warnings
 	# Run clippy for wasm targets
-	cargo clippy --target wasm32-unknown-unknown -p light-client-wasm -p ckb-light-client-lib -p light-client-db-common -p light-client-db-worker --locked -- --deny warnings
+	cargo clippy --target wasm32-unknown-unknown -p light-client-wasm -p ckb-light-client-lib -p light-client-db-common -p light-client-db-worker -p ckb-light-client-rpc --locked -- --deny warnings
 	# Run clippy for native targets
 	cargo clippy -p ckb-light-client --locked -- --deny warnings
 build:

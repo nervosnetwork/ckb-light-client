@@ -4,7 +4,8 @@ members = [
     "light-client-bin",
     "./wasm/light-client-wasm",
     "./wasm/light-client-db-worker",
-    "./wasm/light-client-db-common",
+    "./wasm/light-client-db-common", 
+    "light-client-rpc",
 ]
 
 resolver = "2"

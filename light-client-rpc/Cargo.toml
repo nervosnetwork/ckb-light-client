@@ -1,0 +1,30 @@
+[package]
+edition = "2024"
+name = "ckb-light-client-rpc"
+version = "0.5.4"
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+ckb-jsonrpc-types = "1"
+ckb-types = "1"
+ckb-traits = "1"
+ckb-chain-spec = "1"
+ckb-network = "1"
+ckb-systemtime = "1"
+log = "0.4"
+
+ckb-light-client-lib = {path = "../light-client-lib", default-features = false}
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rocksdb = {package = "ckb-rocksdb", version = "=0.21.1", features = [
+  "snappy",
+], default-features = false, optional = true}
+rusqlite = {version = "0.38.0", features = ["bundled"], optional = true}
+
+[features]
+default = ["rocksdb"]
+march-native = ["rocksdb/march-native"]
+portable = ["rocksdb/portable"]
+rocksdb = ["dep:rocksdb", "ckb-light-client-lib/rocksdb"]
+rusqlite = ["ckb-light-client-lib/rusqlite", "dep:rusqlite"]

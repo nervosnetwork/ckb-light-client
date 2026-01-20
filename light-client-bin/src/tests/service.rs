@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use ckb_chain_spec::consensus::Consensus;
+use ckb_light_client_rpc::{BlockFilterRpcImpl, ChainRpcImpl, TransactionRpcImpl};
 use ckb_network::PeerIndex;
 use ckb_types::{
     bytes::Bytes,
@@ -16,10 +17,7 @@ use ckb_types::{
 };
 
 use crate::{
-    rpc::{
-        BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, TransactionRpc,
-        TransactionRpcImpl,
-    },
+    rpc::{BlockFilterRpc, ChainRpc, TransactionRpc},
     // tests::prelude::*,
     // tests::utils::{create_peers, new_storage, MockChain},
     tests::{create_peers, new_storage, MockChain},
