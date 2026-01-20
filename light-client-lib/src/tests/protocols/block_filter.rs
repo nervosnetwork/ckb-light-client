@@ -12,8 +12,9 @@ use ckb_types::{
     H256, U256,
 };
 
-use crate::storage::SetScriptsCommand;
 use crate::storage::db::StorageGeneralOperations;
+use crate::storage::db::StorageHighLevelOperations;
+use crate::storage::SetScriptsCommand;
 use crate::storage::{ScriptStatus, ScriptType};
 use crate::{
     protocols::{BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN},
@@ -22,7 +23,6 @@ use crate::{
         utils::{setup, MockChain, MockNetworkContext},
     },
 };
-use crate::storage::db::StorageHighLevelOperations;
 
 #[tokio::test]
 async fn test_block_filter_malformed_message() {

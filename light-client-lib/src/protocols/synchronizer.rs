@@ -9,7 +9,9 @@ use std::sync::Arc;
 
 use super::BAD_MESSAGE_BAN_TIME;
 use crate::protocols::Peers;
-use crate::storage::db::{StorageBatchRelatedOperations, StorageGeneralOperations, StorageHighLevelOperations};
+use crate::storage::db::{
+    StorageBatchRelatedOperations, StorageGeneralOperations, StorageHighLevelOperations,
+};
 use crate::storage::Storage;
 use crate::utils::network::prove_or_download_matched_blocks;
 

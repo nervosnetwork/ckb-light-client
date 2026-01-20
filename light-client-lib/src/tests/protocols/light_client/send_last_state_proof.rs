@@ -1,12 +1,8 @@
 use std::{cmp, sync::Arc};
 
-use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
-use ckb_types::{
-    core::BlockNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
-    H256, U256,
+use crate::storage::db::{
+    StorageGeneralOperations, StorageGetPinnedRelatedOperations, StorageHighLevelOperations,
 };
-use log::debug;
-use crate::storage::db::{StorageGeneralOperations, StorageGetPinnedRelatedOperations, StorageHighLevelOperations};
 use crate::{
     protocols::{light_client::prelude::*, LastState, ProveRequest, ProveState, StatusCode},
     tests::{
@@ -14,6 +10,12 @@ use crate::{
         utils::{setup, MockChain, MockNetworkContext},
     },
 };
+use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
+use ckb_types::{
+    core::BlockNumber, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
+    H256, U256,
+};
+use log::debug;
 
 fn sampling_between(start_number: BlockNumber, boundary_number: BlockNumber) -> Vec<BlockNumber> {
     let mut sampled_numbers = Vec::new();

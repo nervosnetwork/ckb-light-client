@@ -2,8 +2,8 @@ mod service;
 
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_light_client_lib::{
-    protocols::{CHECK_POINT_INTERVAL, Peers},
-    storage::{Storage, db::StorageBatchRelatedOperations},
+    protocols::{Peers, CHECK_POINT_INTERVAL},
+    storage::{db::StorageBatchRelatedOperations, Storage},
 };
 use ckb_resource::Resource;
 use tempfile::TempDir;

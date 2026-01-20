@@ -6,12 +6,15 @@ use ckb_types::{
     prelude::{IntoHeaderView, IntoTransactionView as _},
 };
 
+use crate::storage::db::StorageHighLevelOperations;
 use crate::{
-    storage::{ScriptStatus, ScriptType, StorageWithChainData, db::{StorageBatchRelatedOperations, StorageGetPinnedRelatedOperations}},
+    storage::{
+        db::{StorageBatchRelatedOperations, StorageGetPinnedRelatedOperations},
+        ScriptStatus, ScriptType, StorageWithChainData,
+    },
     tests::{prelude::*, utils::MockChain},
     verify::verify_tx,
 };
-use crate::storage::db::StorageHighLevelOperations;
 
 #[test]
 fn verify_valid_transaction() {

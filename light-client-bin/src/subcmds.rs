@@ -13,9 +13,13 @@ use log::debug;
 use ckb_light_client_lib::{
     error::{Error, Result},
     protocols::{
-        BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL, FilterProtocol, LightClientProtocol, Peers, PendingTxs, RelayProtocol, SyncProtocol
+        FilterProtocol, LightClientProtocol, Peers, PendingTxs, RelayProtocol, SyncProtocol,
+        BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL,
     },
-    storage::{Storage, db::{StorageBatchRelatedOperations, StorageGeneralOperations}},
+    storage::{
+        db::{StorageBatchRelatedOperations, StorageGeneralOperations},
+        Storage,
+    },
     utils,
 };
 

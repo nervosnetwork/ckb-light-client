@@ -7,14 +7,14 @@ use ckb_types::{
     prelude::*,
 };
 
+use crate::storage::db::StorageHighLevelOperations;
 use crate::{
-    storage::{ScriptStatus, ScriptType, db::StorageGeneralOperations},
+    storage::{db::StorageGeneralOperations, ScriptStatus, ScriptType},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
     },
 };
-use crate::storage::db::StorageHighLevelOperations;
 
 #[tokio::test]
 async fn test_sync_add_block() {

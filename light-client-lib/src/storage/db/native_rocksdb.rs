@@ -539,7 +539,7 @@ impl StorageHighLevelOperations for Storage {
                     GeneralDirection::Reverse => Direction::Reverse,
                 },
             ))
-            .take_while(|(key, _)| take_while(&key))
+            .take_while(|(key, _)| take_while(key))
             .filter_map(|(key, value)| filter_map(&key).map(|v| (v.into_boxed_slice(), value)))
             .take(limit)
             .skip(skip)

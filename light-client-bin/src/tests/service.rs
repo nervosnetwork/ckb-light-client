@@ -15,15 +15,6 @@ use ckb_types::{
     H256, U256,
 };
 
-use ckb_light_client_lib::{
-    protocols::{FetchInfo, LastState, ProveRequest, ProveState},
-    service::{
-        FetchStatus, Order, ScriptStatus, ScriptType, SearchKey, SearchKeyFilter,
-        SetScriptsCommand, Status, TransactionWithStatus, TxStatus,
-    },
-    storage::{self, HeaderWithExtension, StorageWithChainData, db::{StorageBatchRelatedOperations, StorageGeneralOperations, StorageGetPinnedRelatedOperations}},
-};
-use ckb_light_client_lib::storage::db::StorageHighLevelOperations;
 use crate::{
     rpc::{
         BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, TransactionRpc,
@@ -32,6 +23,22 @@ use crate::{
     // tests::prelude::*,
     // tests::utils::{create_peers, new_storage, MockChain},
     tests::{create_peers, new_storage, MockChain},
+};
+use ckb_light_client_lib::storage::db::StorageHighLevelOperations;
+use ckb_light_client_lib::{
+    protocols::{FetchInfo, LastState, ProveRequest, ProveState},
+    service::{
+        FetchStatus, Order, ScriptStatus, ScriptType, SearchKey, SearchKeyFilter,
+        SetScriptsCommand, Status, TransactionWithStatus, TxStatus,
+    },
+    storage::{
+        self,
+        db::{
+            StorageBatchRelatedOperations, StorageGeneralOperations,
+            StorageGetPinnedRelatedOperations,
+        },
+        HeaderWithExtension, StorageWithChainData,
+    },
 };
 
 #[test]

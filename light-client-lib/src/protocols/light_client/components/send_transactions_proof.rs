@@ -6,7 +6,10 @@ use ckb_types::{
 };
 use log::{debug, error};
 
-use crate::{protocols::light_client::components::verify_extra_hash, storage::{HeaderWithExtension, db::StorageBatchRelatedOperations}};
+use crate::{
+    protocols::light_client::components::verify_extra_hash,
+    storage::{db::StorageBatchRelatedOperations, HeaderWithExtension},
+};
 
 use super::{
     super::{LightClientProtocol, Status, StatusCode},

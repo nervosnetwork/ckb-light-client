@@ -1,6 +1,8 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
-use crate::storage::db::{StorageGeneralOperations, StorageGetPinnedRelatedOperations, StorageHighLevelOperations};
+use crate::storage::db::{
+    StorageGeneralOperations, StorageGetPinnedRelatedOperations, StorageHighLevelOperations,
+};
 use crate::storage::Storage;
 use crate::types::{Duration, Instant, RwLock};
 use crate::utils::network::prove_or_download_matched_blocks;

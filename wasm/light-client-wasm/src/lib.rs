@@ -44,9 +44,9 @@ use ckb_stop_handler::broadcast_exit_signals;
 use ckb_systemtime::{unix_time_as_millis, Instant};
 use ckb_types::{core, packed, prelude::*, H256};
 
+use ckb_light_client_lib::storage::db::StorageBatchRelatedOperations;
 use ckb_light_client_lib::storage::db::StorageGetPinnedRelatedOperations;
 use std::sync::OnceLock;
-use ckb_light_client_lib::storage::db::StorageBatchRelatedOperations;
 static MAINNET_CONFIG: &str = include_str!("../../../config/mainnet.toml");
 
 static TESTNET_CONFIG: &str = include_str!("../../../config/testnet.toml");

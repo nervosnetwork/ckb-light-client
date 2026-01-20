@@ -5,6 +5,8 @@ use super::super::{
 };
 use anyhow::{anyhow, bail, Context};
 
+use crate::storage::db::StorageBatchRelatedOperations;
+use crate::storage::db::{StorageGeneralOperations, StorageGetPinnedRelatedOperations};
 use ckb_types::{
     core::{
         cell::{CellMeta, CellStatus},
@@ -18,8 +20,6 @@ use light_client_db_common::{
     idb_cursor_direction_to_ckb, read_command_payload, write_command_with_payload,
     DbCommandRequest, DbCommandResponse, InputCommand, OutputCommand, KV,
 };
-use crate::storage::db::{StorageGeneralOperations, StorageGetPinnedRelatedOperations};
-use crate::storage::db::StorageBatchRelatedOperations;
 use log::debug;
 
 use crate::{

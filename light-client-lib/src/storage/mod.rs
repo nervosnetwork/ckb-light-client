@@ -224,7 +224,9 @@ impl<S: StorageHighLevelOperations + Clone> CellDataProvider for StorageWithChai
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-impl<S: StorageHighLevelOperations + CellDataProvider + Clone> CellDataProvider for StorageWithChainData<S> {
+impl<S: StorageHighLevelOperations + CellDataProvider + Clone> CellDataProvider
+    for StorageWithChainData<S>
+{
     fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
         self.storage.get_cell_data(out_point)
     }

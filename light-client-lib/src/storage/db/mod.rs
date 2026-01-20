@@ -15,7 +15,6 @@ mod browser;
 #[cfg(target_arch = "wasm32")]
 pub use browser::{Batch, Storage};
 
-
 use crate::error::Result;
 use ckb_types::prelude::Reader;
 use ckb_types::prelude::{Builder, FromSliceShouldBeOk};
@@ -62,7 +61,7 @@ pub trait StorageHighLevelOperations {
     ///
     /// N.B. The specified block will be removed.
     fn rollback_to_block(&self, to_number: BlockNumber);
-
+    #[allow(clippy::type_complexity)]
     fn collect_iterator(
         &self,
         start_key_bound: Vec<u8>,

@@ -10,13 +10,16 @@ use ckb_types::{
 
 use crate::{
     protocols::{
-        BAD_MESSAGE_BAN_TIME, PeerState, light_client::constant::{
+        light_client::constant::{
             GET_IDLE_BLOCKS_TOKEN, REFRESH_PEERS_DURATION, REFRESH_PEERS_TOKEN,
-        }
-    }, storage::db::StorageGeneralOperations, tests::{
+        },
+        PeerState, BAD_MESSAGE_BAN_TIME,
+    },
+    storage::db::StorageGeneralOperations,
+    tests::{
         prelude::*,
-        utils::{MockChain, MockNetworkContext, setup},
-    }
+        utils::{setup, MockChain, MockNetworkContext},
+    },
 };
 
 mod send_blocks_proof;

@@ -920,7 +920,7 @@ impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterR
                     if let Some(filter_script) = filter_script.as_ref() {
                         match filter_script_type {
                             ScriptType::Lock => {
-                                if storage_cloned
+                                storage_cloned
                                     .get(
                                         Key::TxLockScript(
                                             filter_script,
@@ -934,14 +934,10 @@ impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterR
                                         )
                                         .into_vec(),
                                     )
-                                    .expect("get TxLockScript should be OK")
-                                    .is_none()
-                                {
-                                    return None;
-                                };
+                                    .expect("get TxLockScript should be OK")?;
                             }
                             ScriptType::Type => {
-                                if storage_cloned
+                                storage_cloned
                                     .get(
                                         Key::TxTypeScript(
                                             filter_script,
@@ -955,11 +951,7 @@ impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterR
                                         )
                                         .into_vec(),
                                     )
-                                    .expect("get TxTypeScript should be OK")
-                                    .is_none()
-                                {
-                                    return None;
-                                };
+                                    .expect("get TxTypeScript should be OK")?;
                             }
                         }
                     }
@@ -1224,7 +1216,7 @@ pub fn build_query_options(
     let script: packed::Script = search_key.script.clone().into();
     let args_len = script.args().len();
     if args_len > MAX_PREFIX_SEARCH_SIZE {
-        return Err(Error::invalid_params(&format!(
+        return Err(Error::invalid_params(format!(
             "search_key.script.args len should be less than {}",
             MAX_PREFIX_SEARCH_SIZE
         )));
@@ -1270,7 +1262,7 @@ pub fn build_filter_options(
     let filter_script_prefix = if let Some(script) = filter.script {
         let script: packed::Script = script.into();
         if script.args().len() > MAX_PREFIX_SEARCH_SIZE {
-            return Err(Error::invalid_params(&format!(
+            return Err(Error::invalid_params(format!(
                 "search_key.filter.script.args len should be less than {}",
                 MAX_PREFIX_SEARCH_SIZE
             )));
