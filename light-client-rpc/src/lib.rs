@@ -389,6 +389,7 @@ impl<
 impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterRpcMethods
     for BlockFilterRpcImpl<S>
 {
+    #[cfg(not(target_arch = "wasm32"))]
     fn set_scripts(
         &self,
         scripts: Vec<ScriptStatus>,
@@ -405,6 +406,20 @@ impl<S: StorageHighLevelOperations + Send + Sync + Clone + 'static> BlockFilterR
             tx.send(()).unwrap();
         });
         rx.recv().unwrap();
+        Ok(())
+    }
+    #[cfg(target_arch = "wasm32")]
+    fn set_scripts(
+        &self,
+        scripts: Vec<ScriptStatus>,
+        command: Option<SetScriptsCommand>,
+    ) -> Result<()> {
+        let mut matched_blocks = self.swc.matched_blocks().blocking_write();
+        self.swc.storage().update_filter_scripts(
+            scripts.into_iter().map(Into::into).collect(),
+            command.map(Into::into).unwrap_or_default(),
+        );
+        matched_blocks.clear();
         Ok(())
     }
 

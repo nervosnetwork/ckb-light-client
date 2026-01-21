@@ -3019,6 +3019,7 @@ dependencies = [
  "ckb-chain-spec",
  "ckb-jsonrpc-types",
  "ckb-light-client-lib",
+ "ckb-light-client-rpc",
  "ckb-network",
  "ckb-resource",
  "ckb-stop-handler",

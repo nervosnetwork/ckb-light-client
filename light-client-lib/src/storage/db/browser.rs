@@ -4,6 +4,8 @@ use super::super::{
     BlockNumber, Byte32, CellType, Script, ScriptStatus, ScriptType, SetScriptsCommand,
 };
 use anyhow::{anyhow, bail, Context};
+use ckb_traits::CellDataProvider;
+use ckb_types::bytes::Bytes;
 
 use crate::storage::db::StorageBatchRelatedOperations;
 use crate::storage::db::{StorageGeneralOperations, StorageGetPinnedRelatedOperations};
@@ -1070,5 +1072,16 @@ impl Batch {
         }
 
         Ok(())
+    }
+}
+
+impl CellDataProvider for Storage {
+    // we load all cells data eagerly in Storage's CellProivder impl
+    fn get_cell_data(&self, _out_point: &OutPoint) -> Option<Bytes> {
+        unreachable!()
+    }
+
+    fn get_cell_data_hash(&self, _out_point: &OutPoint) -> Option<Byte32> {
+        unreachable!()
     }
 }
