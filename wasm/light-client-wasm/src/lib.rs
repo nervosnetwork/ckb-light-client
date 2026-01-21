@@ -410,7 +410,6 @@ pub fn get_scripts() -> Result<Vec<JsValue>, JsValue> {
 
     Ok(result
         .into_iter()
-        .map(Into::into)
         .map(|v: ScriptStatus| v.serialize(&SERIALIZER))
         .collect::<Result<Vec<_>, _>>()?)
 }
