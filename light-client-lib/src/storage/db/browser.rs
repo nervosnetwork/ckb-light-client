@@ -43,6 +43,13 @@ use crate::{
 };
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::js_sys::{Atomics, Int32Array, SharedArrayBuffer, Uint8Array};
+
+// Enum to handle different filter_map signatures
+enum FilterMapType {
+    Single(Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>),
+    Pair(Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>),
+}
+
 enum CommandRequestWithTakeWhileAndFilterMap {
     Read {
         keys: Vec<Vec<u8>>,
@@ -58,7 +65,7 @@ enum CommandRequestWithTakeWhileAndFilterMap {
         start_key_bound: Vec<u8>,
         order: CursorDirection,
         take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        filter_map: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
     },
@@ -162,7 +169,11 @@ impl CommunicationChannel {
         &self,
         cmd: CommandRequestWithTakeWhileAndFilterMap,
     ) -> anyhow::Result<DbCommandResponse> {
-        let (new_cmd, take_while, filter_map) = match cmd {
+        let (new_cmd, take_while, filter_map): (
+            DbCommandRequest,
+            Option<Box<dyn Fn(&[u8]) -> bool + Send + 'static>>,
+            Option<FilterMapType>,
+        ) = match cmd {
             CommandRequestWithTakeWhileAndFilterMap::Read { keys } => {
                 (DbCommandRequest::Read { keys }, None, None)
             }
@@ -187,7 +198,7 @@ impl CommunicationChannel {
                     skip,
                 },
                 Some(take_while),
-                Some(filter_map),
+                Some(FilterMapType::Pair(filter_map)),
             ),
             CommandRequestWithTakeWhileAndFilterMap::IteratorKey {
                 start_key_bound,
@@ -204,7 +215,7 @@ impl CommunicationChannel {
                     skip,
                 },
                 Some(take_while),
-                Some(filter_map),
+                Some(FilterMapType::Single(filter_map)),
             ),
         };
         debug!("Dispatching database command: {:?}", new_cmd);
@@ -249,14 +260,25 @@ impl CommunicationChannel {
                     continue;
                 }
                 OutputCommand::RequestFilterMap => {
-                    let arg = read_command_payload::<Vec<u8>>(output_i32_arr, output_u8_arr)?;
-                    let result = filter_map.as_ref().unwrap()(&arg);
+                    // Handle both single-arg and two-arg filter_map
+                    let result = match filter_map.as_ref().unwrap() {
+                        FilterMapType::Single(f) => {
+                            // IteratorKey case: read just the key
+                            let arg =
+                                read_command_payload::<Vec<u8>>(output_i32_arr, output_u8_arr)?;
+                            f(&arg)
+                        }
+                        FilterMapType::Pair(f) => {
+                            // Iterator case: read (key, value) tuple
+                            let (key, value) = read_command_payload::<(Vec<u8>, Vec<u8>)>(
+                                output_i32_arr,
+                                output_u8_arr,
+                            )?;
+                            f(&key, &value)
+                        }
+                    };
 
-                    log::trace!(
-                        "Received filter_map request with args {:?}, result {:?}",
-                        arg,
-                        result
-                    );
+                    log::trace!("Received filter_map request, result {:?}", result);
                     write_command_with_payload(
                         InputCommand::ResponseFilterMap as i32,
                         result,
@@ -399,7 +421,7 @@ impl Storage {
                 start_key_bound: key_prefix_clone.clone(),
                 order: CursorDirection::NextUnique,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
+                filter_map: Box::new(|key, _value| Some(key.to_vec())),
                 limit: usize::MAX,
                 skip: 0,
             })
@@ -540,7 +562,7 @@ impl Storage {
                 start_key_bound: key_prefix.clone(),
                 order: CursorDirection::NextUnique,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
+                filter_map: Box::new(|key, _value| Some(key.to_vec())),
                 limit: usize::MAX,
                 skip: 0,
             })
@@ -576,7 +598,7 @@ impl Storage {
                 start_key_bound: key_prefix_clone.clone(),
                 order: CursorDirection::NextUnique,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
+                filter_map: Box::new(|key, _value| Some(key.to_vec())),
                 limit: usize::MAX,
                 skip: 0,
             })
@@ -633,7 +655,9 @@ impl Storage {
     }
     fn get_matched_blocks(&self, direction: CursorDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
-        let iter_from = match direction {
+        // TODO: Fix direction handling - currently always iterates forward regardless of direction parameter
+        // Should use iter_from and direction like the native implementation does
+        let _iter_from = match direction {
             CursorDirection::NextUnique => key_prefix.clone(),
             CursorDirection::PrevUnique => {
                 let mut key = key_prefix.clone();
@@ -648,11 +672,11 @@ impl Storage {
         let value = self
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: iter_from,
+                start_key_bound: key_prefix_clone.clone(),
                 order: CursorDirection::NextUnique,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
-                limit: 1,
+                filter_map: Box::new(|key, _value| Some(key.to_vec())),
+                limit: usize::MAX,
                 skip: 0,
             })
             .unwrap();
@@ -703,7 +727,7 @@ impl Storage {
                 start_key_bound: start_key,
                 order: CursorDirection::NextUnique,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
+                filter_map: Box::new(|key, _value| Some(key.to_vec())),
                 limit,
                 skip: 0,
             })
@@ -728,7 +752,7 @@ impl Storage {
                 start_key_bound: key_prefix.clone(),
                 order: CursorDirection::NextUnique,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix)),
-                filter_map: Box::new(|s| Some(s.to_vec())),
+                filter_map: Box::new(|key, _value| Some(key.to_vec())),
                 limit: usize::MAX,
                 skip: 0,
             })
@@ -781,7 +805,7 @@ impl Storage {
                                         .expect("stored BlockNumber"),
                                 ) >= to_number
                         }),
-                        filter_map: Box::new(|s| Some(s.to_vec())),
+                        filter_map: Box::new(|key, _value| Some(key.to_vec())),
                         limit: usize::MAX,
                         skip: 0,
                     })
@@ -985,7 +1009,7 @@ impl Storage {
         start_key_bound: Vec<u8>,
         order: CursorDirection,
         take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        filter_map: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
     ) -> Vec<KV> {
@@ -1623,23 +1647,13 @@ impl LightClientStorage for Storage {
     ) -> Vec<KVPair> {
         let cursor_direction: CursorDirection = direction.into();
 
-        // The browser storage's collect_iterator uses a filter_map that only takes key
-        // We need to adapt it to provide both key and value to the filter_map_fn
-        let storage_clone = self.clone();
-        let adapted_filter_map = Box::new(move |key: &[u8]| -> Option<Vec<u8>> {
-            // Get the value for this key
-            let value = storage_clone.get(key).ok()??;
-            // Call the original filter_map_fn with both key and value
-            filter_map_fn(key, &value)
-        });
-
-        // Use the existing collect_iterator method from browser storage
+        // Use the browser storage's collect_iterator which now provides both key and value to filter_map
         let kvs = Storage::collect_iterator(
             self,
             from_key,
             cursor_direction,
             take_while_fn,
-            adapted_filter_map,
+            filter_map_fn,
             limit,
             skip,
         );

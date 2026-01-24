@@ -54,7 +54,7 @@ pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
 ) -> anyhow::Result<Vec<KV>>
 where
     F: Fn(&[u8]) -> bool,
-    FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
+    FnFilterMap: Fn(&[u8], &[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
     let mut iter = open_iterator(store, start_key_bound, order)
@@ -79,7 +79,7 @@ where
     if take_while(&raw_kv.key) {
         skip_index += 1;
         if skip_index > skip {
-            if let Some(new_key) = filter_map(&raw_kv.key).await {
+            if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
                 res.push(KV {
                     key: new_key,
                     value: raw_kv.value,
@@ -112,7 +112,7 @@ where
         if take_while(&raw_kv.key) {
             skip_index += 1;
             if skip_index > skip {
-                if let Some(new_key) = filter_map(&raw_kv.key).await {
+                if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
                     res.push(KV {
                         key: new_key,
                         value: raw_kv.value,
@@ -208,7 +208,7 @@ pub(crate) async fn handle_db_command<F, FnFilterMap, FnFilterMapOutput>(
 ) -> anyhow::Result<DbCommandResponse>
 where
     F: Fn(&[u8]) -> bool,
-    FnFilterMap: FnOnce(&[u8], ObjectStore) -> FnFilterMapOutput + Clone,
+    FnFilterMap: Fn(&[u8], &[u8], ObjectStore) -> FnFilterMapOutput + Clone,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
     debug!("Handle command: {:?}", cmd);
@@ -288,11 +288,12 @@ where
                 &start_key_bound,
                 ckb_cursor_direction_to_idb(order),
                 invoke_take_while,
-                |key| {
+                |key, value| {
                     let key = key.to_vec();
+                    let value = value.to_vec();
                     let store = store.clone();
                     let invoke_filter_map = invoke_filter_map.clone();
-                    async move { invoke_filter_map(&key, store.clone()).await }
+                    async move { invoke_filter_map(&key, &value, store.clone()).await }
                 },
                 limit,
                 skip,
@@ -320,7 +321,7 @@ where
                     let key = key.to_vec();
                     let store = store.clone();
                     let invoke_filter_map = invoke_filter_map.clone();
-                    async move { invoke_filter_map(&key, store.clone()).await }
+                    async move { invoke_filter_map(&key, &[], store.clone()).await }
                 },
                 limit,
                 skip,
