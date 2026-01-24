@@ -8,6 +8,7 @@ use std::{
 use super::super::{
     BlockNumber, Byte32, CellType, Script, ScriptStatus, ScriptType, SetScriptsCommand,
 };
+use super::iterator::{IteratorDirection, KVPair, StorageIterator};
 use anyhow::{anyhow, bail, Context};
 
 use ckb_types::{
@@ -1592,5 +1593,39 @@ impl Storage {
                 })
             })
             .expect("db get should be ok")
+    }
+}
+
+// Implementation of unified storage iterator trait for IndexedDB
+impl StorageIterator for Storage {
+    #[allow(clippy::type_complexity)]
+    fn collect_iterator(
+        &self,
+        from_key: Vec<u8>,
+        direction: IteratorDirection,
+        take_while_fn: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
+        filter_map_fn: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        limit: usize,
+        skip: usize,
+    ) -> Vec<KVPair> {
+        let cursor_direction: CursorDirection = direction.into();
+
+        // Use the existing collect_iterator method from browser storage
+        let kvs = self.collect_iterator(
+            from_key,
+            cursor_direction,
+            take_while_fn,
+            filter_map_fn,
+            limit,
+            skip,
+        );
+
+        // Convert KV to KVPair
+        kvs.into_iter()
+            .map(|kv| KVPair {
+                key: kv.key,
+                value: kv.value,
+            })
+            .collect()
     }
 }

@@ -16,6 +16,7 @@ use ckb_light_client_lib::{
         Pagination, PeerSyncState, RemoteNode, ScriptStatus, ScriptType, SearchKey,
         SetScriptsCommand, Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
     },
+    service_helpers::{build_filter_options, build_query_options},
     storage::{
         self, extract_raw_data, Key, KeyPrefix, Storage, StorageWithChainData, LAST_STATE_KEY,
     },
@@ -161,13 +162,14 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Cell>> {
-        let (prefix, from_key, direction, skip) = build_query_options(
+        let (prefix, from_key, iter_direction, skip) = build_query_options(
             &search_key,
             KeyPrefix::CellLockScript,
             KeyPrefix::CellTypeScript,
             order,
             after_cursor,
-        )?;
+        )
+        .map_err(|e| Error::invalid_params(e.to_string()))?;
         let limit = limit.value() as usize;
         if limit == 0 {
             return Err(Error::invalid_params("limit should be greater than 0"));
@@ -183,7 +185,8 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             filter_output_data_len_range,
             filter_output_capacity_range,
             filter_block_range,
-        ) = build_filter_options(search_key)?;
+        ) = build_filter_options(search_key).map_err(|e| Error::invalid_params(e.to_string()))?;
+        let direction: Direction = iter_direction.into();
         let mode = IteratorMode::From(from_key.as_ref(), direction);
         let snapshot = self.swc.storage().snapshot();
         let iter = snapshot.iterator(mode).skip(skip);
@@ -319,13 +322,14 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Tx>> {
-        let (prefix, from_key, direction, skip) = build_query_options(
+        let (prefix, from_key, iter_direction, skip) = build_query_options(
             &search_key,
             KeyPrefix::TxLockScript,
             KeyPrefix::TxTypeScript,
             order,
             after_cursor,
-        )?;
+        )
+        .map_err(|e| Error::invalid_params(e.to_string()))?;
         let limit = limit.value() as usize;
         if limit == 0 {
             return Err(Error::invalid_params("limit should be greater than 0"));
@@ -356,6 +360,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             ScriptType::Type => ScriptType::Lock,
         };
 
+        let direction: Direction = iter_direction.into();
         let mode = IteratorMode::From(from_key.as_ref(), direction);
         let snapshot = self.swc.storage().snapshot();
         let iter = snapshot.iterator(mode).skip(skip);
@@ -574,13 +579,14 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
     }
 
     fn get_cells_capacity(&self, search_key: SearchKey) -> Result<CellsCapacity> {
-        let (prefix, from_key, direction, skip) = build_query_options(
+        let (prefix, from_key, iter_direction, skip) = build_query_options(
             &search_key,
             KeyPrefix::CellLockScript,
             KeyPrefix::CellTypeScript,
             Order::Asc,
             None,
-        )?;
+        )
+        .map_err(|e| Error::invalid_params(e.to_string()))?;
         let filter_script_type = match search_key.script_type {
             ScriptType::Lock => ScriptType::Type,
             ScriptType::Type => ScriptType::Lock,
@@ -591,7 +597,8 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
             filter_output_data_len_range,
             filter_output_capacity_range,
             filter_block_range,
-        ) = build_filter_options(search_key)?;
+        ) = build_filter_options(search_key).map_err(|e| Error::invalid_params(e.to_string()))?;
+        let direction: Direction = iter_direction.into();
         let mode = IteratorMode::From(from_key.as_ref(), direction);
         let snapshot = self.swc.storage().snapshot();
         let iter = snapshot.iterator(mode).skip(skip);
@@ -1004,109 +1011,4 @@ impl Service {
             )
             .expect("Start Jsonrpc HTTP service")
     }
-}
-
-const MAX_PREFIX_SEARCH_SIZE: usize = u16::MAX as usize;
-
-// a helper fn to build query options from search paramters, returns prefix, from_key, direction and skip offset
-pub fn build_query_options(
-    search_key: &SearchKey,
-    lock_prefix: KeyPrefix,
-    type_prefix: KeyPrefix,
-    order: Order,
-    after_cursor: Option<JsonBytes>,
-) -> Result<(Vec<u8>, Vec<u8>, Direction, usize)> {
-    let mut prefix = match search_key.script_type {
-        ScriptType::Lock => vec![lock_prefix as u8],
-        ScriptType::Type => vec![type_prefix as u8],
-    };
-    let script: packed::Script = search_key.script.clone().into();
-    let args_len = script.args().len();
-    if args_len > MAX_PREFIX_SEARCH_SIZE {
-        return Err(Error::invalid_params(format!(
-            "search_key.script.args len should be less than {}",
-            MAX_PREFIX_SEARCH_SIZE
-        )));
-    }
-    prefix.extend_from_slice(extract_raw_data(&script).as_slice());
-
-    let (from_key, direction, skip) = match order {
-        Order::Asc => after_cursor.map_or_else(
-            || (prefix.clone(), Direction::Forward, 0),
-            |json_bytes| (json_bytes.as_bytes().into(), Direction::Forward, 1),
-        ),
-        Order::Desc => after_cursor.map_or_else(
-            || {
-                (
-                    [
-                        prefix.clone(),
-                        vec![0xff; MAX_PREFIX_SEARCH_SIZE - args_len],
-                    ]
-                    .concat(),
-                    Direction::Reverse,
-                    0,
-                )
-            },
-            |json_bytes| (json_bytes.as_bytes().into(), Direction::Reverse, 1),
-        ),
-    };
-
-    Ok((prefix, from_key, direction, skip))
-}
-
-// a helper fn to build filter options from search paramters, returns prefix, output_data_len_range, output_capacity_range and block_range
-#[allow(clippy::type_complexity)]
-pub fn build_filter_options(
-    search_key: SearchKey,
-) -> Result<(
-    Option<Vec<u8>>,
-    Option<[usize; 2]>,
-    Option<[usize; 2]>,
-    Option<[core::Capacity; 2]>,
-    Option<[core::BlockNumber; 2]>,
-)> {
-    let filter = search_key.filter.unwrap_or_default();
-    let filter_script_prefix = if let Some(script) = filter.script {
-        let script: packed::Script = script.into();
-        if script.args().len() > MAX_PREFIX_SEARCH_SIZE {
-            return Err(Error::invalid_params(format!(
-                "search_key.filter.script.args len should be less than {}",
-                MAX_PREFIX_SEARCH_SIZE
-            )));
-        }
-        let mut prefix = Vec::new();
-        prefix.extend_from_slice(extract_raw_data(&script).as_slice());
-        Some(prefix)
-    } else {
-        None
-    };
-
-    let filter_script_len_range = filter.script_len_range.map(|[r0, r1]| {
-        [
-            Into::<u64>::into(r0) as usize,
-            Into::<u64>::into(r1) as usize,
-        ]
-    });
-
-    let filter_output_data_len_range = filter.output_data_len_range.map(|[r0, r1]| {
-        [
-            Into::<u64>::into(r0) as usize,
-            Into::<u64>::into(r1) as usize,
-        ]
-    });
-    let filter_output_capacity_range = filter.output_capacity_range.map(|[r0, r1]| {
-        [
-            core::Capacity::shannons(r0.into()),
-            core::Capacity::shannons(r1.into()),
-        ]
-    });
-    let filter_block_range = filter.block_range.map(|r| [r[0].into(), r[1].into()]);
-
-    Ok((
-        filter_script_prefix,
-        filter_script_len_range,
-        filter_output_data_len_range,
-        filter_output_capacity_range,
-        filter_block_range,
-    ))
 }

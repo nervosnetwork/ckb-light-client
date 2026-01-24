@@ -19,6 +19,7 @@ use ckb_light_client_lib::{
         Pagination, PeerSyncState, RemoteNode, ScriptStatus, ScriptType, SearchKey,
         SetScriptsCommand, Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
     },
+    service_helpers::{build_filter_options, build_query_options},
     storage::{
         self, extract_raw_data, CursorDirection, Key, KeyPrefix, Storage, StorageWithChainData,
         LAST_STATE_KEY,
@@ -551,13 +552,14 @@ pub fn get_cells(
     );
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
 
-    let (prefix, from_key, direction, skip) = build_query_options(
+    let (prefix, from_key, iter_direction, skip) = build_query_options(
         &search_key,
         KeyPrefix::CellLockScript,
         KeyPrefix::CellTypeScript,
         order,
         after_cursor.map(JsonBytes::from_vec),
-    )?;
+    )
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let limit = limit as usize;
     if limit == 0 {
@@ -575,7 +577,7 @@ pub fn get_cells(
         filter_output_data_len_range,
         filter_output_capacity_range,
         filter_block_range,
-    ) = build_filter_options(search_key)?;
+    ) = build_filter_options(search_key).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     fn extract_data_from_key(key: &[u8]) -> (u32, u32, u64) {
         let output_index = u32::from_be_bytes(
@@ -596,6 +598,7 @@ pub fn get_cells(
         (output_index, tx_index, block_number)
     }
 
+    let direction: CursorDirection = iter_direction.into();
     let storage = STORAGE_WITH_DATA.get().unwrap().storage();
     let kvs: Vec<_> = storage.collect_iterator(
         from_key.clone(),
@@ -764,13 +767,14 @@ pub fn get_transactions(
     );
 
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
-    let (prefix, from_key, direction, skip) = build_query_options(
+    let (prefix, from_key, iter_direction, skip) = build_query_options(
         &search_key,
         KeyPrefix::TxLockScript,
         KeyPrefix::TxTypeScript,
         order,
         after_cursor.map(JsonBytes::from_vec),
-    )?;
+    )
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
 
     let limit = limit as usize;
     if limit == 0 {
@@ -802,6 +806,7 @@ pub fn get_transactions(
         (None, None)
     };
 
+    let direction: CursorDirection = iter_direction.into();
     let storage = STORAGE_WITH_DATA.get().unwrap().storage();
 
     if search_key.group_by_transaction.unwrap_or_default() {
@@ -1094,13 +1099,14 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
 
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     debug!("Call get_cells_capacity: {:?}", search_key);
-    let (prefix, from_key, direction, skip) = build_query_options(
+    let (prefix, from_key, iter_direction, skip) = build_query_options(
         &search_key,
         KeyPrefix::CellLockScript,
         KeyPrefix::CellTypeScript,
         Order::Asc,
         None,
-    )?;
+    )
+    .map_err(|e| JsValue::from_str(&e.to_string()))?;
     let filter_script_type = match search_key.script_type {
         ScriptType::Lock => ScriptType::Type,
         ScriptType::Type => ScriptType::Lock,
@@ -1111,8 +1117,9 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
         filter_output_data_len_range,
         filter_output_capacity_range,
         filter_block_range,
-    ) = build_filter_options(search_key)?;
+    ) = build_filter_options(search_key).map_err(|e| JsValue::from_str(&e.to_string()))?;
 
+    let direction: CursorDirection = iter_direction.into();
     let storage = STORAGE_WITH_DATA.get().unwrap().storage();
     log::trace!("get_cells_capacity: before entering collect iterator");
 
@@ -1374,111 +1381,4 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
         timestamp: now.into(),
     })
     .serialize(&SERIALIZER)?)
-}
-
-const MAX_PREFIX_SEARCH_SIZE: usize = u16::MAX as usize;
-
-// a helper fn to build query options from search paramters, returns prefix, from_key, direction and skip offset
-pub fn build_query_options(
-    search_key: &SearchKey,
-    lock_prefix: KeyPrefix,
-    type_prefix: KeyPrefix,
-    order: Order,
-    after_cursor: Option<JsonBytes>,
-) -> Result<(Vec<u8>, Vec<u8>, CursorDirection, usize), JsValue> {
-    let mut prefix = match search_key.script_type {
-        ScriptType::Lock => vec![lock_prefix as u8],
-        ScriptType::Type => vec![type_prefix as u8],
-    };
-    let script: packed::Script = search_key.script.clone().into();
-    let args_len = script.args().len();
-    if args_len > MAX_PREFIX_SEARCH_SIZE {
-        return Err(JsValue::from_str(&format!(
-            "search_key.script.args len should be less than {}",
-            MAX_PREFIX_SEARCH_SIZE
-        )));
-    }
-    prefix.extend_from_slice(extract_raw_data(&script).as_slice());
-
-    let (from_key, direction, skip) = match order {
-        Order::Asc => after_cursor.map_or_else(
-            || (prefix.clone(), CursorDirection::NextUnique, 0),
-            |json_bytes| (json_bytes.as_bytes().into(), CursorDirection::NextUnique, 1),
-        ),
-        Order::Desc => after_cursor.map_or_else(
-            || {
-                (
-                    [
-                        prefix.clone(),
-                        vec![0xff; MAX_PREFIX_SEARCH_SIZE - args_len],
-                    ]
-                    .concat(),
-                    CursorDirection::PrevUnique,
-                    0,
-                )
-            },
-            |json_bytes| (json_bytes.as_bytes().into(), CursorDirection::PrevUnique, 1),
-        ),
-    };
-
-    Ok((prefix, from_key, direction, skip))
-}
-
-#[allow(clippy::type_complexity)]
-pub fn build_filter_options(
-    search_key: SearchKey,
-) -> Result<
-    (
-        Option<Vec<u8>>,
-        Option<[usize; 2]>,
-        Option<[usize; 2]>,
-        Option<[core::Capacity; 2]>,
-        Option<[core::BlockNumber; 2]>,
-    ),
-    JsValue,
-> {
-    let filter = search_key.filter.unwrap_or_default();
-    let filter_script_prefix = if let Some(script) = filter.script {
-        let script: packed::Script = script.into();
-        if script.args().len() > MAX_PREFIX_SEARCH_SIZE {
-            return Err(JsValue::from_str(&format!(
-                "search_key.filter.script.args len should be less than {}",
-                MAX_PREFIX_SEARCH_SIZE
-            )));
-        }
-        let mut prefix = Vec::new();
-        prefix.extend_from_slice(extract_raw_data(&script).as_slice());
-        Some(prefix)
-    } else {
-        None
-    };
-
-    let filter_script_len_range = filter.script_len_range.map(|[r0, r1]| {
-        [
-            Into::<u64>::into(r0) as usize,
-            Into::<u64>::into(r1) as usize,
-        ]
-    });
-
-    let filter_output_data_len_range = filter.output_data_len_range.map(|[r0, r1]| {
-        [
-            Into::<u64>::into(r0) as usize,
-            Into::<u64>::into(r1) as usize,
-        ]
-    });
-    let filter_output_capacity_range = filter.output_capacity_range.map(|[r0, r1]| {
-        [
-            core::Capacity::shannons(r0.into()),
-            core::Capacity::shannons(r1.into()),
-        ]
-    });
-    let filter_block_range = filter.block_range.map(|r| [r[0].into(), r[1].into()]);
-
-    Ok((
-        filter_script_prefix,
-        filter_script_len_range,
-        filter_output_data_len_range,
-        filter_output_capacity_range,
-        filter_block_range,
-    ))
 }

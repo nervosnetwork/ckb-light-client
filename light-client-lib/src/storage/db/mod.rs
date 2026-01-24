@@ -1,8 +1,19 @@
-#[cfg(not(target_arch = "wasm32"))]
+mod iterator;
+#[allow(unused_imports)]
+pub use iterator::{IteratorDirection, KVPair, StorageIterator};
+
+// Native platforms: Use RocksDB by default, SQLite when feature is enabled
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "sqlite")))]
 mod native;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), not(feature = "sqlite")))]
 pub use native::{Batch, Storage};
 
+#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
+mod sqlite;
+#[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
+pub use sqlite::{Batch, Storage};
+
+// WASM platform: Use IndexedDB
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(target_arch = "wasm32")]

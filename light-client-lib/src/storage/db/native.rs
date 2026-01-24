@@ -5,6 +5,7 @@ use super::super::{
     FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY, LAST_N_HEADERS_KEY, LAST_STATE_KEY,
     MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX, MIN_FILTERED_BLOCK_NUMBER,
 };
+use super::iterator::{IteratorDirection, KVPair, StorageIterator};
 use crate::error::Result;
 use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
@@ -1168,5 +1169,36 @@ impl HeaderProvider for Storage {
                 })
             })
             .expect("db get should be ok")
+    }
+}
+
+// Implementation of unified storage iterator trait for RocksDB
+impl StorageIterator for Storage {
+    #[allow(clippy::type_complexity)]
+    fn collect_iterator(
+        &self,
+        from_key: Vec<u8>,
+        direction: IteratorDirection,
+        take_while_fn: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
+        filter_map_fn: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        limit: usize,
+        skip: usize,
+    ) -> Vec<KVPair> {
+        let rocksdb_direction: Direction = direction.into();
+        let mode = IteratorMode::From(from_key.as_ref(), rocksdb_direction);
+        let snapshot = self.snapshot();
+
+        snapshot
+            .iterator(mode)
+            .skip(skip)
+            .take_while(|(key, _)| take_while_fn(key))
+            .filter_map(|(key, value)| {
+                filter_map_fn(&key).map(|_| KVPair {
+                    key: key.to_vec(),
+                    value: value.to_vec(),
+                })
+            })
+            .take(limit)
+            .collect()
     }
 }
