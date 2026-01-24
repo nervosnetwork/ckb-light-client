@@ -16,7 +16,7 @@ use ckb_types::{
         cell::{CellMeta, CellProvider, CellStatus},
         HeaderView, TransactionInfo,
     },
-    packed::{self, CellOutput, Header, OutPoint, Transaction},
+    packed::{self, Block, CellOutput, Header, OutPoint, Transaction},
     prelude::*,
     U256,
 };
@@ -944,5 +944,183 @@ impl CellProvider for Storage {
         }
 
         CellStatus::Unknown
+    }
+}
+
+// Implementation of unified storage trait for SQLite
+impl super::super::storage_trait::LightClientStorage for Storage {
+    // ========== Basic KV operations ==========
+
+    fn get(&self, key: Vec<u8>) -> crate::error::Result<Option<Vec<u8>>> {
+        Storage::get(self, key)
+    }
+
+    fn put(&self, key: Vec<u8>, value: Vec<u8>) -> crate::error::Result<()> {
+        Storage::put(self, key, value)
+    }
+
+    fn delete(&self, key: &[u8]) -> crate::error::Result<()> {
+        Storage::delete(self, key)
+    }
+
+    // ========== Iterator operations ==========
+
+    fn collect_iterator(
+        &self,
+        from_key: Vec<u8>,
+        direction: IteratorDirection,
+        take_while_fn: super::super::storage_trait::TakeWhileFn,
+        filter_map_fn: super::super::storage_trait::FilterMapFn,
+        limit: usize,
+        skip: usize,
+    ) -> Vec<KVPair> {
+        // Note: SQLite's StorageIterator expects a different filter_map_fn signature
+        // We need to adapt it to match the new signature that includes value parameter
+        let adapted_filter_map = Box::new(move |key: &[u8]| {
+            // For now, pass empty value since SQLite iterator doesn't use it in filter_map
+            filter_map_fn(key, &[]).map(|_| vec![])
+        });
+
+        StorageIterator::collect_iterator(
+            self,
+            from_key,
+            direction,
+            take_while_fn,
+            adapted_filter_map,
+            limit,
+            skip,
+        )
+    }
+
+    // ========== Filter scripts management ==========
+
+    fn is_filter_scripts_empty(&self) -> bool {
+        Storage::is_filter_scripts_empty(self)
+    }
+
+    fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
+        Storage::get_filter_scripts(self)
+    }
+
+    fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
+        Storage::update_filter_scripts(self, scripts, command)
+    }
+
+    fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
+        Storage::get_scripts_hash(self, block_number)
+    }
+
+    fn update_block_number(&self, block_number: BlockNumber) {
+        Storage::update_block_number(self, block_number)
+    }
+
+    // ========== Matched blocks management ==========
+
+    fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        Storage::get_earliest_matched_blocks(self)
+    }
+
+    fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        Storage::get_latest_matched_blocks(self)
+    }
+
+    fn add_matched_blocks(
+        &self,
+        start_number: u64,
+        blocks_count: u64,
+        matched_blocks: Vec<(Byte32, bool)>,
+    ) {
+        Storage::add_matched_blocks(self, start_number, blocks_count, matched_blocks)
+    }
+
+    fn remove_matched_blocks(&self, start_number: u64) {
+        Storage::remove_matched_blocks(self, start_number)
+    }
+
+    fn cleanup_invalid_matched_blocks(&self) {
+        Storage::cleanup_invalid_matched_blocks(self)
+    }
+
+    // ========== Check points management ==========
+
+    fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
+        Storage::get_check_points(self, start_index, limit)
+    }
+
+    fn update_check_points(&self, start_index: CpIndex, check_points: &[Byte32]) {
+        Storage::update_check_points(self, start_index, check_points)
+    }
+
+    fn get_last_check_point(&self) -> (CpIndex, Byte32) {
+        Storage::get_last_check_point(self)
+    }
+
+    fn get_max_check_point_index(&self) -> CpIndex {
+        Storage::get_max_check_point_index(self)
+    }
+
+    fn update_max_check_point_index(&self, index: CpIndex) {
+        Storage::update_max_check_point_index(self, index)
+    }
+
+    // ========== Block and transaction management ==========
+
+    fn init_genesis_block(&self, block: Block) {
+        Storage::init_genesis_block(self, block)
+    }
+
+    fn get_genesis_block(&self) -> Block {
+        Storage::get_genesis_block(self)
+    }
+
+    fn add_fetched_header(&self, hwe: &HeaderWithExtension) {
+        Storage::add_fetched_header(self, hwe)
+    }
+
+    fn add_fetched_tx(&self, tx: &Transaction, hwe: &HeaderWithExtension) {
+        Storage::add_fetched_tx(self, tx, hwe)
+    }
+
+    fn filter_block(&self, block: Block) {
+        Storage::filter_block(self, block)
+    }
+
+    fn rollback_to_block(&self, to_number: BlockNumber) {
+        Storage::rollback_to_block(self, to_number)
+    }
+
+    fn get_transaction_with_header(&self, tx_hash: &Byte32) -> Option<(Transaction, Header)> {
+        Storage::get_transaction_with_header(self, tx_hash)
+    }
+
+    // ========== Chain state management ==========
+
+    fn update_last_state(
+        &self,
+        total_difficulty: &U256,
+        tip_header: &Header,
+        last_n_headers: &[ckb_types::core::HeaderView],
+    ) {
+        Storage::update_last_state(self, total_difficulty, tip_header, last_n_headers)
+    }
+
+    fn get_last_state(&self) -> (U256, Header) {
+        Storage::get_last_state(self)
+    }
+
+    fn get_last_n_headers(&self) -> Vec<(u64, Byte32)> {
+        Storage::get_last_n_headers(self)
+    }
+
+    fn get_tip_header(&self) -> Header {
+        Storage::get_tip_header(self)
+    }
+
+    fn get_min_filtered_block_number(&self) -> BlockNumber {
+        Storage::get_min_filtered_block_number(self)
+    }
+
+    fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
+        Storage::update_min_filtered_block_number(self, block_number)
     }
 }
