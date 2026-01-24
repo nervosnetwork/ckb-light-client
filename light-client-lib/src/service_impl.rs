@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use crate::storage::Storage;
 /// Unified Service Layer Implementation
 ///
 /// This module contains the business logic for get_cells, get_transactions, and get_cells_capacity
@@ -12,7 +14,7 @@ use crate::{
         TxWithCells,
     },
     service_helpers::{build_filter_options, build_query_options},
-    storage::{extract_raw_data, Key, KeyPrefix, LightClientStorage, Storage, LAST_STATE_KEY},
+    storage::{extract_raw_data, Key, KeyPrefix, LightClientStorage, LAST_STATE_KEY},
 };
 use ckb_jsonrpc_types::{JsonBytes, Uint32};
 use ckb_types::{core, packed, prelude::*};

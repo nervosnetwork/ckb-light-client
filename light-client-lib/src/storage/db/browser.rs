@@ -8,7 +8,7 @@ use std::{
 use super::super::{
     BlockNumber, Byte32, CellType, Script, ScriptStatus, ScriptType, SetScriptsCommand,
 };
-use super::iterator::{IteratorDirection, KVPair, StorageIterator};
+use super::iterator::{IteratorDirection, KVPair};
 use anyhow::{anyhow, bail, Context};
 
 use ckb_types::{
@@ -1596,26 +1596,50 @@ impl Storage {
     }
 }
 
-// Implementation of unified storage iterator trait for IndexedDB
-impl StorageIterator for Storage {
-    #[allow(clippy::type_complexity)]
+// Implementation of unified storage trait for IndexedDB
+use super::super::LightClientStorage;
+
+impl LightClientStorage for Storage {
+    fn get(&self, key: Vec<u8>) -> crate::error::Result<Option<Vec<u8>>> {
+        Storage::get(self, key)
+    }
+
+    fn put(&self, key: Vec<u8>, value: Vec<u8>) -> crate::error::Result<()> {
+        Storage::put(self, key, value)
+    }
+
+    fn delete(&self, key: &[u8]) -> crate::error::Result<()> {
+        Storage::delete(self, key)
+    }
+
     fn collect_iterator(
         &self,
         from_key: Vec<u8>,
         direction: IteratorDirection,
         take_while_fn: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map_fn: Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        filter_map_fn: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
     ) -> Vec<KVPair> {
         let cursor_direction: CursorDirection = direction.into();
 
+        // The browser storage's collect_iterator uses a filter_map that only takes key
+        // We need to adapt it to provide both key and value to the filter_map_fn
+        let storage_clone = self.clone();
+        let adapted_filter_map = Box::new(move |key: &[u8]| -> Option<Vec<u8>> {
+            // Get the value for this key
+            let value = storage_clone.get(key).ok()??;
+            // Call the original filter_map_fn with both key and value
+            filter_map_fn(key, &value)
+        });
+
         // Use the existing collect_iterator method from browser storage
-        let kvs = self.collect_iterator(
+        let kvs = Storage::collect_iterator(
+            self,
             from_key,
             cursor_direction,
             take_while_fn,
-            filter_map_fn,
+            adapted_filter_map,
             limit,
             skip,
         );
@@ -1627,5 +1651,127 @@ impl StorageIterator for Storage {
                 value: kv.value,
             })
             .collect()
+    }
+
+    fn is_filter_scripts_empty(&self) -> bool {
+        Storage::is_filter_scripts_empty(self)
+    }
+
+    fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
+        Storage::get_filter_scripts(self)
+    }
+
+    fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
+        Storage::update_filter_scripts(self, scripts, command)
+    }
+
+    fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
+        Storage::get_scripts_hash(self, block_number)
+    }
+
+    fn update_block_number(&self, block_number: BlockNumber) {
+        Storage::update_block_number(self, block_number);
+    }
+
+    fn get_earliest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        Storage::get_earliest_matched_blocks(self)
+    }
+
+    fn get_latest_matched_blocks(&self) -> Option<MatchedBlocks> {
+        Storage::get_latest_matched_blocks(self)
+    }
+
+    fn add_matched_blocks(
+        &self,
+        start_number: u64,
+        blocks_count: u64,
+        matched_blocks: Vec<(Byte32, bool)>,
+    ) {
+        Storage::add_matched_blocks(self, start_number, blocks_count, matched_blocks)
+    }
+
+    fn remove_matched_blocks(&self, start_number: u64) {
+        Storage::remove_matched_blocks(self, start_number)
+    }
+
+    fn cleanup_invalid_matched_blocks(&self) {
+        Storage::cleanup_invalid_matched_blocks(self)
+    }
+
+    fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
+        Storage::get_check_points(self, start_index, limit)
+    }
+
+    fn update_check_points(&self, start_index: CpIndex, check_points: &[Byte32]) {
+        Storage::update_check_points(self, start_index, check_points)
+    }
+
+    fn get_last_check_point(&self) -> (CpIndex, Byte32) {
+        Storage::get_last_check_point(self)
+    }
+
+    fn get_max_check_point_index(&self) -> CpIndex {
+        Storage::get_max_check_point_index(self)
+    }
+
+    fn update_max_check_point_index(&self, index: CpIndex) {
+        Storage::update_max_check_point_index(self, index)
+    }
+
+    fn init_genesis_block(&self, block: Block) {
+        Storage::init_genesis_block(self, block)
+    }
+
+    fn get_genesis_block(&self) -> Block {
+        Storage::get_genesis_block(self)
+    }
+
+    fn add_fetched_header(&self, hwe: &HeaderWithExtension) {
+        Storage::add_fetched_header(self, hwe)
+    }
+
+    fn add_fetched_tx(&self, tx: &Transaction, hwe: &HeaderWithExtension) {
+        Storage::add_fetched_tx(self, tx, hwe)
+    }
+
+    fn filter_block(&self, block: Block) {
+        Storage::filter_block(self, block)
+    }
+
+    fn rollback_to_block(&self, to_number: BlockNumber) {
+        Storage::rollback_to_block(self, to_number)
+    }
+
+    fn get_transaction_with_header(&self, tx_hash: &Byte32) -> Option<(Transaction, Header)> {
+        Storage::get_transaction_with_header(self, tx_hash)
+    }
+
+    fn update_last_state(
+        &self,
+        total_difficulty: &U256,
+        tip_header: &Header,
+        last_n_headers: &[ckb_types::core::HeaderView],
+    ) {
+        Storage::update_last_state(self, total_difficulty, tip_header, last_n_headers)
+    }
+
+    fn get_last_state(&self) -> (U256, Header) {
+        Storage::get_last_state(self)
+    }
+
+    fn get_last_n_headers(&self) -> Vec<(u64, Byte32)> {
+        Storage::get_last_n_headers(self)
+    }
+
+    fn get_tip_header(&self) -> Header {
+        Storage::get_tip_header(self)
+    }
+
+    fn get_min_filtered_block_number(&self) -> BlockNumber {
+        Storage::get_min_filtered_block_number(self)
+    }
+
+    fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
+        Storage::update_min_filtered_block_number(self, block_number)
     }
 }
