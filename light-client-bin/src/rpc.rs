@@ -99,23 +99,20 @@ pub trait NetRpc {
 }
 
 pub struct BlockFilterRpcImpl {
-    pub(crate) swc: StorageWithChainData,
-    pub(crate) consensus: Arc<Consensus>,
+    cell_service: LightClientService<Storage>,
+    chain_service: LightClientChainService,
 }
 
 pub struct TransactionRpcImpl {
-    pub(crate) swc: StorageWithChainData,
-    pub(crate) consensus: Arc<Consensus>,
+    service: LightClientChainService,
 }
 
 pub struct ChainRpcImpl {
-    pub(crate) swc: StorageWithChainData,
-    pub(crate) consensus: Arc<Consensus>,
+    service: LightClientChainService,
 }
 
 pub struct NetRpcImpl {
-    network_controller: NetworkController,
-    peers: Arc<Peers>,
+    service: LightClientNetworkService,
 }
 
 impl BlockFilterRpc for BlockFilterRpcImpl {
@@ -124,16 +121,12 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         scripts: Vec<ScriptStatus>,
         command: Option<SetScriptsCommand>,
     ) -> Result<()> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        service.set_scripts(scripts, command);
+        self.chain_service.set_scripts(scripts, command);
         Ok(())
     }
 
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        Ok(service.get_scripts())
+        Ok(self.chain_service.get_scripts())
     }
 
     fn get_cells(
@@ -143,9 +136,7 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Cell>> {
-        // Use unified service layer
-        let service = LightClientService::new(Arc::new(self.swc.storage().clone()));
-        service
+        self.cell_service
             .get_cells(search_key, order, limit, after_cursor)
             .map_err(|e| Error::invalid_params(format!("{}", e)))
     }
@@ -157,17 +148,13 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Tx>> {
-        // Use unified service layer
-        let service = LightClientService::new(Arc::new(self.swc.storage().clone()));
-        service
+        self.cell_service
             .get_transactions(search_key, order, limit, after_cursor)
             .map_err(|e| Error::invalid_params(format!("{}", e)))
     }
 
     fn get_cells_capacity(&self, search_key: SearchKey) -> Result<CellsCapacity> {
-        // Use unified service layer
-        let service = LightClientService::new(Arc::new(self.swc.storage().clone()));
-        service
+        self.cell_service
             .get_cells_capacity(search_key)
             .map_err(|e| Error::invalid_params(format!("{}", e)))
     }
@@ -177,75 +164,50 @@ const MAX_ADDRS: usize = 50;
 
 impl NetRpc for NetRpcImpl {
     fn local_node_info(&self) -> Result<LocalNode> {
-        // Use unified service layer
-        let service = LightClientNetworkService::new(
-            self.network_controller.clone(),
-            Arc::clone(&self.peers),
-        );
-        Ok(service.local_node_info(MAX_ADDRS))
+        Ok(self.service.local_node_info(MAX_ADDRS))
     }
 
     fn get_peers(&self) -> Result<Vec<RemoteNode>> {
-        // Use unified service layer
-        let service = LightClientNetworkService::new(
-            self.network_controller.clone(),
-            Arc::clone(&self.peers),
-        );
-        Ok(service.get_peers())
+        Ok(self.service.get_peers())
     }
 }
 
 impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        service
+        self.service
             .send_transaction(tx)
             .map_err(|e| Error::invalid_params(format!("{}", e)))
     }
 
     fn get_transaction(&self, tx_hash: H256) -> Result<TransactionWithStatus> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        Ok(service.get_transaction(&tx_hash))
+        Ok(self.service.get_transaction(&tx_hash))
     }
 
     fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithStatus>> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        Ok(service.fetch_transaction(&tx_hash))
+        Ok(self.service.fetch_transaction(&tx_hash))
     }
 }
 
 impl ChainRpc for ChainRpcImpl {
     fn get_tip_header(&self) -> Result<HeaderView> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        Ok(service.get_tip_header())
+        Ok(self.service.get_tip_header())
     }
 
     fn get_genesis_block(&self) -> Result<BlockView> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        Ok(service.get_genesis_block())
+        Ok(self.service.get_genesis_block())
     }
 
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        Ok(service.get_header(&block_hash))
+        Ok(self.service.get_header(&block_hash))
     }
 
     fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        Ok(service.fetch_header(&block_hash))
+        Ok(self.service.fetch_header(&block_hash))
     }
 
     fn estimate_cycles(&self, tx: Transaction) -> Result<EstimateCycles> {
-        // Use unified service layer
-        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
-        let cycles = service
+        let cycles = self
+            .service
             .estimate_cycles(tx)
             .map_err(|e| Error::invalid_params(format!("{}", e)))?;
         Ok(EstimateCycles { cycles })
@@ -272,23 +234,28 @@ impl Service {
         consensus: Consensus,
     ) -> Server {
         let mut io_handler = IoHandler::new();
-        let swc = StorageWithChainData::new(storage, Arc::clone(&peers), Arc::clone(&pending_txs));
+        let swc = StorageWithChainData::new(
+            storage.clone(),
+            Arc::clone(&peers),
+            Arc::clone(&pending_txs),
+        );
         let consensus = Arc::new(consensus);
+
+        let chain_service = LightClientChainService::new(swc.clone(), Arc::clone(&consensus));
+        let cell_service = LightClientService::new(Arc::new(storage));
+
         let block_filter_rpc_impl = BlockFilterRpcImpl {
-            swc: swc.clone(),
-            consensus: Arc::clone(&consensus),
+            cell_service,
+            chain_service: chain_service.clone(),
         };
         let chain_rpc_impl = ChainRpcImpl {
-            swc: swc.clone(),
-            consensus: Arc::clone(&consensus),
+            service: chain_service.clone(),
         };
         let transaction_rpc_impl = TransactionRpcImpl {
-            swc,
-            consensus: Arc::clone(&consensus),
+            service: chain_service,
         };
         let net_rpc_impl = NetRpcImpl {
-            network_controller,
-            peers,
+            service: LightClientNetworkService::new(network_controller, peers),
         };
         io_handler.extend_with(block_filter_rpc_impl.to_delegate());
         io_handler.extend_with(chain_rpc_impl.to_delegate());

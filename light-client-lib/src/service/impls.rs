@@ -588,6 +588,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 /// - Transaction operations (send, get, fetch)
 /// - Header operations (get_tip, get_genesis, get, fetch)
 /// - Cycle estimation
+#[derive(Clone)]
 pub struct LightClientChainService {
     swc: StorageWithChainData,
     consensus: Arc<Consensus>,

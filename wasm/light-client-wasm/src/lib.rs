@@ -257,16 +257,33 @@ pub fn stop() {
     change_status(0b10);
 }
 
+// Helper functions to create services
+fn get_chain_service() -> LightClientChainService {
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    let consensus = CONSENSUS.get().unwrap();
+    LightClientChainService::new(swc.clone(), Arc::clone(consensus))
+}
+
+fn get_network_service() -> LightClientNetworkService {
+    let network_controller = NET_CONTROL.get().unwrap();
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    LightClientNetworkService::new(network_controller.clone(), Arc::clone(swc.peers()))
+}
+
+fn get_cell_service() -> LightClientService<Storage> {
+    let storage = STORAGE_WITH_DATA
+        .get()
+        .expect("storage not initialized")
+        .storage();
+    LightClientService::new(Arc::new(storage.clone()))
+}
 
 #[wasm_bindgen]
 pub fn get_tip_header() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    Ok(service.get_tip_header().serialize(&SERIALIZER)?)
+    Ok(get_chain_service().get_tip_header().serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -274,10 +291,7 @@ pub fn get_genesis_block() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    Ok(service.get_genesis_block().serialize(&SERIALIZER)?)
+    Ok(get_chain_service().get_genesis_block().serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -286,10 +300,7 @@ pub fn get_header(hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    Ok(service.get_header(&block_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service().get_header(&block_hash).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -298,10 +309,7 @@ pub fn fetch_header(hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    Ok(service.fetch_header(&block_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service().fetch_header(&block_hash).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -311,11 +319,7 @@ pub fn estimate_cycles(tx: JsValue) -> Result<JsValue, JsValue> {
     }
 
     let tx: Transaction = serde_wasm_bindgen::from_value(tx)?;
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    
-    let cycles = service
+    let cycles = get_chain_service()
         .estimate_cycles(tx)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     
@@ -329,11 +333,7 @@ pub fn local_node_info() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-
-    let network_controller = NET_CONTROL.get().unwrap();
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let service = LightClientNetworkService::new(network_controller.clone(), Arc::clone(swc.peers()));
-    Ok(service.local_node_info(MAX_ADDRS).serialize(&SERIALIZER)?)
+    Ok(get_network_service().local_node_info(MAX_ADDRS).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -341,11 +341,7 @@ pub fn get_peers() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-
-    let network_controller = NET_CONTROL.get().unwrap();
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let service = LightClientNetworkService::new(network_controller.clone(), Arc::clone(swc.peers()));
-    Ok(service.get_peers().serialize(&SERIALIZER)?)
+    Ok(get_network_service().get_peers().serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -363,10 +359,7 @@ pub fn set_scripts(
         .collect::<Result<Vec<_>, _>>()?;
     debug!("Update scripts, {:?}, {:?}", scripts, command);
     
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    service.set_scripts(scripts, command);
+    get_chain_service().set_scripts(scripts, command);
     Ok(())
 }
 
@@ -376,11 +369,7 @@ pub fn get_scripts() -> Result<Vec<JsValue>, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
 
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    let scripts = service.get_scripts();
-
+    let scripts = get_chain_service().get_scripts();
     Ok(scripts
         .into_iter()
         .map(|v: ScriptStatus| v.serialize(&SERIALIZER))
@@ -405,18 +394,13 @@ pub fn get_cells(
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     let after_cursor_json = after_cursor.map(JsonBytes::from_vec);
     
-    let storage = STORAGE_WITH_DATA
-        .get()
-        .ok_or_else(|| JsValue::from_str("storage not initialized"))?
-        .storage();
-    
-    let service = LightClientService::new(Arc::new(storage.clone()));
-    let result = service
+    let result = get_cell_service()
         .get_cells(search_key, order, limit.into(), after_cursor_json)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     
     Ok(result.serialize(&SERIALIZER)?)
 }
+
 #[wasm_bindgen]
 pub fn get_transactions(
     search_key: JsValue,
@@ -435,18 +419,13 @@ pub fn get_transactions(
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     let after_cursor_json = after_cursor.map(JsonBytes::from_vec);
     
-    let storage = STORAGE_WITH_DATA
-        .get()
-        .ok_or_else(|| JsValue::from_str("storage not initialized"))?
-        .storage();
-    
-    let service = LightClientService::new(Arc::new(storage.clone()));
-    let result = service
+    let result = get_cell_service()
         .get_transactions(search_key, order, limit.into(), after_cursor_json)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     
     Ok(result.serialize(&SERIALIZER)?)
 }
+
 #[wasm_bindgen]
 pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
     if !status(0b1) {
@@ -456,13 +435,7 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     debug!("Call get_cells_capacity: {:?}", search_key);
     
-    let storage = STORAGE_WITH_DATA
-        .get()
-        .ok_or_else(|| JsValue::from_str("storage not initialized"))?
-        .storage();
-    
-    let service = LightClientService::new(Arc::new(storage.clone()));
-    let result = service
+    let result = get_cell_service()
         .get_cells_capacity(search_key)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     
@@ -475,11 +448,7 @@ pub fn send_transaction(tx: JsValue) -> Result<Vec<u8>, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let tx: Transaction = serde_wasm_bindgen::from_value(tx)?;
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    
-    let tx_hash = service
+    let tx_hash = get_chain_service()
         .send_transaction(tx)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
     
@@ -492,10 +461,7 @@ pub fn get_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    Ok(service.get_transaction(&tx_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service().get_transaction(&tx_hash).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -504,8 +470,5 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    let swc = STORAGE_WITH_DATA.get().unwrap();
-    let consensus = CONSENSUS.get().unwrap();
-    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
-    Ok(service.fetch_transaction(&tx_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service().fetch_transaction(&tx_hash).serialize(&SERIALIZER)?)
 }
