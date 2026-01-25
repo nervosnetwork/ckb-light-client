@@ -10,17 +10,28 @@ use crate::storage::{extract_raw_data, IteratorDirection, KeyPrefix};
 
 const MAX_PREFIX_SEARCH_SIZE: usize = u16::MAX as usize;
 
+/// Query options: (prefix, from_key, direction, skip)
+type QueryOptions = (Vec<u8>, Vec<u8>, IteratorDirection, usize);
+
+/// Filter options: (filter_prefix, script_len_range, output_data_len_range, output_capacity_range, block_range)
+type FilterOptions = (
+    Option<Vec<u8>>,
+    Option<[usize; 2]>,
+    Option<[usize; 2]>,
+    Option<[core::Capacity; 2]>,
+    Option<[core::BlockNumber; 2]>,
+);
+
 /// Build query options from search parameters
 ///
 /// Returns: (prefix, from_key, direction, skip)
-#[allow(clippy::type_complexity)]
 pub fn build_query_options(
     search_key: &SearchKey,
     lock_prefix: KeyPrefix,
     type_prefix: KeyPrefix,
     order: Order,
     after_cursor: Option<JsonBytes>,
-) -> Result<(Vec<u8>, Vec<u8>, IteratorDirection, usize)> {
+) -> Result<QueryOptions> {
     let mut prefix = match search_key.script_type {
         ScriptType::Lock => vec![lock_prefix as u8],
         ScriptType::Type => vec![type_prefix as u8],
@@ -63,16 +74,7 @@ pub fn build_query_options(
 /// Build filter options from search parameters
 ///
 /// Returns: (filter_prefix, script_len_range, output_data_len_range, output_capacity_range, block_range)
-#[allow(clippy::type_complexity)]
-pub fn build_filter_options(
-    search_key: SearchKey,
-) -> Result<(
-    Option<Vec<u8>>,
-    Option<[usize; 2]>,
-    Option<[usize; 2]>,
-    Option<[core::Capacity; 2]>,
-    Option<[core::BlockNumber; 2]>,
-)> {
+pub fn build_filter_options(search_key: SearchKey) -> Result<FilterOptions> {
     let filter = search_key.filter.unwrap_or_default();
 
     let filter_script_prefix = if let Some(script) = filter.script {

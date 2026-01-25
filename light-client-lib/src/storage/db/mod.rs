@@ -1,5 +1,4 @@
 mod iterator;
-#[allow(unused_imports)]
 pub use iterator::{IteratorDirection, KVPair, StorageIterator};
 
 // Native platforms: Use RocksDB by default, SQLite when feature is enabled
