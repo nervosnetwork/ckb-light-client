@@ -2,22 +2,27 @@
 use crate::storage::Storage;
 /// Unified Service Layer Implementation
 ///
-/// This module contains the business logic for get_cells, get_transactions, and get_cells_capacity
-/// that was previously duplicated between RPC and WASM implementations.
+/// This module contains the business logic for get_cells, get_transactions, get_cells_capacity,
+/// and other methods that were previously duplicated between RPC and WASM implementations.
 ///
 /// The Service struct is generic over storage backends via the LightClientStorage trait,
 /// allowing it to work with RocksDB, SQLite, or IndexedDB without code duplication.
 use crate::{
     error::{Error, Result},
     service::{
-        Cell, CellType, CellsCapacity, Order, Pagination, ScriptType, SearchKey, Tx, TxWithCell,
-        TxWithCells,
+        Cell, CellType, CellsCapacity, FetchStatus, Order, Pagination, ScriptType, SearchKey,
+        Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
     },
     service_helpers::{build_filter_options, build_query_options},
-    storage::{extract_raw_data, Key, KeyPrefix, LightClientStorage, LAST_STATE_KEY},
+    storage::{
+        extract_raw_data, Key, KeyPrefix, LightClientStorage, StorageWithChainData, LAST_STATE_KEY,
+    },
 };
-use ckb_jsonrpc_types::{JsonBytes, Uint32};
-use ckb_types::{core, packed, prelude::*};
+use ckb_chain_spec::consensus::Consensus;
+use ckb_jsonrpc_types::{JsonBytes, Transaction, Uint32, Uint64};
+use ckb_systemtime::unix_time_as_millis;
+use ckb_traits::HeaderProvider;
+use ckb_types::{core, packed, prelude::*, H256};
 use std::sync::Arc;
 
 /// Unified Service struct that works with any storage backend
@@ -581,3 +586,189 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 // Convenience type aliases for common configurations
 #[cfg(not(target_arch = "wasm32"))]
 pub type NativeService = LightClientService<Storage>;
+
+/// Extended Service Layer for Chain Data Operations
+///
+/// This service provides business logic for operations that require access to
+/// StorageWithChainData (storage + peers + pending_txs), such as:
+/// - Transaction operations (send, get, fetch)
+/// - Header operations (get_tip, get_genesis, get, fetch)
+/// - Cycle estimation
+pub struct LightClientChainService {
+    swc: StorageWithChainData,
+    consensus: Arc<Consensus>,
+}
+
+impl LightClientChainService {
+    /// Create a new chain service instance
+    pub fn new(swc: StorageWithChainData, consensus: Arc<Consensus>) -> Self {
+        Self { swc, consensus }
+    }
+
+    /// Get tip header
+    pub fn get_tip_header(&self) -> ckb_jsonrpc_types::HeaderView {
+        self.swc.storage().get_tip_header().into_view().into()
+    }
+
+    /// Get genesis block
+    pub fn get_genesis_block(&self) -> ckb_jsonrpc_types::BlockView {
+        self.swc.storage().get_genesis_block().into_view().into()
+    }
+
+    /// Get header by block hash
+    pub fn get_header(&self, block_hash: &H256) -> Option<ckb_jsonrpc_types::HeaderView> {
+        self.swc.get_header(&block_hash.pack()).map(Into::into)
+    }
+
+    /// Fetch header by block hash (with fetch status tracking)
+    pub fn fetch_header(&self, block_hash: &H256) -> FetchStatus<ckb_jsonrpc_types::HeaderView> {
+        if let Some(value) = self.swc.get_header(&block_hash.pack()) {
+            return FetchStatus::Fetched { data: value.into() };
+        }
+
+        let now = unix_time_as_millis();
+        if let Some((added_ts, first_sent, missing)) = self.swc.get_header_fetch_info(block_hash) {
+            if missing {
+                // re-fetch the header
+                self.swc.add_fetch_header(block_hash.clone(), now);
+                return FetchStatus::NotFound;
+            } else if first_sent > 0 {
+                return FetchStatus::Fetching {
+                    first_sent: first_sent.into(),
+                };
+            } else {
+                return FetchStatus::Added {
+                    timestamp: added_ts.into(),
+                };
+            }
+        } else {
+            self.swc.add_fetch_header(block_hash.clone(), now);
+        }
+        FetchStatus::Added {
+            timestamp: now.into(),
+        }
+    }
+
+    /// Send transaction
+    pub fn send_transaction(&self, tx: Transaction) -> Result<H256> {
+        let tx: packed::Transaction = tx.into();
+        let tx = tx.into_view();
+        let cycles = crate::verify::verify_tx(
+            tx.clone(),
+            &self.swc,
+            Arc::clone(&self.consensus),
+            &self.swc.storage().get_last_state().1.into_view(),
+        )
+        .map_err(|e| Error::runtime(format!("invalid transaction: {:?}", e)))?;
+
+        // Platform-specific pending_txs access
+        #[cfg(target_arch = "wasm32")]
+        self.swc
+            .pending_txs()
+            .blocking_write()
+            .push(tx.clone(), cycles);
+        #[cfg(not(target_arch = "wasm32"))]
+        self.swc
+            .pending_txs()
+            .write()
+            .expect("pending_txs lock is poisoned")
+            .push(tx.clone(), cycles);
+
+        Ok(tx.hash().unpack())
+    }
+
+    /// Get transaction by tx hash
+    pub fn get_transaction(&self, tx_hash: &H256) -> TransactionWithStatus {
+        // Check storage first
+        if let Some((transaction, header)) = self
+            .swc
+            .storage()
+            .get_transaction_with_header(&tx_hash.pack())
+        {
+            return TransactionWithStatus {
+                transaction: Some(transaction.into_view().into()),
+                cycles: None,
+                tx_status: TxStatus {
+                    block_hash: Some(header.into_view().hash().unpack()),
+                    status: Status::Committed,
+                },
+            };
+        }
+
+        // Check pending transactions
+        #[cfg(target_arch = "wasm32")]
+        let pending_result = self.swc.pending_txs().blocking_read().get(&tx_hash.pack());
+        #[cfg(not(target_arch = "wasm32"))]
+        let pending_result = self
+            .swc
+            .pending_txs()
+            .read()
+            .expect("pending_txs lock is poisoned")
+            .get(&tx_hash.pack());
+
+        if let Some((transaction, cycles, _)) = pending_result {
+            return TransactionWithStatus {
+                transaction: Some(transaction.into_view().into()),
+                cycles: Some(cycles.into()),
+                tx_status: TxStatus {
+                    block_hash: None,
+                    status: Status::Pending,
+                },
+            };
+        }
+
+        // Not found
+        TransactionWithStatus {
+            transaction: None,
+            cycles: None,
+            tx_status: TxStatus {
+                block_hash: None,
+                status: Status::Unknown,
+            },
+        }
+    }
+
+    /// Fetch transaction by tx hash (with fetch status tracking)
+    pub fn fetch_transaction(&self, tx_hash: &H256) -> FetchStatus<TransactionWithStatus> {
+        let tws = self.get_transaction(tx_hash);
+        if tws.transaction.is_some() {
+            return FetchStatus::Fetched { data: tws };
+        }
+
+        let now = unix_time_as_millis();
+        if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(tx_hash) {
+            if missing {
+                // re-fetch the transaction
+                self.swc.add_fetch_tx(tx_hash.clone(), now);
+                return FetchStatus::NotFound;
+            } else if first_sent > 0 {
+                return FetchStatus::Fetching {
+                    first_sent: first_sent.into(),
+                };
+            } else {
+                return FetchStatus::Added {
+                    timestamp: added_ts.into(),
+                };
+            }
+        } else {
+            self.swc.add_fetch_tx(tx_hash.clone(), now);
+        }
+        FetchStatus::Added {
+            timestamp: now.into(),
+        }
+    }
+
+    /// Estimate cycles for a transaction
+    pub fn estimate_cycles(&self, tx: Transaction) -> Result<Uint64> {
+        let tx: packed::Transaction = tx.into();
+        let tx = tx.into_view();
+        let cycles = crate::verify::verify_tx(
+            tx.clone(),
+            &self.swc,
+            Arc::clone(&self.consensus),
+            &self.swc.storage().get_last_state().1.into_view(),
+        )
+        .map_err(|e| Error::runtime(format!("invalid transaction: {:?}", e)))?;
+        Ok(cycles.into())
+    }
+}

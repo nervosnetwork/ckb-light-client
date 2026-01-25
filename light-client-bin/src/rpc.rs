@@ -13,12 +13,11 @@ use ckb_light_client_lib::{
     protocols::{Peers, PendingTxs},
     service::{
         Cell, CellsCapacity, FetchStatus, LocalNode, LocalNodeProtocol, Order, Pagination,
-        PeerSyncState, RemoteNode, ScriptStatus, SearchKey, SetScriptsCommand, Status,
-        TransactionWithStatus, Tx, TxStatus,
+        PeerSyncState, RemoteNode, ScriptStatus, SearchKey, SetScriptsCommand,
+        TransactionWithStatus, Tx,
     },
-    service_impl::LightClientService,
+    service_impl::{LightClientChainService, LightClientService},
     storage::{Storage, StorageWithChainData},
-    verify::verify_tx,
 };
 
 use ckb_chain_spec::consensus::Consensus;
@@ -27,9 +26,7 @@ use ckb_jsonrpc_types::{
     Uint32,
 };
 use ckb_network::{extract_peer_id, NetworkController};
-use ckb_systemtime::unix_time_as_millis;
-use ckb_traits::HeaderProvider;
-use ckb_types::{packed, prelude::*, H256};
+use ckb_types::H256;
 
 #[rpc(server)]
 pub trait BlockFilterRpc {
@@ -281,150 +278,58 @@ impl NetRpc for NetRpcImpl {
 
 impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
-        let tx: packed::Transaction = tx.into();
-        let tx = tx.into_view();
-        let cycles = verify_tx(
-            tx.clone(),
-            &self.swc,
-            Arc::clone(&self.consensus),
-            &self.swc.storage().get_last_state().1.into_view(),
-        )
-        .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
-        self.swc
-            .pending_txs()
-            .write()
-            .expect("pending_txs lock is poisoned")
-            .push(tx.clone(), cycles);
-
-        Ok(tx.hash().unpack())
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        service
+            .send_transaction(tx)
+            .map_err(|e| Error::invalid_params(format!("{}", e)))
     }
 
     fn get_transaction(&self, tx_hash: H256) -> Result<TransactionWithStatus> {
-        if let Some((transaction, header)) = self
-            .swc
-            .storage()
-            .get_transaction_with_header(&tx_hash.pack())
-        {
-            return Ok(TransactionWithStatus {
-                transaction: Some(transaction.into_view().into()),
-                cycles: None,
-                tx_status: TxStatus {
-                    block_hash: Some(header.into_view().hash().unpack()),
-                    status: Status::Committed,
-                },
-            });
-        }
-
-        if let Some((transaction, cycles, _)) = self
-            .swc
-            .pending_txs()
-            .read()
-            .expect("pending_txs lock is poisoned")
-            .get(&tx_hash.pack())
-        {
-            return Ok(TransactionWithStatus {
-                transaction: Some(transaction.into_view().into()),
-                cycles: Some(cycles.into()),
-                tx_status: TxStatus {
-                    block_hash: None,
-                    status: Status::Pending,
-                },
-            });
-        }
-
-        Ok(TransactionWithStatus {
-            transaction: None,
-            cycles: None,
-            tx_status: TxStatus {
-                block_hash: None,
-                status: Status::Unknown,
-            },
-        })
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        Ok(service.get_transaction(&tx_hash))
     }
 
     fn fetch_transaction(&self, tx_hash: H256) -> Result<FetchStatus<TransactionWithStatus>> {
-        let tws = self.get_transaction(tx_hash.clone())?;
-        if tws.transaction.is_some() {
-            return Ok(FetchStatus::Fetched { data: tws });
-        }
-
-        let now = unix_time_as_millis();
-        if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(&tx_hash) {
-            if missing {
-                // re-fetch the transaction
-                self.swc.add_fetch_tx(tx_hash, now);
-                return Ok(FetchStatus::NotFound);
-            } else if first_sent > 0 {
-                return Ok(FetchStatus::Fetching {
-                    first_sent: first_sent.into(),
-                });
-            } else {
-                return Ok(FetchStatus::Added {
-                    timestamp: added_ts.into(),
-                });
-            }
-        } else {
-            self.swc.add_fetch_tx(tx_hash, now);
-        }
-        Ok(FetchStatus::Added {
-            timestamp: now.into(),
-        })
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        Ok(service.fetch_transaction(&tx_hash))
     }
 }
 
 impl ChainRpc for ChainRpcImpl {
     fn get_tip_header(&self) -> Result<HeaderView> {
-        Ok(self.swc.storage().get_tip_header().into_view().into())
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        Ok(service.get_tip_header())
     }
 
     fn get_genesis_block(&self) -> Result<BlockView> {
-        Ok(self.swc.storage().get_genesis_block().into_view().into())
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        Ok(service.get_genesis_block())
     }
 
     fn get_header(&self, block_hash: H256) -> Result<Option<HeaderView>> {
-        Ok(self.swc.get_header(&block_hash.pack()).map(Into::into))
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        Ok(service.get_header(&block_hash))
     }
 
     fn fetch_header(&self, block_hash: H256) -> Result<FetchStatus<HeaderView>> {
-        if let Some(value) = self.swc.storage().get_header(&block_hash.pack()) {
-            return Ok(FetchStatus::Fetched { data: value.into() });
-        }
-        let now = unix_time_as_millis();
-        if let Some((added_ts, first_sent, missing)) = self.swc.get_header_fetch_info(&block_hash) {
-            if missing {
-                // re-fetch the header
-                self.swc.add_fetch_header(block_hash, now);
-                return Ok(FetchStatus::NotFound);
-            } else if first_sent > 0 {
-                return Ok(FetchStatus::Fetching {
-                    first_sent: first_sent.into(),
-                });
-            } else {
-                return Ok(FetchStatus::Added {
-                    timestamp: added_ts.into(),
-                });
-            }
-        } else {
-            self.swc.add_fetch_header(block_hash, now);
-        }
-        Ok(FetchStatus::Added {
-            timestamp: now.into(),
-        })
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        Ok(service.fetch_header(&block_hash))
     }
 
     fn estimate_cycles(&self, tx: Transaction) -> Result<EstimateCycles> {
-        let tx: packed::Transaction = tx.into();
-        let tx = tx.into_view();
-        let cycles = verify_tx(
-            tx.clone(),
-            &self.swc,
-            Arc::clone(&self.consensus),
-            &self.swc.storage().get_last_state().1.into_view(),
-        )
-        .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
-        Ok(EstimateCycles {
-            cycles: cycles.into(),
-        })
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        let cycles = service
+            .estimate_cycles(tx)
+            .map_err(|e| Error::invalid_params(format!("{}", e)))?;
+        Ok(EstimateCycles { cycles })
     }
 }
 

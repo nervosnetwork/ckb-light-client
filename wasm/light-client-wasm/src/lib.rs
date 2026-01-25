@@ -15,13 +15,12 @@ use ckb_light_client_lib::{
         BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL,
     },
     service::{
-        FetchStatus, LocalNode, LocalNodeProtocol, Order, PeerSyncState, RemoteNode, ScriptStatus,
-        SearchKey, SetScriptsCommand, Status, TransactionWithStatus, TxStatus,
+        LocalNode, LocalNodeProtocol, Order, PeerSyncState, RemoteNode, ScriptStatus,
+        SearchKey, SetScriptsCommand,
     },
-    service_impl::LightClientService,
+    service_impl::{LightClientChainService, LightClientService},
     storage::{Storage, StorageWithChainData},
     types::RunEnv,
-    verify::verify_tx,
 };
 use log::debug;
 use serde::{Deserialize, Serialize};
@@ -36,8 +35,8 @@ use ckb_network::{
 };
 use ckb_resource::Resource;
 use ckb_stop_handler::broadcast_exit_signals;
-use ckb_systemtime::{unix_time_as_millis, Instant};
-use ckb_types::{packed, prelude::*, H256};
+use ckb_systemtime::Instant;
+use ckb_types::H256;
 
 use std::sync::OnceLock;
 
@@ -260,22 +259,16 @@ pub fn stop() {
     change_status(0b10);
 }
 
-use ckb_types::prelude::IntoHeaderView;
 
 #[wasm_bindgen]
 pub fn get_tip_header() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    Ok(Into::<ckb_jsonrpc_types::HeaderView>::into(
-        STORAGE_WITH_DATA
-            .get()
-            .unwrap()
-            .storage()
-            .get_tip_header()
-            .into_view(),
-    )
-    .serialize(&SERIALIZER)?)
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    Ok(service.get_tip_header().serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -283,15 +276,10 @@ pub fn get_genesis_block() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    Ok(Into::<ckb_jsonrpc_types::BlockView>::into(
-        STORAGE_WITH_DATA
-            .get()
-            .unwrap()
-            .storage()
-            .get_genesis_block()
-            .into_view(),
-    )
-    .serialize(&SERIALIZER)?)
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    Ok(service.get_genesis_block().serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -301,10 +289,9 @@ pub fn get_header(hash: &str) -> Result<JsValue, JsValue> {
     }
     let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let swc = STORAGE_WITH_DATA.get().unwrap();
-    let header_view: Option<ckb_jsonrpc_types::HeaderView> =
-        swc.storage().get_header(&block_hash.pack()).map(Into::into);
-
-    Ok(header_view.serialize(&SERIALIZER)?)
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    Ok(service.get_header(&block_hash).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -312,43 +299,11 @@ pub fn fetch_header(hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-
     let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let swc = STORAGE_WITH_DATA.get().unwrap();
-
-    if let Some(value) = swc.storage().get_header(&block_hash.pack()) {
-        return Ok(
-            FetchStatus::<ckb_jsonrpc_types::HeaderView>::Fetched { data: value.into() }
-                .serialize(&SERIALIZER)?,
-        );
-    }
-
-    let now = unix_time_as_millis();
-    if let Some((added_ts, first_sent, missing)) = swc.get_header_fetch_info(&block_hash) {
-        if missing {
-            // re-fetch the header
-            swc.add_fetch_header(block_hash, now);
-            return Ok(
-                FetchStatus::<ckb_jsonrpc_types::HeaderView>::NotFound.serialize(&SERIALIZER)?
-            );
-        } else if first_sent > 0 {
-            return Ok(FetchStatus::<ckb_jsonrpc_types::HeaderView>::Fetching {
-                first_sent: first_sent.into(),
-            }
-            .serialize(&SERIALIZER)?);
-        } else {
-            return Ok(FetchStatus::<ckb_jsonrpc_types::HeaderView>::Added {
-                timestamp: added_ts.into(),
-            }
-            .serialize(&SERIALIZER)?);
-        }
-    } else {
-        swc.add_fetch_header(block_hash, now);
-    }
-    Ok(FetchStatus::<ckb_jsonrpc_types::HeaderView>::Added {
-        timestamp: now.into(),
-    }
-    .serialize(&SERIALIZER)?)
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    Ok(service.fetch_header(&block_hash).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -358,23 +313,15 @@ pub fn estimate_cycles(tx: JsValue) -> Result<JsValue, JsValue> {
     }
 
     let tx: Transaction = serde_wasm_bindgen::from_value(tx)?;
-    let tx: packed::Transaction = tx.into();
-    let tx = tx.into_view();
-
     let swc = STORAGE_WITH_DATA.get().unwrap();
     let consensus = CONSENSUS.get().unwrap();
-
-    let cycles = verify_tx(
-        tx.clone(),
-        swc,
-        Arc::clone(consensus),
-        &swc.storage().get_last_state().1.into_view(),
-    )
-    .map_err(|e| JsValue::from_str(&format!("invalid transaction: {:?}", e)))?;
-    Ok(ckb_jsonrpc_types::EstimateCycles {
-        cycles: cycles.into(),
-    }
-    .serialize(&SERIALIZER)?)
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    
+    let cycles = service
+        .estimate_cycles(tx)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    
+    Ok(ckb_jsonrpc_types::EstimateCycles { cycles }.serialize(&SERIALIZER)?)
 }
 
 const MAX_ADDRS: usize = 50;
@@ -620,22 +567,15 @@ pub fn send_transaction(tx: JsValue) -> Result<Vec<u8>, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let tx: Transaction = serde_wasm_bindgen::from_value(tx)?;
-    let tx: packed::Transaction = tx.into();
-    let tx = tx.into_view();
-
     let swc = STORAGE_WITH_DATA.get().unwrap();
     let consensus = CONSENSUS.get().unwrap();
-
-    let cycles = verify_tx(
-        tx.clone(),
-        swc,
-        Arc::clone(consensus),
-        &swc.storage().get_last_state().1.into_view(),
-    )
-    .map_err(|e| JsValue::from_str(&format!("invalid transaction: {:?}", e)))?;
-    swc.pending_txs().blocking_write().push(tx.clone(), cycles);
-
-    Ok(Unpack::<H256>::unpack(&tx.hash()).0.to_vec())
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    
+    let tx_hash = service
+        .send_transaction(tx)
+        .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
+    
+    Ok(tx_hash.0.to_vec())
 }
 
 #[wasm_bindgen]
@@ -645,41 +585,9 @@ pub fn get_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
     }
     let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let swc = STORAGE_WITH_DATA.get().unwrap();
-
-    if let Some((transaction, header)) = swc.storage().get_transaction_with_header(&tx_hash.pack())
-    {
-        return Ok((TransactionWithStatus {
-            transaction: Some(transaction.into_view().into()),
-            cycles: None,
-            tx_status: TxStatus {
-                block_hash: Some(header.into_view().hash().unpack()),
-                status: Status::Committed,
-            },
-        })
-        .serialize(&SERIALIZER)?);
-    }
-
-    if let Some((transaction, cycles, _)) = swc.pending_txs().blocking_read().get(&tx_hash.pack()) {
-        return Ok((TransactionWithStatus {
-            transaction: Some(transaction.into_view().into()),
-            cycles: Some(cycles.into()),
-            tx_status: TxStatus {
-                block_hash: None,
-                status: Status::Pending,
-            },
-        })
-        .serialize(&SERIALIZER)?);
-    }
-
-    Ok((TransactionWithStatus {
-        transaction: None,
-        cycles: None,
-        tx_status: TxStatus {
-            block_hash: None,
-            status: Status::Unknown,
-        },
-    })
-    .serialize(&SERIALIZER)?)
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    Ok(service.get_transaction(&tx_hash).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -687,37 +595,9 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-
-    let tws = get_transaction(tx_hash)?;
-    let tws: TransactionWithStatus = serde_wasm_bindgen::from_value(tws)?;
-    if tws.transaction.is_some() {
-        return Ok((FetchStatus::Fetched { data: tws }).serialize(&SERIALIZER)?);
-    }
     let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
     let swc = STORAGE_WITH_DATA.get().unwrap();
-
-    let now = unix_time_as_millis();
-    if let Some((added_ts, first_sent, missing)) = swc.get_tx_fetch_info(&tx_hash) {
-        if missing {
-            // re-fetch the transaction
-            swc.add_fetch_tx(tx_hash, now);
-            return Ok((FetchStatus::<TransactionWithStatus>::NotFound).serialize(&SERIALIZER)?);
-        } else if first_sent > 0 {
-            return Ok((FetchStatus::<TransactionWithStatus>::Fetching {
-                first_sent: first_sent.into(),
-            })
-            .serialize(&SERIALIZER)?);
-        } else {
-            return Ok((FetchStatus::<TransactionWithStatus>::Added {
-                timestamp: added_ts.into(),
-            })
-            .serialize(&SERIALIZER)?);
-        }
-    } else {
-        swc.add_fetch_tx(tx_hash, now);
-    }
-    Ok((FetchStatus::<TransactionWithStatus>::Added {
-        timestamp: now.into(),
-    })
-    .serialize(&SERIALIZER)?)
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    Ok(service.fetch_transaction(&tx_hash).serialize(&SERIALIZER)?)
 }
