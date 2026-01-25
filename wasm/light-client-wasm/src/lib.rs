@@ -15,10 +15,9 @@ use ckb_light_client_lib::{
         BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL,
     },
     service::{
-        Order, ScriptStatus,
-        SearchKey, SetScriptsCommand,
+        LightClientChainService, LightClientNetworkService, LightClientService, Order,
+        ScriptStatus, SearchKey, SetScriptsCommand,
     },
-    service_impl::{LightClientChainService, LightClientNetworkService, LightClientService},
     storage::{Storage, StorageWithChainData},
     types::RunEnv,
 };

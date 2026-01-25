@@ -1,5 +1,3 @@
-#[cfg(not(target_arch = "wasm32"))]
-use crate::storage::Storage;
 /// Unified Service Layer Implementation
 ///
 /// This module contains the business logic for get_cells, get_transactions, get_cells_capacity,
@@ -10,10 +8,10 @@ use crate::storage::Storage;
 use crate::{
     error::{Error, Result},
     service::{
+        helpers::{build_filter_options, build_query_options},
         Cell, CellType, CellsCapacity, FetchStatus, Order, Pagination, ScriptType, SearchKey,
         Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
     },
-    service_helpers::{build_filter_options, build_query_options},
     storage::{
         extract_raw_data, Key, KeyPrefix, LightClientStorage, StorageWithChainData, LAST_STATE_KEY,
     },
@@ -582,10 +580,6 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         })
     }
 }
-
-// Convenience type aliases for common configurations
-#[cfg(not(target_arch = "wasm32"))]
-pub type NativeService = LightClientService<Storage>;
 
 /// Extended Service Layer for Chain Data Operations
 ///

@@ -12,10 +12,10 @@ use jsonrpc_server_utils::hosts::DomainsValidation;
 use ckb_light_client_lib::{
     protocols::{Peers, PendingTxs},
     service::{
-        Cell, CellsCapacity, FetchStatus, LocalNode, Order, Pagination, RemoteNode, ScriptStatus,
-        SearchKey, SetScriptsCommand, TransactionWithStatus, Tx,
+        Cell, CellsCapacity, FetchStatus, LightClientChainService, LightClientNetworkService,
+        LightClientService, LocalNode, Order, Pagination, RemoteNode, ScriptStatus, SearchKey,
+        SetScriptsCommand, TransactionWithStatus, Tx,
     },
-    service_impl::{LightClientChainService, LightClientNetworkService, LightClientService},
     storage::{Storage, StorageWithChainData},
 };
 
