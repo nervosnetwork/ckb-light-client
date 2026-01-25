@@ -771,4 +771,157 @@ impl LightClientChainService {
         .map_err(|e| Error::runtime(format!("invalid transaction: {:?}", e)))?;
         Ok(cycles.into())
     }
+
+    /// Set filter scripts
+    pub fn set_scripts(
+        &self,
+        scripts: Vec<crate::service::ScriptStatus>,
+        command: Option<crate::service::SetScriptsCommand>,
+    ) {
+        // Both platforms use blocking_write since matched_blocks() returns tokio::sync::RwLock
+        let mut matched_blocks = self.swc.matched_blocks().blocking_write();
+
+        let scripts = scripts.into_iter().map(Into::into).collect();
+        self.swc
+            .storage()
+            .update_filter_scripts(scripts, command.map(Into::into).unwrap_or_default());
+        matched_blocks.clear();
+    }
+
+    /// Get filter scripts
+    pub fn get_scripts(&self) -> Vec<crate::service::ScriptStatus> {
+        let scripts = self.swc.storage().get_filter_scripts();
+        scripts.into_iter().map(Into::into).collect()
+    }
+}
+
+/// Network Service Layer
+///
+/// This service provides business logic for network operations that require access to
+/// NetworkController and Peers, such as:
+/// - Local node info
+/// - Peer information
+pub struct LightClientNetworkService {
+    network_controller: ckb_network::NetworkController,
+    peers: Arc<crate::protocols::Peers>,
+}
+
+impl LightClientNetworkService {
+    /// Create a new network service instance
+    pub fn new(
+        network_controller: ckb_network::NetworkController,
+        peers: Arc<crate::protocols::Peers>,
+    ) -> Self {
+        Self {
+            network_controller,
+            peers,
+        }
+    }
+
+    /// Get local node info
+    pub fn local_node_info(&self, max_addrs: usize) -> crate::service::LocalNode {
+        crate::service::LocalNode {
+            version: self.network_controller.version().to_owned(),
+            node_id: self.network_controller.node_id(),
+            active: self.network_controller.is_active(),
+            addresses: self
+                .network_controller
+                .public_urls(max_addrs)
+                .into_iter()
+                .map(|(address, score)| ckb_jsonrpc_types::NodeAddress {
+                    address,
+                    score: u64::from(score).into(),
+                })
+                .collect(),
+            protocols: self
+                .network_controller
+                .protocols()
+                .into_iter()
+                .map(
+                    |(protocol_id, name, support_versions)| crate::service::LocalNodeProtocol {
+                        id: (protocol_id.value() as u64).into(),
+                        name,
+                        support_versions,
+                    },
+                )
+                .collect::<Vec<_>>(),
+            connections: (self.network_controller.connected_peers().len() as u64).into(),
+        }
+    }
+
+    /// Get peers
+    pub fn get_peers(&self) -> Vec<crate::service::RemoteNode> {
+        self.network_controller
+            .connected_peers()
+            .iter()
+            .map(|(peer_index, peer)| {
+                let mut addresses = vec![&peer.connected_addr];
+                addresses.extend(peer.listened_addrs.iter());
+
+                let node_addresses = addresses
+                    .iter()
+                    .map(|addr| {
+                        let score = self
+                            .network_controller
+                            .addr_info(addr)
+                            .map(|addr_info| addr_info.score)
+                            .unwrap_or(1);
+                        let non_negative_score = if score > 0 { score as u64 } else { 0 };
+                        ckb_jsonrpc_types::NodeAddress {
+                            address: addr.to_string(),
+                            score: non_negative_score.into(),
+                        }
+                    })
+                    .collect();
+
+                crate::service::RemoteNode {
+                    version: peer
+                        .identify_info
+                        .as_ref()
+                        .map(|info| info.client_version.clone())
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    node_id: ckb_network::extract_peer_id(&peer.connected_addr)
+                        .map(|peer_id| peer_id.to_base58())
+                        .unwrap_or_default(),
+                    addresses: node_addresses,
+                    connected_duration: {
+                        #[cfg(target_arch = "wasm32")]
+                        {
+                            (ckb_systemtime::Instant::now()
+                                .saturating_duration_since(peer.connected_time)
+                                .as_millis() as u64)
+                                .into()
+                        }
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            (std::time::Instant::now()
+                                .saturating_duration_since(peer.connected_time)
+                                .as_millis() as u64)
+                                .into()
+                        }
+                    },
+                    sync_state: self.peers.get_state(peer_index).map(|state| {
+                        crate::service::PeerSyncState {
+                            requested_best_known_header: state.get_prove_request().map(|request| {
+                                request.get_last_header().header().to_owned().into()
+                            }),
+                            proved_best_known_header: state.get_prove_state().map(|request| {
+                                request.get_last_header().header().to_owned().into()
+                            }),
+                        }
+                    }),
+                    protocols: peer
+                        .protocols
+                        .iter()
+                        .map(|(protocol_id, protocol_version)| {
+                            ckb_jsonrpc_types::RemoteNodeProtocol {
+                                id: (protocol_id.value() as u64).into(),
+                                version: protocol_version.clone(),
+                            }
+                        })
+                        .collect(),
+                }
+            })
+            .collect()
+    }
 }

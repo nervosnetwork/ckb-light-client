@@ -12,20 +12,16 @@ use jsonrpc_server_utils::hosts::DomainsValidation;
 use ckb_light_client_lib::{
     protocols::{Peers, PendingTxs},
     service::{
-        Cell, CellsCapacity, FetchStatus, LocalNode, LocalNodeProtocol, Order, Pagination,
-        PeerSyncState, RemoteNode, ScriptStatus, SearchKey, SetScriptsCommand,
-        TransactionWithStatus, Tx,
+        Cell, CellsCapacity, FetchStatus, LocalNode, Order, Pagination, RemoteNode, ScriptStatus,
+        SearchKey, SetScriptsCommand, TransactionWithStatus, Tx,
     },
-    service_impl::{LightClientChainService, LightClientService},
+    service_impl::{LightClientChainService, LightClientNetworkService, LightClientService},
     storage::{Storage, StorageWithChainData},
 };
 
 use ckb_chain_spec::consensus::Consensus;
-use ckb_jsonrpc_types::{
-    BlockView, EstimateCycles, HeaderView, JsonBytes, NodeAddress, RemoteNodeProtocol, Transaction,
-    Uint32,
-};
-use ckb_network::{extract_peer_id, NetworkController};
+use ckb_jsonrpc_types::{BlockView, EstimateCycles, HeaderView, JsonBytes, Transaction, Uint32};
+use ckb_network::NetworkController;
 use ckb_types::H256;
 
 #[rpc(server)]
@@ -104,6 +100,7 @@ pub trait NetRpc {
 
 pub struct BlockFilterRpcImpl {
     pub(crate) swc: StorageWithChainData,
+    pub(crate) consensus: Arc<Consensus>,
 }
 
 pub struct TransactionRpcImpl {
@@ -127,23 +124,16 @@ impl BlockFilterRpc for BlockFilterRpcImpl {
         scripts: Vec<ScriptStatus>,
         command: Option<SetScriptsCommand>,
     ) -> Result<()> {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let swc = self.swc.clone();
-        std::thread::spawn(move || {
-            let mut matched_blocks = swc.matched_blocks().blocking_write();
-            let scripts = scripts.into_iter().map(Into::into).collect();
-            swc.storage()
-                .update_filter_scripts(scripts, command.map(Into::into).unwrap_or_default());
-            matched_blocks.clear();
-            tx.send(()).unwrap();
-        });
-        rx.recv().unwrap();
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        service.set_scripts(scripts, command);
         Ok(())
     }
 
     fn get_scripts(&self) -> Result<Vec<ScriptStatus>> {
-        let scripts = self.swc.storage().get_filter_scripts();
-        Ok(scripts.into_iter().map(Into::into).collect())
+        // Use unified service layer
+        let service = LightClientChainService::new(self.swc.clone(), Arc::clone(&self.consensus));
+        Ok(service.get_scripts())
     }
 
     fn get_cells(
@@ -187,92 +177,21 @@ const MAX_ADDRS: usize = 50;
 
 impl NetRpc for NetRpcImpl {
     fn local_node_info(&self) -> Result<LocalNode> {
-        Ok(LocalNode {
-            version: self.network_controller.version().to_owned(),
-            node_id: self.network_controller.node_id(),
-            active: self.network_controller.is_active(),
-            addresses: self
-                .network_controller
-                .public_urls(MAX_ADDRS)
-                .into_iter()
-                .map(|(address, score)| NodeAddress {
-                    address,
-                    score: u64::from(score).into(),
-                })
-                .collect(),
-            protocols: self
-                .network_controller
-                .protocols()
-                .into_iter()
-                .map(|(protocol_id, name, support_versions)| LocalNodeProtocol {
-                    id: (protocol_id.value() as u64).into(),
-                    name,
-                    support_versions,
-                })
-                .collect::<Vec<_>>(),
-            connections: (self.network_controller.connected_peers().len() as u64).into(),
-        })
+        // Use unified service layer
+        let service = LightClientNetworkService::new(
+            self.network_controller.clone(),
+            Arc::clone(&self.peers),
+        );
+        Ok(service.local_node_info(MAX_ADDRS))
     }
 
     fn get_peers(&self) -> Result<Vec<RemoteNode>> {
-        let peers: Vec<RemoteNode> = self
-            .network_controller
-            .connected_peers()
-            .iter()
-            .map(|(peer_index, peer)| {
-                let mut addresses = vec![&peer.connected_addr];
-                addresses.extend(peer.listened_addrs.iter());
-
-                let node_addresses = addresses
-                    .iter()
-                    .map(|addr| {
-                        let score = self
-                            .network_controller
-                            .addr_info(addr)
-                            .map(|addr_info| addr_info.score)
-                            .unwrap_or(1);
-                        let non_negative_score = if score > 0 { score as u64 } else { 0 };
-                        NodeAddress {
-                            address: addr.to_string(),
-                            score: non_negative_score.into(),
-                        }
-                    })
-                    .collect();
-
-                RemoteNode {
-                    version: peer
-                        .identify_info
-                        .as_ref()
-                        .map(|info| info.client_version.clone())
-                        .unwrap_or_else(|| "unknown".to_string()),
-                    node_id: extract_peer_id(&peer.connected_addr)
-                        .map(|peer_id| peer_id.to_base58())
-                        .unwrap_or_default(),
-                    addresses: node_addresses,
-                    connected_duration: (std::time::Instant::now()
-                        .saturating_duration_since(peer.connected_time)
-                        .as_millis() as u64)
-                        .into(),
-                    sync_state: self.peers.get_state(peer_index).map(|state| PeerSyncState {
-                        requested_best_known_header: state
-                            .get_prove_request()
-                            .map(|request| request.get_last_header().header().to_owned().into()),
-                        proved_best_known_header: state
-                            .get_prove_state()
-                            .map(|request| request.get_last_header().header().to_owned().into()),
-                    }),
-                    protocols: peer
-                        .protocols
-                        .iter()
-                        .map(|(protocol_id, protocol_version)| RemoteNodeProtocol {
-                            id: (protocol_id.value() as u64).into(),
-                            version: protocol_version.clone(),
-                        })
-                        .collect(),
-                }
-            })
-            .collect();
-        Ok(peers)
+        // Use unified service layer
+        let service = LightClientNetworkService::new(
+            self.network_controller.clone(),
+            Arc::clone(&self.peers),
+        );
+        Ok(service.get_peers())
     }
 }
 
@@ -355,12 +274,18 @@ impl Service {
         let mut io_handler = IoHandler::new();
         let swc = StorageWithChainData::new(storage, Arc::clone(&peers), Arc::clone(&pending_txs));
         let consensus = Arc::new(consensus);
-        let block_filter_rpc_impl = BlockFilterRpcImpl { swc: swc.clone() };
+        let block_filter_rpc_impl = BlockFilterRpcImpl {
+            swc: swc.clone(),
+            consensus: Arc::clone(&consensus),
+        };
         let chain_rpc_impl = ChainRpcImpl {
             swc: swc.clone(),
             consensus: Arc::clone(&consensus),
         };
-        let transaction_rpc_impl = TransactionRpcImpl { swc, consensus };
+        let transaction_rpc_impl = TransactionRpcImpl {
+            swc,
+            consensus: Arc::clone(&consensus),
+        };
         let net_rpc_impl = NetRpcImpl {
             network_controller,
             peers,

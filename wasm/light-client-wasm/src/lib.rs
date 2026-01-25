@@ -15,10 +15,10 @@ use ckb_light_client_lib::{
         BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL,
     },
     service::{
-        LocalNode, LocalNodeProtocol, Order, PeerSyncState, RemoteNode, ScriptStatus,
+        Order, ScriptStatus,
         SearchKey, SetScriptsCommand,
     },
-    service_impl::{LightClientChainService, LightClientService},
+    service_impl::{LightClientChainService, LightClientNetworkService, LightClientService},
     storage::{Storage, StorageWithChainData},
     types::RunEnv,
 };
@@ -30,12 +30,11 @@ use wasm_bindgen::prelude::*;
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_jsonrpc_types::{JsonBytes, Transaction};
 use ckb_network::{
-    extract_peer_id, network::TransportType, CKBProtocol, CKBProtocolHandler, Flags,
+    network::TransportType, CKBProtocol, CKBProtocolHandler, Flags,
     NetworkController, NetworkService, NetworkState, SupportProtocols,
 };
 use ckb_resource::Resource;
 use ckb_stop_handler::broadcast_exit_signals;
-use ckb_systemtime::Instant;
 use ckb_types::H256;
 
 use std::sync::OnceLock;
@@ -333,30 +332,9 @@ pub fn local_node_info() -> Result<JsValue, JsValue> {
     }
 
     let network_controller = NET_CONTROL.get().unwrap();
-    Ok(LocalNode {
-        version: network_controller.version().to_owned(),
-        node_id: network_controller.node_id(),
-        active: network_controller.is_active(),
-        addresses: network_controller
-            .public_urls(MAX_ADDRS)
-            .into_iter()
-            .map(|(address, score)| ckb_jsonrpc_types::NodeAddress {
-                address,
-                score: u64::from(score).into(),
-            })
-            .collect(),
-        protocols: network_controller
-            .protocols()
-            .into_iter()
-            .map(|(protocol_id, name, support_versions)| LocalNodeProtocol {
-                id: (protocol_id.value() as u64).into(),
-                name,
-                support_versions,
-            })
-            .collect::<Vec<_>>(),
-        connections: (network_controller.connected_peers().len() as u64).into(),
-    }
-    .serialize(&SERIALIZER)?)
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    let service = LightClientNetworkService::new(network_controller.clone(), Arc::clone(swc.peers()));
+    Ok(service.local_node_info(MAX_ADDRS).serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -367,67 +345,8 @@ pub fn get_peers() -> Result<JsValue, JsValue> {
 
     let network_controller = NET_CONTROL.get().unwrap();
     let swc = STORAGE_WITH_DATA.get().unwrap();
-    let peers: Vec<RemoteNode> = network_controller
-        .connected_peers()
-        .iter()
-        .map(|(peer_index, peer)| {
-            let mut addresses = vec![&peer.connected_addr];
-            addresses.extend(peer.listened_addrs.iter());
-
-            let node_addresses = addresses
-                .iter()
-                .map(|addr| {
-                    let score = network_controller
-                        .addr_info(addr)
-                        .map(|addr_info| addr_info.score)
-                        .unwrap_or(1);
-                    let non_negative_score = if score > 0 { score as u64 } else { 0 };
-                    ckb_jsonrpc_types::NodeAddress {
-                        address: addr.to_string(),
-                        score: non_negative_score.into(),
-                    }
-                })
-                .collect();
-
-            RemoteNode {
-                version: peer
-                    .identify_info
-                    .as_ref()
-                    .map(|info| info.client_version.clone())
-                    .unwrap_or_else(|| "unknown".to_string()),
-                node_id: extract_peer_id(&peer.connected_addr)
-                    .map(|peer_id| peer_id.to_base58())
-                    .unwrap_or_default(),
-                addresses: node_addresses,
-                connected_duration: (Instant::now()
-                    .saturating_duration_since(peer.connected_time)
-                    .as_millis() as u64)
-                    .into(),
-                sync_state: swc
-                    .peers()
-                    .get_state(peer_index)
-                    .map(|state| PeerSyncState {
-                        requested_best_known_header: state
-                            .get_prove_request()
-                            .map(|request| request.get_last_header().header().to_owned().into()),
-                        proved_best_known_header: state
-                            .get_prove_state()
-                            .map(|request| request.get_last_header().header().to_owned().into()),
-                    }),
-                protocols: peer
-                    .protocols
-                    .iter()
-                    .map(
-                        |(protocol_id, protocol_version)| ckb_jsonrpc_types::RemoteNodeProtocol {
-                            id: (protocol_id.value() as u64).into(),
-                            version: protocol_version.clone(),
-                        },
-                    )
-                    .collect(),
-            }
-        })
-        .collect();
-    Ok(peers.serialize(&SERIALIZER)?)
+    let service = LightClientNetworkService::new(network_controller.clone(), Arc::clone(swc.peers()));
+    Ok(service.get_peers().serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -438,26 +357,17 @@ pub fn set_scripts(
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let mut matched_blocks = STORAGE_WITH_DATA
-        .get()
-        .unwrap()
-        .matched_blocks()
-        .blocking_write();
 
     let scripts: Vec<ScriptStatus> = scripts
         .into_iter()
         .map(serde_wasm_bindgen::from_value::<ScriptStatus>)
         .collect::<Result<Vec<_>, _>>()?;
     debug!("Update scripts, {:?}, {:?}", scripts, command);
-    STORAGE_WITH_DATA
-        .get()
-        .unwrap()
-        .storage()
-        .update_filter_scripts(
-            scripts.into_iter().map(Into::into).collect(),
-            command.map(Into::into).unwrap_or_default(),
-        );
-    matched_blocks.clear();
+    
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    service.set_scripts(scripts, command);
     Ok(())
 }
 
@@ -466,15 +376,14 @@ pub fn get_scripts() -> Result<Vec<JsValue>, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let scripts = STORAGE_WITH_DATA
-        .get()
-        .unwrap()
-        .storage()
-        .get_filter_scripts();
+
+    let swc = STORAGE_WITH_DATA.get().unwrap();
+    let consensus = CONSENSUS.get().unwrap();
+    let service = LightClientChainService::new(swc.clone(), Arc::clone(consensus));
+    let scripts = service.get_scripts();
 
     Ok(scripts
         .into_iter()
-        .map(Into::into)
         .map(|v: ScriptStatus| v.serialize(&SERIALIZER))
         .collect::<Result<Vec<_>, _>>()?)
 }
