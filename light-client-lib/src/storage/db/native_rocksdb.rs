@@ -541,8 +541,8 @@ impl StorageHighLevelOperations for Storage {
             ))
             .take_while(|(key, _)| take_while(key))
             .filter_map(|(key, value)| filter_map(&key).map(|v| (v.into_boxed_slice(), value)))
-            .take(limit)
             .skip(skip)
+            .take(limit)
             .map(|(key, value)| (key.to_vec(), value.to_vec()))
             .collect()
     }
