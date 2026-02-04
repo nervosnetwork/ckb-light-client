@@ -3,7 +3,7 @@ use std::{cell::RefCell, path::Path, sync::atomic::AtomicBool};
 use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::storage_trait::LightClientStorage;
 use super::super::{Byte32, Key};
-use super::iterator::KVPair;
+use super::iterator::{IteratorDirection, KVPair};
 use anyhow::{anyhow, bail, Context};
 
 use ckb_types::{
@@ -16,7 +16,7 @@ use ckb_types::{
 };
 use light_client_db_common::{
     read_command_payload, write_command_with_payload, DbCommandRequest, DbCommandResponse,
-    InputCommand, IteratorDirection, OutputCommand, KV,
+    InputCommand, OutputCommand, KV,
 };
 
 use log::debug;
@@ -477,23 +477,17 @@ impl StorageBackend for Storage {
     fn collect_iterator(
         &self,
         from_key: Vec<u8>,
-        direction: super::iterator::IteratorDirection,
+        direction: IteratorDirection,
         take_while_fn: TakeWhileFn,
         filter_map_fn: FilterMapFn,
         skip: usize,
         limit: usize,
     ) -> Vec<KVPair> {
-        // Convert local IteratorDirection to db-common IteratorDirection
-        let db_direction = match direction {
-            super::iterator::IteratorDirection::Forward => IteratorDirection::Forward,
-            super::iterator::IteratorDirection::Reverse => IteratorDirection::Reverse,
-        };
-
         // Use the browser storage's collect_iterator which now provides both key and value to filter_map
         let kvs = Storage::collect_iterator(
             self,
             from_key,
-            db_direction,
+            direction,
             take_while_fn,
             filter_map_fn,
             limit,

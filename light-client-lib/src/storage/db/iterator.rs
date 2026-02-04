@@ -4,7 +4,12 @@
 #[cfg(not(target_arch = "wasm32"))]
 use rocksdb::Direction;
 
+// On wasm32, re-export IteratorDirection from db-common to avoid duplication
+#[cfg(target_arch = "wasm32")]
+pub use light_client_db_common::IteratorDirection;
+
 /// Direction for iteration (forward or backward)
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IteratorDirection {
     Forward,
