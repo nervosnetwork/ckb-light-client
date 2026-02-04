@@ -18,6 +18,15 @@ use rocksdb::{
 };
 use std::{path::Path, sync::Arc};
 
+impl From<IteratorDirection> for Direction {
+    fn from(dir: IteratorDirection) -> Self {
+        match dir {
+            IteratorDirection::Forward => Direction::Forward,
+            IteratorDirection::Reverse => Direction::Reverse,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct Storage {
     pub(crate) db: Arc<DB>,
