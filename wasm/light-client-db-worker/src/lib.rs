@@ -123,7 +123,11 @@ pub async fn main_loop(log_level: &str) {
                         let buf = buf.to_vec();
                         let value = value.to_vec();
                         input_i32_arr.set_index(0, InputCommand::Waiting as i32);
-                        log::trace!("Invoking request filter_map with args key={:?}, value={:?}", buf, value);
+                        log::trace!(
+                            "Invoking request filter_map with args key={:?}, value={:?}",
+                            buf,
+                            value
+                        );
                         write_command_with_payload(
                             OutputCommand::RequestFilterMap as i32,
                             (buf.clone(), value.clone()),

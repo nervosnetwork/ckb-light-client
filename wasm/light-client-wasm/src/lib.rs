@@ -29,8 +29,8 @@ use wasm_bindgen::prelude::*;
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_jsonrpc_types::{JsonBytes, Transaction};
 use ckb_network::{
-    network::TransportType, CKBProtocol, CKBProtocolHandler, Flags,
-    NetworkController, NetworkService, NetworkState, SupportProtocols,
+    network::TransportType, CKBProtocol, CKBProtocolHandler, Flags, NetworkController,
+    NetworkService, NetworkState, SupportProtocols,
 };
 use ckb_resource::Resource;
 use ckb_stop_handler::broadcast_exit_signals;
@@ -283,7 +283,9 @@ pub fn get_tip_header() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    Ok(get_chain_service().get_tip_header().serialize(&SERIALIZER)?)
+    Ok(get_chain_service()
+        .get_tip_header()
+        .serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -291,7 +293,9 @@ pub fn get_genesis_block() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    Ok(get_chain_service().get_genesis_block().serialize(&SERIALIZER)?)
+    Ok(get_chain_service()
+        .get_genesis_block()
+        .serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -300,7 +304,9 @@ pub fn get_header(hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(get_chain_service().get_header(&block_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service()
+        .get_header(&block_hash)
+        .serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -309,7 +315,9 @@ pub fn fetch_header(hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(get_chain_service().fetch_header(&block_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service()
+        .fetch_header(&block_hash)
+        .serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -322,7 +330,7 @@ pub fn estimate_cycles(tx: JsValue) -> Result<JsValue, JsValue> {
     let cycles = get_chain_service()
         .estimate_cycles(tx)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     Ok(ckb_jsonrpc_types::EstimateCycles { cycles }.serialize(&SERIALIZER)?)
 }
 
@@ -333,7 +341,9 @@ pub fn local_node_info() -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    Ok(get_network_service().local_node_info(MAX_ADDRS).serialize(&SERIALIZER)?)
+    Ok(get_network_service()
+        .local_node_info(MAX_ADDRS)
+        .serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -358,7 +368,7 @@ pub fn set_scripts(
         .map(serde_wasm_bindgen::from_value::<ScriptStatus>)
         .collect::<Result<Vec<_>, _>>()?;
     debug!("Update scripts, {:?}, {:?}", scripts, command);
-    
+
     get_chain_service().set_scripts(scripts, command);
     Ok(())
 }
@@ -390,14 +400,14 @@ pub fn get_cells(
         "Calling get_cells with {:?}, {:?}, {:?}, {:?}",
         search_key, order, limit, after_cursor
     );
-    
+
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     let after_cursor_json = after_cursor.map(JsonBytes::from_vec);
-    
+
     let result = get_cell_service()
         .get_cells(search_key, order, limit.into(), after_cursor_json)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     Ok(result.serialize(&SERIALIZER)?)
 }
 
@@ -415,14 +425,14 @@ pub fn get_transactions(
         "Calling get_transactions with {:?}, {:?}, {:?}, {:?}",
         search_key, order, limit, after_cursor
     );
-    
+
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     let after_cursor_json = after_cursor.map(JsonBytes::from_vec);
-    
+
     let result = get_cell_service()
         .get_transactions(search_key, order, limit.into(), after_cursor_json)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     Ok(result.serialize(&SERIALIZER)?)
 }
 
@@ -434,11 +444,11 @@ pub fn get_cells_capacity(search_key: JsValue) -> Result<JsValue, JsValue> {
 
     let search_key: SearchKey = serde_wasm_bindgen::from_value(search_key)?;
     debug!("Call get_cells_capacity: {:?}", search_key);
-    
+
     let result = get_cell_service()
         .get_cells_capacity(search_key)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     Ok(result.serialize(&SERIALIZER)?)
 }
 
@@ -451,7 +461,7 @@ pub fn send_transaction(tx: JsValue) -> Result<Vec<u8>, JsValue> {
     let tx_hash = get_chain_service()
         .send_transaction(tx)
         .map_err(|e| JsValue::from_str(&format!("{}", e)))?;
-    
+
     Ok(tx_hash.0.to_vec())
 }
 
@@ -461,7 +471,9 @@ pub fn get_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(get_chain_service().get_transaction(&tx_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service()
+        .get_transaction(&tx_hash)
+        .serialize(&SERIALIZER)?)
 }
 
 #[wasm_bindgen]
@@ -470,5 +482,7 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
         return Err(JsValue::from_str("light client not on start state"));
     }
     let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
-    Ok(get_chain_service().fetch_transaction(&tx_hash).serialize(&SERIALIZER)?)
+    Ok(get_chain_service()
+        .fetch_transaction(&tx_hash)
+        .serialize(&SERIALIZER)?)
 }
