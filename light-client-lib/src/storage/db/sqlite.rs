@@ -6,12 +6,10 @@ use super::super::storage_trait::LightClientStorage;
 use super::super::{Byte32, Key};
 use super::iterator::{IteratorDirection, KVPair};
 use crate::error::Result;
-use ckb_traits::{CellDataProvider, HeaderProvider};
 use ckb_types::{
-    bytes::Bytes,
     core::{
         cell::{CellMeta, CellProvider, CellStatus},
-        HeaderView, TransactionInfo,
+        TransactionInfo,
     },
     packed::{CellOutput, Header, OutPoint},
     prelude::*,
@@ -280,22 +278,5 @@ impl CellProvider for Storage {
             }
         }
         CellStatus::Unknown
-    }
-}
-
-impl CellDataProvider for Storage {
-    // we load all cells data eagerly in Storage's CellProvider impl
-    fn get_cell_data(&self, _out_point: &OutPoint) -> Option<Bytes> {
-        unreachable!()
-    }
-
-    fn get_cell_data_hash(&self, _out_point: &OutPoint) -> Option<Byte32> {
-        unreachable!()
-    }
-}
-
-impl HeaderProvider for Storage {
-    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
-        LightClientStorage::get_header(self, hash)
     }
 }

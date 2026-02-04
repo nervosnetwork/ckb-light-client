@@ -228,7 +228,7 @@ impl CellProvider for StorageWithChainData {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
+// Cell data is loaded eagerly in CellProvider::cell(), so these methods are never called
 impl CellDataProvider for StorageWithChainData {
     fn get_cell_data(&self, _out_point: &OutPoint) -> Option<Bytes> {
         unreachable!()
@@ -239,26 +239,6 @@ impl CellDataProvider for StorageWithChainData {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl CellDataProvider for StorageWithChainData {
-    fn get_cell_data(&self, out_point: &OutPoint) -> Option<Bytes> {
-        self.storage.get_cell_data(out_point)
-    }
-
-    fn get_cell_data_hash(&self, out_point: &OutPoint) -> Option<Byte32> {
-        self.storage.get_cell_data_hash(out_point)
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl HeaderProvider for StorageWithChainData {
-    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
-        HeaderProvider::get_header(&self.storage, hash)
-            .or_else(|| self.peers.find_header_in_proved_state(hash))
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
 impl HeaderProvider for StorageWithChainData {
     fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
         LightClientStorage::get_header(&self.storage, hash)
