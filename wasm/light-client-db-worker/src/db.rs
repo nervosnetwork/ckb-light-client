@@ -69,7 +69,7 @@ where
         return Ok(res);
     }
 
-        let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
+    let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
         iter.value()
             .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
             .unwrap(),
@@ -80,7 +80,7 @@ where
         skip_index += 1;
         if skip_index > skip {
             if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
-                    res.push(KVPair {
+                res.push(KVPair {
                     key: new_key,
                     value: raw_kv.value,
                 });
@@ -103,7 +103,7 @@ where
             return Ok(res);
         }
 
-    let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
+        let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
             iter.value()
                 .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
                 .unwrap(),
@@ -113,7 +113,7 @@ where
             skip_index += 1;
             if skip_index > skip {
                 if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
-                res.push(KVPair {
+                    res.push(KVPair {
                         key: new_key,
                         value: raw_kv.value,
                     });
