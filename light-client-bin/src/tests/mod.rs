@@ -7,13 +7,15 @@ use ckb_light_client_lib::{
     storage::{LightClientStorage, Storage, StorageWithChainData},
 };
 use ckb_resource::Resource;
+use tempfile::TempDir;
 
 use crate::rpc::{BlockFilterRpcImpl, ChainRpcImpl, TransactionRpcImpl};
 use std::sync::Arc;
 
-pub(crate) fn new_storage(prefix: &str) -> Storage {
+pub(crate) fn new_storage(prefix: &str) -> (Storage, TempDir) {
     let tmp_dir = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
-    Storage::new(tmp_dir.path().to_str().unwrap())
+    let storage = Storage::new(tmp_dir.path().to_str().unwrap());
+    (storage, tmp_dir)
 }
 
 pub(crate) fn create_peers() -> Arc<Peers> {
@@ -32,6 +34,8 @@ pub(crate) fn create_peers() -> Arc<Peers> {
 pub(crate) struct MockChain {
     storage: Storage,
     consensus: Consensus,
+    #[allow(dead_code)]
+    tmp_dir: TempDir,
 }
 
 impl MockChain {
@@ -43,7 +47,11 @@ impl MockChain {
             .build_consensus()
             .expect("build consensus should be OK");
         storage.init_genesis_block(consensus.genesis_block().data());
-        MockChain { storage, consensus }
+        MockChain {
+            storage,
+            consensus,
+            tmp_dir,
+        }
     }
 
     pub(crate) fn new_with_default_pow(prefix: &str) -> Self {

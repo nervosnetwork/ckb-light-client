@@ -6,11 +6,13 @@
 use std::collections::{HashMap, HashSet};
 
 use super::{
-    backend::StorageBackend, db::IteratorDirection, parse_matched_blocks, BlockNumber, Byte32,
-    CellIndex, CellType, CpIndex, HeaderWithExtension, Key, KeyPrefix, MatchedBlock, MatchedBlocks,
-    OutputIndex, Script, ScriptStatus, ScriptType, SetScriptsCommand, TxIndex, Value,
-    WrappedBlockView, FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY, LAST_N_HEADERS_KEY, LAST_STATE_KEY,
-    MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX, MIN_FILTERED_BLOCK_NUMBER,
+    backend::{BatchWriter, StorageBackend},
+    db::IteratorDirection,
+    parse_matched_blocks, BlockNumber, Byte32, CellIndex, CellType, CpIndex, HeaderWithExtension,
+    Key, KeyPrefix, MatchedBlock, MatchedBlocks, OutputIndex, Script, ScriptStatus, ScriptType,
+    SetScriptsCommand, TxIndex, Value, WrappedBlockView, FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY,
+    LAST_N_HEADERS_KEY, LAST_STATE_KEY, MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX,
+    MIN_FILTERED_BLOCK_NUMBER,
 };
 use ckb_types::{
     core::HeaderView,

@@ -299,14 +299,6 @@ impl Storage {
         Self { channel: chan }
     }
 
-    fn batch(&self) -> Batch {
-        Batch {
-            add: vec![],
-            delete: vec![],
-            comm_arrays: self.channel.clone(),
-        }
-    }
-
     pub fn get<K: AsRef<[u8]>>(&self, key: K) -> Result<Option<Vec<u8>>> {
         let values = self
             .channel
@@ -404,7 +396,19 @@ pub struct Batch {
     comm_arrays: CommunicationChannel,
 }
 
-impl Batch {
+// Implement BatchWriter trait for Batch
+impl BatchWriter for Batch {
+    fn put(&mut self, key: &[u8], value: &[u8]) {
+        self.add.push(KV {
+            key: key.to_vec(),
+            value: value.to_vec(),
+        });
+    }
+
+    fn delete(&mut self, key: &[u8]) {
+        self.delete.push(key.to_vec());
+    }
+
     fn commit(self) -> Result<()> {
         if !self.add.is_empty() {
             self.comm_arrays
@@ -428,26 +432,10 @@ impl Batch {
     }
 }
 
-// Implement BatchWriter trait for Batch
-impl BatchWriter for Batch {
-    fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.add.push(KV {
-            key: key.to_vec(),
-            value: value.to_vec(),
-        });
-    }
-
-    fn delete(&mut self, key: &[u8]) {
-        self.delete.push(key.to_vec());
-    }
-
-    fn commit(self: Box<Self>) -> Result<()> {
-        Batch::commit(*self)
-    }
-}
-
 // Implementation of StorageBackend trait for IndexedDB
 impl StorageBackend for Storage {
+    type Batch = Batch;
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         let values = self
             .channel
@@ -479,8 +467,12 @@ impl StorageBackend for Storage {
             .map_err(|e| Error::Indexdb(format!("{:?}", e)))
     }
 
-    fn batch(&self) -> Box<dyn BatchWriter> {
-        Box::new(Storage::batch(self))
+    fn batch(&self) -> Self::Batch {
+        Batch {
+            add: vec![],
+            delete: vec![],
+            comm_arrays: self.channel.clone(),
+        }
     }
 
     fn collect_iterator(

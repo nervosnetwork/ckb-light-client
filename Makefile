@@ -14,6 +14,11 @@ clippy:
 	cargo clippy --target wasm32-unknown-unknown -p light-client-wasm -p ckb-light-client-lib -p light-client-db-common -p light-client-db-worker --locked -- --deny warnings
 	# Run clippy for native targets
 	cargo clippy -p ckb-light-client --locked -- --deny warnings
+
+clippy-sqlite:
+	# Run clippy for native targets with sqlite feature
+	cargo clippy --features sqlite -p ckb-light-client-lib -p ckb-light-client --locked -- --deny warnings
+
 build:
 	cargo build
 
@@ -26,6 +31,9 @@ test:
 
 test-portable:
 	cargo nextest run --features portable --hide-progress-bar --success-output immediate --failure-output immediate -p ckb-light-client-lib -p ckb-light-client
+
+test-sqlite:
+	cargo nextest run --features sqlite --hide-progress-bar --success-output immediate --failure-output immediate -p ckb-light-client-lib -p ckb-light-client
 
 test-wasm:
 	wasm-pack test --node ./wasm/light-client-db-common/

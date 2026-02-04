@@ -49,6 +49,7 @@ tempfile = "3.0"
 default = []
 portable = ["rocksdb/portable"]
 march-native = ["rocksdb/march-native"]
+sqlite = ["ckb-light-client-lib/sqlite"]
 
 # [profile.release]
 # overflow-checks = true

@@ -18,7 +18,7 @@ use ckb_types::{
 };
 use rusqlite::{Connection, OpenFlags};
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -29,13 +29,21 @@ pub struct Storage {
 
 impl Storage {
     pub fn new<P: AsRef<Path>>(path: P) -> Self {
+        // If path is a directory, append db.sqlite filename
+        // This allows consistent API with RocksDB which expects a directory
+        let db_path: PathBuf = if path.as_ref().is_dir() {
+            path.as_ref().join("db.sqlite")
+        } else {
+            path.as_ref().to_path_buf()
+        };
+
         let conn = Connection::open_with_flags(
-            path,
+            &db_path,
             OpenFlags::SQLITE_OPEN_READ_WRITE
                 | OpenFlags::SQLITE_OPEN_CREATE
                 | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
-        .expect("Failed to open sqlite database");
+        .unwrap_or_else(|e| panic!("Failed to open sqlite database: {:?}", e));
 
         // Initialize the schema
         Self::init_schema(&conn).expect("Failed to initialize sqlite schema");
@@ -115,7 +123,7 @@ impl BatchWriter for Batch {
         self.operations.push(BatchOp::Delete(key.to_vec()));
     }
 
-    fn commit(self: Box<Self>) -> Result<()> {
+    fn commit(self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
         let tx = conn.unchecked_transaction().map_err(|e| {
             crate::error::Error::runtime(format!("Failed to begin transaction: {}", e))
@@ -153,6 +161,8 @@ impl BatchWriter for Batch {
 
 // Implementation of StorageBackend trait for SQLite
 impl StorageBackend for Storage {
+    type Batch = Batch;
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         Storage::get(self, key)
     }
@@ -174,8 +184,8 @@ impl StorageBackend for Storage {
         Ok(())
     }
 
-    fn batch(&self) -> Box<dyn BatchWriter> {
-        Box::new(Storage::batch(self))
+    fn batch(&self) -> Self::Batch {
+        Storage::batch(self)
     }
 
     fn collect_iterator(

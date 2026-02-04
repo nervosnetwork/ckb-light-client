@@ -70,7 +70,7 @@ impl BatchWriter for Batch {
         self.wb.delete(key).expect("batch delete should be ok");
     }
 
-    fn commit(self: Box<Self>) -> Result<()> {
+    fn commit(self) -> Result<()> {
         self.db.write(&self.wb)?;
         Ok(())
     }
@@ -78,6 +78,8 @@ impl BatchWriter for Batch {
 
 // Implementation of StorageBackend trait for RocksDB
 impl StorageBackend for Storage {
+    type Batch = Batch;
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         self.db
             .get(key.as_slice())
@@ -93,8 +95,8 @@ impl StorageBackend for Storage {
         self.db.delete(key).map_err(Into::into)
     }
 
-    fn batch(&self) -> Box<dyn BatchWriter> {
-        Box::new(Storage::batch(self))
+    fn batch(&self) -> Self::Batch {
+        Storage::batch(self)
     }
 
     fn collect_iterator(

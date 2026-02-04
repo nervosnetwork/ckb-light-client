@@ -26,7 +26,7 @@ pub trait BatchWriter {
     fn delete(&mut self, key: &[u8]);
 
     /// Commit all operations in the batch atomically
-    fn commit(self: Box<Self>) -> Result<()>;
+    fn commit(self) -> Result<()>;
 }
 
 /// Low-level storage backend trait
@@ -35,6 +35,9 @@ pub trait BatchWriter {
 /// (RocksDB, SQLite, IndexedDB) must implement. Business logic is implemented
 /// as default methods in `LightClientStorage` which builds on top of this trait.
 pub trait StorageBackend: Send + Sync {
+    /// The batch type for this storage backend
+    type Batch: BatchWriter;
+
     // ========== Basic KV operations ==========
 
     /// Get value by key
@@ -49,7 +52,7 @@ pub trait StorageBackend: Send + Sync {
     // ========== Batch operations ==========
 
     /// Create a new batch for atomic writes
-    fn batch(&self) -> Box<dyn BatchWriter>;
+    fn batch(&self) -> Self::Batch;
 
     // ========== Iterator operations ==========
 
