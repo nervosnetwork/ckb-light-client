@@ -4,7 +4,7 @@
 use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::storage_trait::LightClientStorage;
 use super::super::{Byte32, Key};
-use super::iterator::{IteratorDirection, KVPair};
+use super::iterator::{IteratorDirection, IteratorStart, KVPair};
 use crate::error::Result;
 use ckb_types::{
     core::{
@@ -188,11 +188,10 @@ impl StorageBackend for Storage {
 
     fn collect_iterator(
         &self,
-        from_key: Vec<u8>,
+        start: IteratorStart,
         direction: IteratorDirection,
         take_while_fn: TakeWhileFn,
         filter_map_fn: FilterMapFn,
-        skip: usize,
         limit: usize,
     ) -> Vec<KVPair> {
         // First, collect all matching rows while holding the lock.
@@ -214,14 +213,16 @@ impl StorageBackend for Storage {
 
             let mut stmt = conn.prepare(&query).expect("prepare query");
 
+            let from_key = start.key();
             let query_rows = stmt
-                .query_map(rusqlite::params![&from_key], |row| {
+                .query_map(rusqlite::params![from_key], |row| {
                     Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
                 })
                 .expect("query rows");
 
             // Collect rows that pass the take_while condition.
             // We need to eagerly collect because the lock must be released before filter_map_fn runs.
+            let skip = if start.should_skip_first() { 1 } else { 0 };
             query_rows
                 .filter_map(|r| r.ok())
                 .skip(skip)

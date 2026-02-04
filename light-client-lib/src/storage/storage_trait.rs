@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::{
     backend::{BatchWriter, StorageBackend},
-    db::IteratorDirection,
+    db::{IteratorDirection, IteratorStart},
     parse_matched_blocks, BlockNumber, Byte32, CellIndex, CellType, CpIndex, HeaderWithExtension,
     Key, KeyPrefix, MatchedBlock, MatchedBlocks, OutputIndex, Script, ScriptStatus, ScriptType,
     SetScriptsCommand, TxIndex, Value, WrappedBlockView, FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY,
@@ -34,11 +34,10 @@ pub trait LightClientStorage: StorageBackend {
     fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let results = self.collect_iterator(
-            key_prefix.clone(),
+            IteratorStart::From(key_prefix.clone()),
             IteratorDirection::Forward,
             Box::new(move |key| key.starts_with(&key_prefix)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             1,
         );
         results.is_empty()
@@ -49,11 +48,10 @@ pub trait LightClientStorage: StorageBackend {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
         let results = self.collect_iterator(
-            key_prefix.clone(),
+            IteratorStart::From(key_prefix.clone()),
             IteratorDirection::Forward,
             Box::new(move |key| key.starts_with(&key_prefix_clone)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             usize::MAX,
         );
 
@@ -94,11 +92,10 @@ pub trait LightClientStorage: StorageBackend {
                 // Delete all existing filter scripts
                 let key_prefix_clone = key_prefix.clone();
                 let existing_keys = self.collect_iterator(
-                    key_prefix.clone(),
+                    IteratorStart::From(key_prefix.clone()),
                     IteratorDirection::Forward,
                     Box::new(move |key| key.starts_with(&key_prefix_clone)),
                     Box::new(|_key, value| Some(value.to_vec())),
-                    0,
                     usize::MAX,
                 );
 
@@ -176,11 +173,10 @@ pub trait LightClientStorage: StorageBackend {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
         let results = self.collect_iterator(
-            key_prefix.clone(),
+            IteratorStart::From(key_prefix.clone()),
             IteratorDirection::Forward,
             Box::new(move |key| key.starts_with(&key_prefix_clone)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             usize::MAX,
         );
 
@@ -206,11 +202,10 @@ pub trait LightClientStorage: StorageBackend {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
         let results = self.collect_iterator(
-            key_prefix,
+            IteratorStart::From(key_prefix),
             IteratorDirection::Forward,
             Box::new(move |key| key.starts_with(&key_prefix_clone)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             usize::MAX,
         );
 
@@ -319,11 +314,10 @@ pub trait LightClientStorage: StorageBackend {
         let start_key = Key::CheckPointIndex(start_index).into_vec();
         let key_prefix = [KeyPrefix::CheckPointIndex as u8];
         let results = self.collect_iterator(
-            start_key,
+            IteratorStart::From(start_key),
             IteratorDirection::Forward,
             Box::new(move |key| key.starts_with(&key_prefix)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             limit,
         );
 
@@ -708,7 +702,7 @@ pub trait LightClientStorage: StorageBackend {
 
                 let key_prefix_clone = key_prefix.clone();
                 let results = self.collect_iterator(
-                    start_key,
+                    IteratorStart::From(start_key),
                     IteratorDirection::Reverse,
                     Box::new(move |key| {
                         key.starts_with(&key_prefix_clone)
@@ -719,7 +713,6 @@ pub trait LightClientStorage: StorageBackend {
                             ) >= to_number
                     }),
                     Box::new(|_key, value| Some(value.to_vec())),
-                    0,
                     usize::MAX,
                 );
 
@@ -1000,11 +993,10 @@ pub trait LightClientStorage: StorageBackend {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
         let results = self.collect_iterator(
-            key_prefix,
+            IteratorStart::From(key_prefix),
             IteratorDirection::Forward,
             Box::new(move |key| key.starts_with(&key_prefix_clone)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             usize::MAX,
         );
 
@@ -1027,11 +1019,10 @@ pub trait LightClientStorage: StorageBackend {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
         let results = self.collect_iterator(
-            key_prefix,
+            IteratorStart::From(key_prefix),
             IteratorDirection::Forward,
             Box::new(move |key| key.starts_with(&key_prefix_clone)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             usize::MAX,
         );
 
@@ -1056,11 +1047,10 @@ pub trait LightClientStorage: StorageBackend {
 
         let key_prefix_clone = key_prefix.clone();
         let results = self.collect_iterator(
-            iter_from,
+            IteratorStart::From(iter_from),
             direction,
             Box::new(move |key| key.starts_with(&key_prefix_clone)),
             Box::new(|_key, value| Some(value.to_vec())),
-            0,
             1,
         );
 

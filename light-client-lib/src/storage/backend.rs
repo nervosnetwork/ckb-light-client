@@ -5,7 +5,7 @@
 
 use crate::error::Result;
 
-use super::{IteratorDirection, KVPair};
+use super::{IteratorDirection, IteratorStart, KVPair};
 
 /// Type alias for the take_while function used in iterator operations
 pub type TakeWhileFn = Box<dyn Fn(&[u8]) -> bool + Send + 'static>;
@@ -63,11 +63,10 @@ pub trait StorageBackend: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `from_key` - Starting key for iteration
+    /// * `start` - Starting position for iteration (From for inclusive, After for exclusive)
     /// * `direction` - Direction of iteration (Forward or Reverse)
     /// * `take_while_fn` - Function to determine when to stop iteration (e.g., prefix matching)
     /// * `filter_map_fn` - Function to filter and optionally transform (key, value) pairs
-    /// * `skip` - Number of items to skip from the start
     /// * `limit` - Maximum number of items to return
     ///
     /// # Returns
@@ -75,11 +74,10 @@ pub trait StorageBackend: Send + Sync {
     /// A vector of key-value pairs that match the criteria
     fn collect_iterator(
         &self,
-        from_key: Vec<u8>,
+        start: IteratorStart,
         direction: IteratorDirection,
         take_while_fn: TakeWhileFn,
         filter_map_fn: FilterMapFn,
-        skip: usize,
         limit: usize,
     ) -> Vec<KVPair>;
 }

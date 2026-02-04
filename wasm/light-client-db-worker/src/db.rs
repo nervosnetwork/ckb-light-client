@@ -6,7 +6,8 @@ use idb::{
     ObjectStoreParams, TransactionMode, TransactionResult,
 };
 use light_client_db_common::{
-    iterator_direction_to_idb, DbCommandRequest, DbCommandResponse, IteratorDirection, KVPair,
+    iterator_direction_to_idb, DbCommandRequest, DbCommandResponse, IteratorDirection,
+    IteratorStart, KVPair,
 };
 use log::debug;
 
@@ -45,25 +46,23 @@ async fn open_iterator(
 
 pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
-    start_key_bound: &[u8],
+    start: &IteratorStart,
     direction: IteratorDirection,
     take_while: F,
     filter_map: FnFilterMap,
     limit: usize,
-    skip: usize,
 ) -> anyhow::Result<Vec<KVPair>>
 where
     F: Fn(&[u8]) -> bool,
     FnFilterMap: Fn(&[u8], &[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start_key_bound, direction)
+    let mut iter = open_iterator(store, start.key(), direction)
         .await
         .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
 
     let mut res = Vec::new();
-
-    let mut skip_index = 0;
+    let skip_first = start.should_skip_first();
 
     if iter.key().is_err() {
         return Ok(res);
@@ -77,8 +76,7 @@ where
     .unwrap();
 
     if take_while(&raw_kv.key) {
-        skip_index += 1;
-        if skip_index > skip {
+        if !skip_first {
             if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
                 res.push(KVPair {
                     key: new_key,
@@ -110,14 +108,11 @@ where
         )
         .unwrap();
         if take_while(&raw_kv.key) {
-            skip_index += 1;
-            if skip_index > skip {
-                if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
-                    res.push(KVPair {
-                        key: new_key,
-                        value: raw_kv.value,
-                    });
-                }
+            if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
+                res.push(KVPair {
+                    key: new_key,
+                    value: raw_kv.value,
+                });
             }
         } else {
             return Ok(res);
@@ -128,24 +123,23 @@ where
 
 async fn collect_iterator_keys<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
-    start_key_bound: &[u8],
+    start: &IteratorStart,
     direction: IteratorDirection,
     take_while: F,
     filter_map: FnFilterMap,
     limit: usize,
-    skip: usize,
 ) -> anyhow::Result<Vec<Vec<u8>>>
 where
     F: Fn(&[u8]) -> bool,
     FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start_key_bound, direction)
+    let mut iter = open_iterator(store, start.key(), direction)
         .await
         .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
 
     let mut res = Vec::new();
-    let mut skip_index = 0;
+    let skip_first = start.should_skip_first();
 
     if iter.key().is_err() {
         return Ok(res);
@@ -159,8 +153,7 @@ where
     .unwrap();
 
     if take_while(&raw_key) {
-        skip_index += 1;
-        if skip_index > skip {
+        if !skip_first {
             if let Some(new_key) = filter_map(&raw_key).await {
                 res.push(new_key);
             }
@@ -185,11 +178,8 @@ where
 
         let raw_key = serde_wasm_bindgen::from_value::<Vec<u8>>(key.unwrap()).unwrap();
         if take_while(&raw_key) {
-            skip_index += 1;
-            if skip_index > skip {
-                if let Some(new_key) = filter_map(&raw_key).await {
-                    res.push(new_key);
-                }
+            if let Some(new_key) = filter_map(&raw_key).await {
+                res.push(new_key);
             }
         } else {
             return Ok(res);
@@ -278,14 +268,13 @@ where
         }
 
         DbCommandRequest::Iterator {
-            start_key_bound,
+            start,
             direction,
             limit,
-            skip,
         } => {
             let kvs = collect_iterator(
                 &store,
-                &start_key_bound,
+                &start,
                 direction,
                 invoke_take_while,
                 |key, value| {
@@ -296,25 +285,23 @@ where
                     async move { invoke_filter_map(&key, &value, store.clone()).await }
                 },
                 limit,
-                skip,
             )
             .await
             .with_context(|| anyhow!("Failed to collect iterator"))?;
             debug!(
-                "Called iterator, args=<{:?}, {:?}, {:?}, {:?}>, result={:?}",
-                start_key_bound, direction, limit, skip, kvs
+                "Called iterator, args=<{:?}, {:?}, {:?}>, result={:?}",
+                start, direction, limit, kvs
             );
             DbCommandResponse::Iterator { kvs }
         }
         DbCommandRequest::IteratorKey {
-            start_key_bound,
+            start,
             direction,
             limit,
-            skip,
         } => {
             let keys = collect_iterator_keys(
                 &store,
-                &start_key_bound,
+                &start,
                 direction,
                 invoke_take_while,
                 |key| {
@@ -324,7 +311,6 @@ where
                     async move { invoke_filter_map(&key, &[], store.clone()).await }
                 },
                 limit,
-                skip,
             )
             .await
             .with_context(|| anyhow!("Failed to collect iterator keys"))?;

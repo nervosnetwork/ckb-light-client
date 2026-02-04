@@ -3,7 +3,7 @@ use std::{cell::RefCell, path::Path, sync::atomic::AtomicBool};
 use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::storage_trait::LightClientStorage;
 use super::super::{Byte32, Key};
-use super::iterator::{IteratorDirection, KVPair};
+use super::iterator::{IteratorDirection, IteratorStart, KVPair};
 use anyhow::{anyhow, bail, Context};
 
 use ckb_types::{
@@ -36,12 +36,11 @@ enum CommandRequestWithTakeWhileAndFilterMap {
         keys: Vec<Vec<u8>>,
     },
     Iterator {
-        start_key_bound: Vec<u8>,
+        start: IteratorStart,
         direction: IteratorDirection,
         take_while: TakeWhileFn,
         filter_map: FilterMapFn,
         limit: usize,
-        skip: usize,
     },
 }
 
@@ -149,18 +148,16 @@ impl CommunicationChannel {
                 (DbCommandRequest::Delete { keys }, None, None)
             }
             CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound,
+                start,
                 direction,
                 take_while,
                 filter_map,
                 limit,
-                skip,
             } => (
                 DbCommandRequest::Iterator {
-                    start_key_bound,
+                    start,
                     direction,
                     limit,
-                    skip,
                 },
                 Some(take_while),
                 Some(filter_map),
@@ -285,33 +282,6 @@ impl Storage {
         match values {
             DbCommandResponse::Read { values } => Ok(values.into_iter().last().unwrap()),
             _ => unreachable!(),
-        }
-    }
-
-    fn collect_iterator(
-        &self,
-        start_key_bound: Vec<u8>,
-        direction: IteratorDirection,
-        take_while: TakeWhileFn,
-        filter_map: FilterMapFn,
-        limit: usize,
-        skip: usize,
-    ) -> Vec<KVPair> {
-        let value = self
-            .channel
-            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound,
-                direction,
-                take_while,
-                filter_map,
-                limit,
-                skip,
-            })
-            .unwrap();
-        if let DbCommandResponse::Iterator { kvs } = value {
-            kvs
-        } else {
-            unreachable!()
         }
     }
 
@@ -452,23 +422,27 @@ impl StorageBackend for Storage {
 
     fn collect_iterator(
         &self,
-        from_key: Vec<u8>,
+        start: IteratorStart,
         direction: IteratorDirection,
         take_while_fn: TakeWhileFn,
         filter_map_fn: FilterMapFn,
-        skip: usize,
         limit: usize,
     ) -> Vec<KVPair> {
-        // Use the browser storage's collect_iterator which now provides both key and value to filter_map
-        Storage::collect_iterator(
-            self,
-            from_key,
-            direction,
-            take_while_fn,
-            filter_map_fn,
-            limit,
-            skip,
-        )
+        let value = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
+                start,
+                direction,
+                take_while: take_while_fn,
+                filter_map: filter_map_fn,
+                limit,
+            })
+            .unwrap();
+        if let DbCommandResponse::Iterator { kvs } = value {
+            kvs
+        } else {
+            unreachable!()
+        }
     }
 }
 

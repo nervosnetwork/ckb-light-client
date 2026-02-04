@@ -26,7 +26,7 @@ pub use backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 pub use storage_trait::LightClientStorage;
 
 // Re-export iterator types from db module
-pub use db::{IteratorDirection, KVPair};
+pub use db::{IteratorDirection, IteratorStart, KVPair};
 
 #[cfg(target_arch = "wasm32")]
 pub use db::{Batch, Storage};

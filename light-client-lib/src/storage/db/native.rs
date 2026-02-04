@@ -1,7 +1,7 @@
 use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::storage_trait::LightClientStorage;
 use super::super::{Byte32, Key};
-use super::iterator::{IteratorDirection, KVPair};
+use super::iterator::{IteratorDirection, IteratorStart, KVPair};
 use crate::error::Result;
 use ckb_types::{
     core::{
@@ -108,16 +108,17 @@ impl StorageBackend for Storage {
 
     fn collect_iterator(
         &self,
-        from_key: Vec<u8>,
+        start: IteratorStart,
         direction: IteratorDirection,
         take_while_fn: TakeWhileFn,
         filter_map_fn: FilterMapFn,
-        skip: usize,
         limit: usize,
     ) -> Vec<KVPair> {
         let rocksdb_direction: Direction = direction.into();
-        let mode = IteratorMode::From(from_key.as_ref(), rocksdb_direction);
+        let mode = IteratorMode::From(start.key(), rocksdb_direction);
         let snapshot = self.snapshot();
+
+        let skip = if start.should_skip_first() { 1 } else { 0 };
 
         snapshot
             .iterator(mode)

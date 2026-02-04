@@ -21,6 +21,30 @@ pub enum IteratorDirection {
     Reverse,
 }
 
+/// Specifies where to start iteration
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum IteratorStart {
+    /// Start from the specified key (inclusive)
+    From(Vec<u8>),
+    /// Start after the specified key (exclusive, skips the first match)
+    After(Vec<u8>),
+}
+
+impl IteratorStart {
+    /// Get the key bytes
+    pub fn key(&self) -> &[u8] {
+        match self {
+            IteratorStart::From(key) => key,
+            IteratorStart::After(key) => key,
+        }
+    }
+
+    /// Returns true if the first matching entry should be skipped
+    pub fn should_skip_first(&self) -> bool {
+        matches!(self, IteratorStart::After(_))
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 /// Response of DbCommandRequest. For details, please refer to the doc of DbCommandRequest
 pub enum DbCommandResponse {
@@ -46,20 +70,18 @@ pub enum DbCommandRequest {
     /// Input: Keys to remove
     /// Output: None
     Delete { keys: Vec<Vec<u8>> },
-    /// Gets at most `limit` entries, starting from `start_key_bound`, skipping the first `skip` entries, keep fetching until `take_while` evals to false
+    /// Gets at most `limit` entries, keep fetching until `take_while` evals to false
     /// Output: Key value pairs fetched
     Iterator {
-        start_key_bound: Vec<u8>,
+        start: IteratorStart,
         direction: IteratorDirection,
         limit: usize,
-        skip: usize,
     },
     /// Similar to `Iterator`, but only keys are returned
     IteratorKey {
-        start_key_bound: Vec<u8>,
+        start: IteratorStart,
         direction: IteratorDirection,
         limit: usize,
-        skip: usize,
     },
 }
 #[repr(i32)]

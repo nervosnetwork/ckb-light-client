@@ -45,7 +45,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Cell>> {
-        let (prefix, from_key, iter_direction, skip) = build_query_options(
+        let (prefix, iter_start, iter_direction) = build_query_options(
             &search_key,
             KeyPrefix::CellLockScript,
             KeyPrefix::CellTypeScript,
@@ -158,11 +158,10 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         });
 
         let results = self.storage.collect_iterator(
-            from_key,
+            iter_start,
             iter_direction,
             take_while_fn,
             filter_map_fn,
-            skip,
             limit,
         );
 
@@ -220,7 +219,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Tx>> {
-        let (prefix, from_key, iter_direction, skip) = build_query_options(
+        let (prefix, iter_start, iter_direction) = build_query_options(
             &search_key,
             KeyPrefix::TxLockScript,
             KeyPrefix::TxTypeScript,
@@ -320,11 +319,10 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         });
 
         let results = self.storage.collect_iterator(
-            from_key,
+            iter_start,
             iter_direction,
             take_while_fn,
             filter_map_fn,
-            skip,
             usize::MAX, // Don't limit at iterator level for grouping
         );
 
@@ -442,7 +440,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
     /// This method calculates the sum of capacities for all cells matching
     /// the search criteria and returns the total along with current tip block info.
     pub fn get_cells_capacity(&self, search_key: SearchKey) -> Result<CellsCapacity> {
-        let (prefix, from_key, iter_direction, skip) = build_query_options(
+        let (prefix, iter_start, iter_direction) = build_query_options(
             &search_key,
             KeyPrefix::CellLockScript,
             KeyPrefix::CellTypeScript,
@@ -550,11 +548,10 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         });
 
         let results = self.storage.collect_iterator(
-            from_key,
+            iter_start,
             iter_direction,
             take_while_fn,
             filter_map_fn,
-            skip,
             usize::MAX,
         );
 

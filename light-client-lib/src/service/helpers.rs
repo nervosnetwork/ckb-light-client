@@ -6,12 +6,12 @@ use ckb_types::{core, packed};
 
 use crate::error::{Error, Result};
 use crate::service::{Order, ScriptType, SearchKey};
-use crate::storage::{extract_raw_data, IteratorDirection, KeyPrefix};
+use crate::storage::{extract_raw_data, IteratorDirection, IteratorStart, KeyPrefix};
 
 const MAX_PREFIX_SEARCH_SIZE: usize = u16::MAX as usize;
 
-/// Query options: (prefix, from_key, direction, skip)
-type QueryOptions = (Vec<u8>, Vec<u8>, IteratorDirection, usize);
+/// Query options: (prefix, start, direction)
+type QueryOptions = (Vec<u8>, IteratorStart, IteratorDirection);
 
 /// Filter options: (filter_prefix, script_len_range, output_data_len_range, output_capacity_range, block_range)
 type FilterOptions = (
@@ -24,7 +24,7 @@ type FilterOptions = (
 
 /// Build query options from search parameters
 ///
-/// Returns: (prefix, from_key, direction, skip)
+/// Returns: (prefix, start, direction)
 pub fn build_query_options(
     search_key: &SearchKey,
     lock_prefix: KeyPrefix,
@@ -47,28 +47,44 @@ pub fn build_query_options(
     }
     prefix.extend_from_slice(extract_raw_data(&script).as_slice());
 
-    let (from_key, direction, skip) = match order {
+    let (start, direction) = match order {
         Order::Asc => after_cursor.map_or_else(
-            || (prefix.clone(), IteratorDirection::Forward, 0),
-            |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Forward, 1),
+            || {
+                (
+                    IteratorStart::From(prefix.clone()),
+                    IteratorDirection::Forward,
+                )
+            },
+            |json_bytes| {
+                (
+                    IteratorStart::After(json_bytes.as_bytes().into()),
+                    IteratorDirection::Forward,
+                )
+            },
         ),
         Order::Desc => after_cursor.map_or_else(
             || {
                 (
-                    [
-                        prefix.clone(),
-                        vec![0xff; MAX_PREFIX_SEARCH_SIZE - args_len],
-                    ]
-                    .concat(),
+                    IteratorStart::From(
+                        [
+                            prefix.clone(),
+                            vec![0xff; MAX_PREFIX_SEARCH_SIZE - args_len],
+                        ]
+                        .concat(),
+                    ),
                     IteratorDirection::Reverse,
-                    0,
                 )
             },
-            |json_bytes| (json_bytes.as_bytes().into(), IteratorDirection::Reverse, 1),
+            |json_bytes| {
+                (
+                    IteratorStart::After(json_bytes.as_bytes().into()),
+                    IteratorDirection::Reverse,
+                )
+            },
         ),
     };
 
-    Ok((prefix, from_key, direction, skip))
+    Ok((prefix, start, direction))
 }
 
 /// Build filter options from search parameters

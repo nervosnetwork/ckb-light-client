@@ -1,5 +1,5 @@
 mod iterator;
-pub use iterator::{IteratorDirection, KVPair};
+pub use iterator::{IteratorDirection, IteratorStart, KVPair};
 
 // Native platforms: Use RocksDB by default, SQLite when feature is enabled
 #[cfg(all(not(target_arch = "wasm32"), not(feature = "sqlite")))]
