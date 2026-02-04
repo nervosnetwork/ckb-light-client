@@ -16,4 +16,4 @@ pub use sqlite::{Batch, Storage};
 #[cfg(target_arch = "wasm32")]
 mod browser;
 #[cfg(target_arch = "wasm32")]
-pub use browser::{Batch, CursorDirection, Storage};
+pub use browser::{Batch, Storage};

@@ -12,15 +12,15 @@ pub struct KV {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
 }
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
-/// A serializable CursorDirection
-pub enum CursorDirection {
+
+/// Direction for iteration (forward or backward)
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IteratorDirection {
     #[default]
-    Next,
-    NextUnique,
-    Prev,
-    PrevUnique,
+    Forward,
+    Reverse,
 }
+
 #[derive(Serialize, Deserialize, Debug)]
 /// Response of DbCommandRequest. For details, please refer to the doc of DbCommandRequest
 pub enum DbCommandResponse {
@@ -50,14 +50,14 @@ pub enum DbCommandRequest {
     /// Output: Key value pairs fetched
     Iterator {
         start_key_bound: Vec<u8>,
-        order: CursorDirection,
+        direction: IteratorDirection,
         limit: usize,
         skip: usize,
     },
     /// Similar to `Iterator`, but only keys are returned
     IteratorKey {
         start_key_bound: Vec<u8>,
-        order: CursorDirection,
+        direction: IteratorDirection,
         limit: usize,
         skip: usize,
     },
@@ -142,25 +142,11 @@ impl TryFrom<i32> for OutputCommand {
         }
     }
 }
-/// Translate a [`crate::CursorDirection`] to [`idb::CursorDirection`]
-pub fn ckb_cursor_direction_to_idb(x: crate::CursorDirection) -> idb::CursorDirection {
-    use crate::CursorDirection;
-    match x {
-        CursorDirection::Next => idb::CursorDirection::Next,
-        CursorDirection::NextUnique => idb::CursorDirection::NextUnique,
-        CursorDirection::Prev => idb::CursorDirection::Prev,
-        CursorDirection::PrevUnique => idb::CursorDirection::PrevUnique,
-    }
-}
-/// Translate a [`idb::CursorDirection`] to [`crate::CursorDirection`]
-pub fn idb_cursor_direction_to_ckb(x: idb::CursorDirection) -> crate::CursorDirection {
-    use crate::CursorDirection;
-
-    match x {
-        idb::CursorDirection::Next => CursorDirection::Next,
-        idb::CursorDirection::NextUnique => CursorDirection::NextUnique,
-        idb::CursorDirection::Prev => CursorDirection::Prev,
-        idb::CursorDirection::PrevUnique => CursorDirection::PrevUnique,
+/// Convert IteratorDirection to idb::CursorDirection
+pub fn iterator_direction_to_idb(dir: IteratorDirection) -> idb::CursorDirection {
+    match dir {
+        IteratorDirection::Forward => idb::CursorDirection::NextUnique,
+        IteratorDirection::Reverse => idb::CursorDirection::PrevUnique,
     }
 }
 /// Fill a input buffer/output buffer with a [`crate::InputCommand`]/[`crate::OutputCommand`] and the buffer

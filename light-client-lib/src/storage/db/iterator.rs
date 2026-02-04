@@ -1,13 +1,10 @@
-/// Unified iterator abstraction for different storage backends (RocksDB, IndexedDB, SQLite)
-/// This trait provides a common interface for iterating over key-value pairs with filtering.
-#[cfg(target_arch = "wasm32")]
-use super::browser::CursorDirection;
+//! Unified iterator abstraction for different storage backends (RocksDB, IndexedDB, SQLite)
+//! This trait provides a common interface for iterating over key-value pairs with filtering.
 
 #[cfg(not(target_arch = "wasm32"))]
 use rocksdb::Direction;
 
 /// Direction for iteration (forward or backward)
-#[cfg(not(target_arch = "wasm32"))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IteratorDirection {
     Forward,
@@ -30,33 +27,6 @@ impl From<Direction> for IteratorDirection {
         match dir {
             Direction::Forward => IteratorDirection::Forward,
             Direction::Reverse => IteratorDirection::Reverse,
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IteratorDirection {
-    Forward,
-    Reverse,
-}
-
-#[cfg(target_arch = "wasm32")]
-impl From<IteratorDirection> for CursorDirection {
-    fn from(dir: IteratorDirection) -> Self {
-        match dir {
-            IteratorDirection::Forward => CursorDirection::NextUnique,
-            IteratorDirection::Reverse => CursorDirection::PrevUnique,
-        }
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-impl From<CursorDirection> for IteratorDirection {
-    fn from(dir: CursorDirection) -> Self {
-        match dir {
-            CursorDirection::NextUnique | CursorDirection::Next => IteratorDirection::Forward,
-            CursorDirection::PrevUnique | CursorDirection::Prev => IteratorDirection::Reverse,
         }
     }
 }

@@ -29,7 +29,7 @@ pub use storage_trait::LightClientStorage;
 pub use db::{IteratorDirection, KVPair, StorageIterator};
 
 #[cfg(target_arch = "wasm32")]
-pub use db::{Batch, CursorDirection, Storage};
+pub use db::{Batch, Storage};
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use db::{Batch, Storage};

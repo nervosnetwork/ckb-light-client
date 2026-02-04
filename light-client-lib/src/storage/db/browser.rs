@@ -3,7 +3,7 @@ use std::{cell::RefCell, path::Path, sync::atomic::AtomicBool};
 use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::storage_trait::LightClientStorage;
 use super::super::{Byte32, Key};
-use super::iterator::{IteratorDirection, KVPair};
+use super::iterator::KVPair;
 use anyhow::{anyhow, bail, Context};
 
 use ckb_types::{
@@ -14,10 +14,9 @@ use ckb_types::{
     packed::{CellOutput, Header, OutPoint},
     prelude::*,
 };
-pub use idb::CursorDirection;
 use light_client_db_common::{
-    idb_cursor_direction_to_ckb, read_command_payload, write_command_with_payload,
-    DbCommandRequest, DbCommandResponse, InputCommand, OutputCommand, KV,
+    read_command_payload, write_command_with_payload, DbCommandRequest, DbCommandResponse,
+    InputCommand, IteratorDirection, OutputCommand, KV,
 };
 
 use log::debug;
@@ -47,7 +46,7 @@ enum CommandRequestWithTakeWhileAndFilterMap {
     #[allow(clippy::type_complexity)]
     Iterator {
         start_key_bound: Vec<u8>,
-        order: CursorDirection,
+        direction: IteratorDirection,
         take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
         filter_map: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
@@ -161,7 +160,7 @@ impl CommunicationChannel {
             }
             CommandRequestWithTakeWhileAndFilterMap::Iterator {
                 start_key_bound,
-                order,
+                direction,
                 take_while,
                 filter_map,
                 limit,
@@ -169,7 +168,7 @@ impl CommunicationChannel {
             } => (
                 DbCommandRequest::Iterator {
                     start_key_bound,
-                    order: idb_cursor_direction_to_ckb(order),
+                    direction,
                     limit,
                     skip,
                 },
@@ -316,7 +315,7 @@ impl Storage {
     fn collect_iterator(
         &self,
         start_key_bound: Vec<u8>,
-        order: CursorDirection,
+        direction: IteratorDirection,
         take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
         filter_map: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
@@ -326,7 +325,7 @@ impl Storage {
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
                 start_key_bound,
-                order,
+                direction,
                 take_while,
                 filter_map,
                 limit,
@@ -478,19 +477,23 @@ impl StorageBackend for Storage {
     fn collect_iterator(
         &self,
         from_key: Vec<u8>,
-        direction: IteratorDirection,
+        direction: super::iterator::IteratorDirection,
         take_while_fn: TakeWhileFn,
         filter_map_fn: FilterMapFn,
         skip: usize,
         limit: usize,
     ) -> Vec<KVPair> {
-        let cursor_direction: CursorDirection = direction.into();
+        // Convert local IteratorDirection to db-common IteratorDirection
+        let db_direction = match direction {
+            super::iterator::IteratorDirection::Forward => IteratorDirection::Forward,
+            super::iterator::IteratorDirection::Reverse => IteratorDirection::Reverse,
+        };
 
         // Use the browser storage's collect_iterator which now provides both key and value to filter_map
         let kvs = Storage::collect_iterator(
             self,
             from_key,
-            cursor_direction,
+            db_direction,
             take_while_fn,
             filter_map_fn,
             limit,

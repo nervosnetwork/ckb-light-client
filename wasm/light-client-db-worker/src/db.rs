@@ -2,11 +2,11 @@ use std::future::Future;
 
 use anyhow::{anyhow, Context};
 use idb::{
-    CursorDirection, Database, DatabaseEvent, Factory, IndexParams, KeyPath, KeyRange,
-    ManagedCursor, ObjectStore, ObjectStoreParams, TransactionMode, TransactionResult,
+    Database, DatabaseEvent, Factory, IndexParams, KeyPath, KeyRange, ManagedCursor, ObjectStore,
+    ObjectStoreParams, TransactionMode, TransactionResult,
 };
 use light_client_db_common::{
-    ckb_cursor_direction_to_idb, DbCommandRequest, DbCommandResponse, KV,
+    iterator_direction_to_idb, DbCommandRequest, DbCommandResponse, IteratorDirection, KV,
 };
 use log::debug;
 
@@ -15,28 +15,28 @@ use crate::STORE_NAME;
 async fn open_iterator(
     store: &ObjectStore,
     start_key_bound: &[u8],
-    order: CursorDirection,
+    direction: IteratorDirection,
 ) -> Result<ManagedCursor, idb::Error> {
     let index = store.index("key").unwrap();
+    let cursor_direction = iterator_direction_to_idb(direction);
 
     Ok(index
         .open_cursor(
             Some(
-                match order {
-                    CursorDirection::NextUnique => KeyRange::lower_bound(
+                match direction {
+                    IteratorDirection::Forward => KeyRange::lower_bound(
                         &serde_wasm_bindgen::to_value(&start_key_bound).unwrap(),
                         Some(false),
                     ),
-                    CursorDirection::PrevUnique => KeyRange::upper_bound(
+                    IteratorDirection::Reverse => KeyRange::upper_bound(
                         &serde_wasm_bindgen::to_value(&start_key_bound).unwrap(),
                         Some(false),
                     ),
-                    _ => unreachable!(),
                 }
                 .unwrap()
                 .into(),
             ),
-            Some(order),
+            Some(cursor_direction),
         )?
         .await?
         .unwrap()
@@ -46,7 +46,7 @@ async fn open_iterator(
 pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
     start_key_bound: &[u8],
-    order: CursorDirection,
+    direction: IteratorDirection,
     take_while: F,
     filter_map: FnFilterMap,
     limit: usize,
@@ -57,7 +57,7 @@ where
     FnFilterMap: Fn(&[u8], &[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start_key_bound, order)
+    let mut iter = open_iterator(store, start_key_bound, direction)
         .await
         .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
 
@@ -129,7 +129,7 @@ where
 async fn collect_iterator_keys<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
     start_key_bound: &[u8],
-    order: CursorDirection,
+    direction: IteratorDirection,
     take_while: F,
     filter_map: FnFilterMap,
     limit: usize,
@@ -140,7 +140,7 @@ where
     FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start_key_bound, order)
+    let mut iter = open_iterator(store, start_key_bound, direction)
         .await
         .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
 
@@ -279,14 +279,14 @@ where
 
         DbCommandRequest::Iterator {
             start_key_bound,
-            order,
+            direction,
             limit,
             skip,
         } => {
             let kvs = collect_iterator(
                 &store,
                 &start_key_bound,
-                ckb_cursor_direction_to_idb(order),
+                direction,
                 invoke_take_while,
                 |key, value| {
                     let key = key.to_vec();
@@ -302,20 +302,20 @@ where
             .with_context(|| anyhow!("Failed to collect iterator"))?;
             debug!(
                 "Called iterator, args=<{:?}, {:?}, {:?}, {:?}>, result={:?}",
-                start_key_bound, order, limit, skip, kvs
+                start_key_bound, direction, limit, skip, kvs
             );
             DbCommandResponse::Iterator { kvs }
         }
         DbCommandRequest::IteratorKey {
             start_key_bound,
-            order,
+            direction,
             limit,
             skip,
         } => {
             let keys = collect_iterator_keys(
                 &store,
                 &start_key_bound,
-                ckb_cursor_direction_to_idb(order),
+                direction,
                 invoke_take_while,
                 |key| {
                     let key = key.to_vec();
