@@ -18,7 +18,7 @@ use ckb_light_client_lib::{
         LightClientChainService, LightClientNetworkService, LightClientService, Order,
         ScriptStatus, SearchKey, SetScriptsCommand,
     },
-    storage::{Storage, StorageWithChainData},
+    storage::{LightClientStorage, Storage, StorageWithChainData},
     types::RunEnv,
 };
 use log::debug;

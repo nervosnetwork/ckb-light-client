@@ -12,7 +12,7 @@ use ckb_types::{
     H256, U256,
 };
 
-use crate::storage::SetScriptsCommand;
+use crate::storage::{LightClientStorage, SetScriptsCommand};
 use crate::storage::{ScriptStatus, ScriptType};
 use crate::{
     protocols::{BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN},

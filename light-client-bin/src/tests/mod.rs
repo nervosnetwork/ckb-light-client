@@ -4,7 +4,7 @@ use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_light_client_lib::{
     protocols::{Peers, CHECK_POINT_INTERVAL},
     service::{LightClientChainService, LightClientService},
-    storage::{Storage, StorageWithChainData},
+    storage::{LightClientStorage, Storage, StorageWithChainData},
 };
 use ckb_resource::Resource;
 

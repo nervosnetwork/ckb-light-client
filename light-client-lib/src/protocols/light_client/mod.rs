@@ -46,7 +46,7 @@ use super::{
 };
 
 use crate::protocols::{GET_BLOCKS_PROOF_LIMIT, GET_TRANSACTIONS_PROOF_LIMIT, LAST_N_BLOCKS};
-use crate::storage::Storage;
+use crate::storage::{LightClientStorage, Storage};
 use crate::utils::network::prove_or_download_matched_blocks;
 
 pub struct LightClientProtocol {

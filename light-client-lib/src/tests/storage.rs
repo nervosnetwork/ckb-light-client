@@ -1,6 +1,6 @@
 use ckb_types::packed::Script;
 
-use crate::storage;
+use crate::storage::{self, LightClientStorage};
 use crate::tests::utils::new_storage;
 
 #[test]

@@ -9,6 +9,7 @@ use log::debug;
 
 use crate::{
     protocols::{light_client::prelude::*, LastState, ProveRequest, ProveState, StatusCode},
+    storage::LightClientStorage,
     tests::{
         prelude::*,
         utils::{setup, MockChain, MockNetworkContext},

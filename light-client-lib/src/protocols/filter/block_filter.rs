@@ -1,6 +1,6 @@
 use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
-use crate::storage::Storage;
+use crate::storage::{LightClientStorage, Storage};
 use crate::types::{Duration, Instant, RwLock};
 use crate::utils::network::prove_or_download_matched_blocks;
 use crate::{read_lock, write_lock};

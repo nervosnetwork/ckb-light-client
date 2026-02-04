@@ -14,6 +14,7 @@ use crate::{
         light_client::constant::{FETCH_HEADER_TX_TOKEN, REFRESH_PEERS_TOKEN},
         FetchInfo, StatusCode,
     },
+    storage::LightClientStorage,
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
