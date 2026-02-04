@@ -653,9 +653,7 @@ impl Storage {
     }
     fn get_matched_blocks(&self, direction: CursorDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
-        // TODO: Fix direction handling - currently always iterates forward regardless of direction parameter
-        // Should use iter_from and direction like the native implementation does
-        let _iter_from = match direction {
+        let iter_from = match direction {
             CursorDirection::NextUnique => key_prefix.clone(),
             CursorDirection::PrevUnique => {
                 let mut key = key_prefix.clone();
@@ -670,8 +668,8 @@ impl Storage {
         let value = self
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
-                start_key_bound: key_prefix_clone.clone(),
-                order: CursorDirection::NextUnique,
+                start_key_bound: iter_from,
+                order: direction,
                 take_while: Box::new(move |raw_key: &[u8]| raw_key.starts_with(&key_prefix_clone)),
                 filter_map: Box::new(|key, _value| Some(key.to_vec())),
                 limit: usize::MAX,
