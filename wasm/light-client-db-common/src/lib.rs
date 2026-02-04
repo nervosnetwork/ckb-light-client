@@ -8,7 +8,7 @@ pub mod tests;
 
 #[derive(Serialize, Deserialize, Debug)]
 /// Represent a key-value pair
-pub struct KV {
+pub struct KVPair {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
 }
@@ -27,7 +27,7 @@ pub enum DbCommandResponse {
     Read { values: Vec<Option<Vec<u8>>> },
     Put,
     Delete,
-    Iterator { kvs: Vec<KV> },
+    Iterator { kvs: Vec<KVPair> },
     IteratorKey { keys: Vec<Vec<u8>> },
 }
 
@@ -41,7 +41,7 @@ pub enum DbCommandRequest {
     /// Write a series of key-value pairs into database
     /// Input: A series of key-value pairs
     /// Output: None
-    Put { kvs: Vec<KV> },
+    Put { kvs: Vec<KVPair> },
     /// Remove a series of entries from database
     /// Input: Keys to remove
     /// Output: None

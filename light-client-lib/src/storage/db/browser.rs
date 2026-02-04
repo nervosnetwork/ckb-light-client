@@ -16,7 +16,7 @@ use ckb_types::{
 };
 use light_client_db_common::{
     read_command_payload, write_command_with_payload, DbCommandRequest, DbCommandResponse,
-    InputCommand, OutputCommand, KV,
+    InputCommand, OutputCommand,
 };
 
 use log::debug;
@@ -38,7 +38,7 @@ enum CommandRequestWithTakeWhileAndFilterMap {
         keys: Vec<Vec<u8>>,
     },
     Put {
-        kvs: Vec<KV>,
+        kvs: Vec<KVPair>,
     },
     Delete {
         keys: Vec<Vec<u8>>,
@@ -320,7 +320,7 @@ impl Storage {
         filter_map: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
         limit: usize,
         skip: usize,
-    ) -> Vec<KV> {
+    ) -> Vec<KVPair> {
         let value = self
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
@@ -390,7 +390,7 @@ impl Storage {
 }
 
 pub struct Batch {
-    add: Vec<KV>,
+    add: Vec<KVPair>,
     delete: Vec<Vec<u8>>,
     comm_arrays: CommunicationChannel,
 }
@@ -398,7 +398,7 @@ pub struct Batch {
 // Implement BatchWriter trait for Batch
 impl BatchWriter for Batch {
     fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.add.push(KV {
+        self.add.push(KVPair {
             key: key.to_vec(),
             value: value.to_vec(),
         });
@@ -451,7 +451,7 @@ impl StorageBackend for Storage {
     fn put(&self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
         self.channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Put {
-                kvs: vec![KV { key, value }],
+                kvs: vec![KVPair { key, value }],
             })
             .map(|_| ())
             .map_err(|e| Error::Indexdb(format!("{:?}", e)))
@@ -484,7 +484,7 @@ impl StorageBackend for Storage {
         limit: usize,
     ) -> Vec<KVPair> {
         // Use the browser storage's collect_iterator which now provides both key and value to filter_map
-        let kvs = Storage::collect_iterator(
+        Storage::collect_iterator(
             self,
             from_key,
             direction,
@@ -492,15 +492,7 @@ impl StorageBackend for Storage {
             filter_map_fn,
             limit,
             skip,
-        );
-
-        // Convert KV to KVPair
-        kvs.into_iter()
-            .map(|kv| KVPair {
-                key: kv.key,
-                value: kv.value,
-            })
-            .collect()
+        )
     }
 }
 

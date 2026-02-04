@@ -6,7 +6,7 @@ use idb::{
     ObjectStoreParams, TransactionMode, TransactionResult,
 };
 use light_client_db_common::{
-    iterator_direction_to_idb, DbCommandRequest, DbCommandResponse, IteratorDirection, KV,
+    iterator_direction_to_idb, DbCommandRequest, DbCommandResponse, IteratorDirection, KVPair,
 };
 use log::debug;
 
@@ -51,7 +51,7 @@ pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
     filter_map: FnFilterMap,
     limit: usize,
     skip: usize,
-) -> anyhow::Result<Vec<KV>>
+) -> anyhow::Result<Vec<KVPair>>
 where
     F: Fn(&[u8]) -> bool,
     FnFilterMap: Fn(&[u8], &[u8]) -> FnFilterMapOutput,
@@ -69,7 +69,7 @@ where
         return Ok(res);
     }
 
-    let raw_kv = serde_wasm_bindgen::from_value::<KV>(
+        let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
         iter.value()
             .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
             .unwrap(),
@@ -80,7 +80,7 @@ where
         skip_index += 1;
         if skip_index > skip {
             if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
-                res.push(KV {
+                    res.push(KVPair {
                     key: new_key,
                     value: raw_kv.value,
                 });
@@ -103,7 +103,7 @@ where
             return Ok(res);
         }
 
-        let raw_kv = serde_wasm_bindgen::from_value::<KV>(
+    let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
             iter.value()
                 .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
                 .unwrap(),
@@ -113,7 +113,7 @@ where
             skip_index += 1;
             if skip_index > skip {
                 if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
-                    res.push(KV {
+                res.push(KVPair {
                         key: new_key,
                         value: raw_kv.value,
                     });
@@ -247,7 +247,7 @@ where
                         .map_err(|e| anyhow!("Failed to send get request: {:?}", e))?
                         .await
                         .map_err(|e| anyhow!("Failed to fetch value: {:?}", e))?
-                        .map(|v| serde_wasm_bindgen::from_value::<KV>(v).unwrap().value),
+                        .map(|v| serde_wasm_bindgen::from_value::<KVPair>(v).unwrap().value),
                 );
             }
             DbCommandResponse::Read { values: res }
