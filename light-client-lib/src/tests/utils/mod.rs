@@ -1,5 +1,6 @@
 use env_logger::{Builder, Target};
 use log::LevelFilter;
+use tempfile::TempDir;
 
 mod chain;
 mod network_context;
@@ -19,7 +20,11 @@ pub(crate) fn setup() {
     println!();
 }
 
-pub(crate) fn new_storage(prefix: &str) -> Storage {
+/// Create a new storage for testing.
+/// Returns both the Storage and the TempDir to ensure the temp directory
+/// lives as long as the storage is being used.
+pub(crate) fn new_storage(prefix: &str) -> (Storage, TempDir) {
     let tmp_dir = tempfile::Builder::new().prefix(prefix).tempdir().unwrap();
-    Storage::new(tmp_dir.path().to_str().unwrap())
+    let storage = Storage::new(tmp_dir.path().to_str().unwrap());
+    (storage, tmp_dir)
 }
