@@ -15,10 +15,14 @@ use ckb_types::{
     H256,
 };
 
+mod backend;
 mod db;
 mod storage_trait;
 
-// Re-export storage trait
+// Re-export storage backend trait (low-level KV operations)
+pub use backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
+
+// Re-export storage trait (high-level business logic)
 pub use storage_trait::LightClientStorage;
 
 // Re-export iterator types from db module

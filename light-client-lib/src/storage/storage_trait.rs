@@ -1,48 +1,27 @@
 // Storage trait - unified interface for all storage backends (RocksDB, SQLite, IndexedDB)
+//
+// This trait builds on top of StorageBackend to provide business logic with default
+// implementations. Storage backends only need to implement StorageBackend.
 
 use super::{
-    BlockNumber, Byte32, CpIndex, HeaderWithExtension, IteratorDirection, KVPair, MatchedBlocks,
+    backend::StorageBackend, BlockNumber, Byte32, CpIndex, HeaderWithExtension, MatchedBlocks,
     ScriptStatus, SetScriptsCommand,
 };
-use crate::error::Result;
 use ckb_types::{
     packed::{Block, Header, Transaction},
     U256,
 };
 
-/// Type alias for the take_while function used in iterator operations
-pub type TakeWhileFn = Box<dyn Fn(&[u8]) -> bool + Send + 'static>;
-
-/// Type alias for the filter_map function used in iterator operations
-pub type FilterMapFn = Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>;
-
-/// Unified storage trait that all backends (RocksDB, SQLite, IndexedDB) must implement
-pub trait LightClientStorage: Send + Sync {
-    // ========== Basic KV operations ==========
-
-    /// Get value by key
-    fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>>;
-
-    /// Put key-value pair
-    fn put(&self, key: Vec<u8>, value: Vec<u8>) -> Result<()>;
-
-    /// Delete key
-    fn delete(&self, key: &[u8]) -> Result<()>;
-
-    // ========== Iterator operations ==========
-
-    /// Collect items using iterator with custom filter and map functions
-    /// This is the core method for implementing get_cells, get_transactions, etc.
-    fn collect_iterator(
-        &self,
-        from_key: Vec<u8>,
-        direction: IteratorDirection,
-        take_while_fn: TakeWhileFn,
-        filter_map_fn: FilterMapFn,
-        limit: usize,
-        skip: usize,
-    ) -> Vec<KVPair>;
-
+/// High-level storage trait that provides business logic
+///
+/// This trait extends `StorageBackend` with higher-level operations.
+/// Most methods have default implementations that use the low-level
+/// `StorageBackend` methods, so backends only need to implement `StorageBackend`.
+///
+/// Methods without default implementations are those that:
+/// 1. Have significantly different implementations across backends
+/// 2. Or are still being migrated to default implementations
+pub trait LightClientStorage: StorageBackend {
     // ========== Filter scripts management ==========
 
     /// Check if filter scripts are empty
@@ -146,4 +125,12 @@ pub trait LightClientStorage: Send + Sync {
 
     /// Update minimum filtered block number
     fn update_min_filtered_block_number(&self, block_number: BlockNumber);
+
+    // ========== Additional methods ==========
+
+    /// Get block hash by number
+    fn get_block_hash(&self, block_number: BlockNumber) -> Option<Byte32>;
+
+    /// Get transaction
+    fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, u32, Transaction)>;
 }

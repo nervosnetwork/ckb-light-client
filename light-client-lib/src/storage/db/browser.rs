@@ -5,6 +5,7 @@ use std::{
     sync::atomic::AtomicBool,
 };
 
+use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::{
     BlockNumber, Byte32, CellType, Script, ScriptStatus, ScriptType, SetScriptsCommand,
 };
@@ -45,6 +46,7 @@ use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::js_sys::{Atomics, Int32Array, SharedArrayBuffer, Uint8Array};
 
 // Enum to handle different filter_map signatures
+#[allow(clippy::type_complexity)]
 enum FilterMapType {
     Single(Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>),
     Pair(Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>),
@@ -165,6 +167,7 @@ impl CommunicationChannel {
 
     /// Executa a database command, retriving the response (or error)
     /// cmd: The command
+    #[allow(clippy::type_complexity)]
     fn dispatch_database_command(
         &self,
         cmd: CommandRequestWithTakeWhileAndFilterMap,
@@ -1002,6 +1005,24 @@ impl Batch {
     }
 }
 
+// Implement BatchWriter trait for Batch
+impl BatchWriter for Batch {
+    fn put(&mut self, key: &[u8], value: &[u8]) {
+        self.add.push(KV {
+            key: key.to_vec(),
+            value: value.to_vec(),
+        });
+    }
+
+    fn delete(&mut self, key: &[u8]) {
+        self.delete.push(key.to_vec());
+    }
+
+    fn commit(self: Box<Self>) -> crate::error::Result<()> {
+        Batch::commit(*self)
+    }
+}
+
 impl Storage {
     #[allow(clippy::type_complexity)]
     pub fn collect_iterator(
@@ -1623,7 +1644,8 @@ impl Storage {
 // Implementation of unified storage trait for IndexedDB
 use super::super::LightClientStorage;
 
-impl LightClientStorage for Storage {
+// Implementation of StorageBackend trait for IndexedDB
+impl StorageBackend for Storage {
     fn get(&self, key: Vec<u8>) -> crate::error::Result<Option<Vec<u8>>> {
         Storage::get(self, key)
     }
@@ -1636,14 +1658,18 @@ impl LightClientStorage for Storage {
         Storage::delete(self, key)
     }
 
+    fn batch(&self) -> Box<dyn BatchWriter> {
+        Box::new(Storage::batch(self))
+    }
+
     fn collect_iterator(
         &self,
         from_key: Vec<u8>,
         direction: IteratorDirection,
-        take_while_fn: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map_fn: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
-        limit: usize,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
         skip: usize,
+        limit: usize,
     ) -> Vec<KVPair> {
         let cursor_direction: CursorDirection = direction.into();
 
@@ -1666,7 +1692,9 @@ impl LightClientStorage for Storage {
             })
             .collect()
     }
+}
 
+impl LightClientStorage for Storage {
     fn is_filter_scripts_empty(&self) -> bool {
         Storage::is_filter_scripts_empty(self)
     }
@@ -1787,5 +1815,18 @@ impl LightClientStorage for Storage {
 
     fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
         Storage::update_min_filtered_block_number(self, block_number)
+    }
+
+    // ========== Additional methods ==========
+
+    fn get_block_hash(&self, block_number: BlockNumber) -> Option<Byte32> {
+        self.get(Key::BlockNumber(block_number).into_vec())
+            .ok()
+            .flatten()
+            .map(|v| Byte32::from_slice(&v).expect("stored block hash"))
+    }
+
+    fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, u32, Transaction)> {
+        Storage::get_transaction(self, tx_hash)
     }
 }

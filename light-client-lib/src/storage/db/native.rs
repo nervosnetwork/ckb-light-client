@@ -1,3 +1,4 @@
+use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::{
     extract_raw_data, parse_matched_blocks, BlockNumber, Byte32, CellIndex, CellType, CpIndex,
     HeaderWithExtension, Key, KeyPrefix, MatchedBlock, MatchedBlocks, OutputIndex, Script,
@@ -533,6 +534,22 @@ impl Batch {
     }
 
     fn commit(self) -> Result<()> {
+        self.db.write(&self.wb)?;
+        Ok(())
+    }
+}
+
+// Implement BatchWriter trait for Batch
+impl BatchWriter for Batch {
+    fn put(&mut self, key: &[u8], value: &[u8]) {
+        self.wb.put(key, value).expect("batch put should be ok");
+    }
+
+    fn delete(&mut self, key: &[u8]) {
+        self.wb.delete(key).expect("batch delete should be ok");
+    }
+
+    fn commit(self: Box<Self>) -> Result<()> {
         self.db.write(&self.wb)?;
         Ok(())
     }
@@ -1203,32 +1220,32 @@ impl StorageIterator for Storage {
     }
 }
 
-// Implementation of unified storage trait for RocksDB
-impl super::super::storage_trait::LightClientStorage for Storage {
-    // ========== Basic KV operations ==========
-
-    fn get(&self, key: Vec<u8>) -> crate::error::Result<Option<Vec<u8>>> {
+// Implementation of StorageBackend trait for RocksDB
+impl StorageBackend for Storage {
+    fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         Storage::get(self, key.as_slice())
     }
 
-    fn put(&self, key: Vec<u8>, value: Vec<u8>) -> crate::error::Result<()> {
+    fn put(&self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
         Storage::put(self, key, value)
     }
 
-    fn delete(&self, key: &[u8]) -> crate::error::Result<()> {
+    fn delete(&self, key: &[u8]) -> Result<()> {
         self.db.delete(key).map_err(Into::into)
     }
 
-    // ========== Iterator operations ==========
+    fn batch(&self) -> Box<dyn BatchWriter> {
+        Box::new(Storage::batch(self))
+    }
 
     fn collect_iterator(
         &self,
         from_key: Vec<u8>,
         direction: IteratorDirection,
-        take_while_fn: super::super::storage_trait::TakeWhileFn,
-        filter_map_fn: super::super::storage_trait::FilterMapFn,
-        limit: usize,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
         skip: usize,
+        limit: usize,
     ) -> Vec<KVPair> {
         let rocksdb_direction: Direction = direction.into();
         let mode = IteratorMode::From(from_key.as_ref(), rocksdb_direction);
@@ -1247,7 +1264,10 @@ impl super::super::storage_trait::LightClientStorage for Storage {
             .take(limit)
             .collect()
     }
+}
 
+// Implementation of unified storage trait for RocksDB
+impl super::super::storage_trait::LightClientStorage for Storage {
     // ========== Filter scripts management ==========
 
     fn is_filter_scripts_empty(&self) -> bool {
@@ -1378,5 +1398,18 @@ impl super::super::storage_trait::LightClientStorage for Storage {
 
     fn update_min_filtered_block_number(&self, block_number: BlockNumber) {
         Storage::update_min_filtered_block_number(self, block_number)
+    }
+
+    // ========== Additional methods ==========
+
+    fn get_block_hash(&self, block_number: BlockNumber) -> Option<Byte32> {
+        self.get(Key::BlockNumber(block_number).into_vec())
+            .ok()
+            .flatten()
+            .map(|v| Byte32::from_slice(&v).expect("stored block hash"))
+    }
+
+    fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, u32, Transaction)> {
+        Storage::get_transaction(self, tx_hash)
     }
 }
