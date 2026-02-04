@@ -25,14 +25,7 @@ use crate::error::{Error, Result};
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::js_sys::{Atomics, Int32Array, SharedArrayBuffer, Uint8Array};
 
-// Enum to handle different filter_map signatures
 #[allow(clippy::type_complexity)]
-#[allow(dead_code)]
-enum FilterMapType {
-    Single(Box<dyn Fn(&[u8]) -> Option<Vec<u8>> + Send + 'static>),
-    Pair(Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>),
-}
-
 enum CommandRequestWithTakeWhileAndFilterMap {
     Read {
         keys: Vec<Vec<u8>>,
@@ -43,12 +36,11 @@ enum CommandRequestWithTakeWhileAndFilterMap {
     Delete {
         keys: Vec<Vec<u8>>,
     },
-    #[allow(clippy::type_complexity)]
     Iterator {
         start_key_bound: Vec<u8>,
         direction: IteratorDirection,
-        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        take_while: TakeWhileFn,
+        filter_map: FilterMapFn,
         limit: usize,
         skip: usize,
     },
@@ -139,15 +131,14 @@ impl CommunicationChannel {
 
     /// Executa a database command, retriving the response (or error)
     /// cmd: The command
-    #[allow(clippy::type_complexity)]
     fn dispatch_database_command(
         &self,
         cmd: CommandRequestWithTakeWhileAndFilterMap,
     ) -> anyhow::Result<DbCommandResponse> {
         let (new_cmd, take_while, filter_map): (
             DbCommandRequest,
-            Option<Box<dyn Fn(&[u8]) -> bool + Send + 'static>>,
-            Option<FilterMapType>,
+            Option<TakeWhileFn>,
+            Option<FilterMapFn>,
         ) = match cmd {
             CommandRequestWithTakeWhileAndFilterMap::Read { keys } => {
                 (DbCommandRequest::Read { keys }, None, None)
@@ -173,7 +164,7 @@ impl CommunicationChannel {
                     skip,
                 },
                 Some(take_while),
-                Some(FilterMapType::Pair(filter_map)),
+                Some(filter_map),
             ),
         };
         debug!("Dispatching database command: {:?}", new_cmd);
@@ -218,23 +209,10 @@ impl CommunicationChannel {
                     continue;
                 }
                 OutputCommand::RequestFilterMap => {
-                    // Handle both single-arg and two-arg filter_map
-                    let result = match filter_map.as_ref().unwrap() {
-                        FilterMapType::Single(f) => {
-                            // IteratorKey case: read just the key
-                            let arg =
-                                read_command_payload::<Vec<u8>>(output_i32_arr, output_u8_arr)?;
-                            f(&arg)
-                        }
-                        FilterMapType::Pair(f) => {
-                            // Iterator case: read (key, value) tuple
-                            let (key, value) = read_command_payload::<(Vec<u8>, Vec<u8>)>(
-                                output_i32_arr,
-                                output_u8_arr,
-                            )?;
-                            f(&key, &value)
-                        }
-                    };
+                    let f = filter_map.as_ref().unwrap();
+                    let (key, value) =
+                        read_command_payload::<(Vec<u8>, Vec<u8>)>(output_i32_arr, output_u8_arr)?;
+                    let result = f(&key, &value);
 
                     log::trace!("Received filter_map request, result {:?}", result);
                     write_command_with_payload(
@@ -311,13 +289,12 @@ impl Storage {
         }
     }
 
-    #[allow(clippy::type_complexity)]
     fn collect_iterator(
         &self,
         start_key_bound: Vec<u8>,
         direction: IteratorDirection,
-        take_while: Box<dyn Fn(&[u8]) -> bool + Send + 'static>,
-        filter_map: Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'static>,
+        take_while: TakeWhileFn,
+        filter_map: FilterMapFn,
         limit: usize,
         skip: usize,
     ) -> Vec<KVPair> {

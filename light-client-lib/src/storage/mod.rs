@@ -102,13 +102,11 @@ pub enum ScriptType {
     Type,
 }
 
-#[allow(dead_code)]
 struct WrappedBlockView<'a> {
     inner: &'a BlockView,
     index: HashMap<Byte32, usize>,
 }
 
-#[allow(dead_code)]
 impl<'a> WrappedBlockView<'a> {
     fn new(inner: &'a BlockView) -> Self {
         let index = inner
