@@ -11,9 +11,13 @@ pub enum Error {
     #[error("runtime error: {0}")]
     Runtime(String),
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(target_arch = "wasm32"), feature = "rocksdb"))]
     #[error("db error: {0}")]
     Db(#[from] rocksdb::Error),
+
+    #[cfg(all(not(target_arch = "wasm32"), feature = "sqlite"))]
+    #[error("db error: {0}")]
+    Sqlite(#[from] rusqlite::Error),
 
     #[cfg(target_arch = "wasm32")]
     #[error("db error: {0}")]

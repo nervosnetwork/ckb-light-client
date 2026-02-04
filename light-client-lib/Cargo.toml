@@ -12,8 +12,9 @@ repository = "https://github.com/nervosnetwork/ckb-light-client"
 crate-type = ["cdylib", "rlib"]
 
 [features]
-default = []
+default = ["rocksdb"]
 sqlite = ["rusqlite"]
+rocksdb = ["dep:rocksdb"]
 
 [dependencies]
 ckb-app-config = "1"
@@ -56,7 +57,7 @@ bincode = "1.3"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
     "snappy",
-], default-features = false }
+], default-features = false, optional = true }
 rusqlite = { version = "0.32", optional = true, features = ["bundled"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

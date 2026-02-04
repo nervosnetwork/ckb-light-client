@@ -1,6 +1,6 @@
 //! Unified iterator types for different storage backends (RocksDB, IndexedDB, SQLite)
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "rocksdb"))]
 use rocksdb::Direction;
 
 // On wasm32, re-export IteratorDirection and KVPair from db-common to avoid duplication
@@ -15,7 +15,7 @@ pub enum IteratorDirection {
     Reverse,
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(all(not(target_arch = "wasm32"), feature = "rocksdb"))]
 impl From<IteratorDirection> for Direction {
     fn from(dir: IteratorDirection) -> Self {
         match dir {

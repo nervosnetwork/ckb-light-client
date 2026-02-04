@@ -19,7 +19,7 @@ ckb-types = "1"
 ckb-traits = "1"
 ckb-systemtime = "1"
 
-ckb-light-client-lib = { path = "../light-client-lib" }
+ckb-light-client-lib = { path = "../light-client-lib", default-features = false }
 clap = { version = "4", features = ["cargo"] }
 log = "0.4"
 ctrlc = { version = "3.2.1", features = ["termination"] }
@@ -29,7 +29,7 @@ jsonrpc-http-server = "18.0"
 jsonrpc-server-utils = "18.0"
 rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
     "snappy",
-], default-features = false }
+], default-features = false, optional = true }
 env_logger = "0.11"
 anyhow = "1.0.56"
 
@@ -46,10 +46,11 @@ serde_json = "1.0"
 tempfile = "3.0"
 
 [features]
-default = []
-portable = ["rocksdb/portable"]
-march-native = ["rocksdb/march-native"]
+default = ["rocksdb", "ckb-light-client-lib/rocksdb"]
+portable = ["rocksdb", "rocksdb/portable", "ckb-light-client-lib/rocksdb"]
+march-native = ["rocksdb", "rocksdb/march-native", "ckb-light-client-lib/rocksdb"]
 sqlite = ["ckb-light-client-lib/sqlite"]
+rocksdb = ["dep:rocksdb"]
 
 # [profile.release]
 # overflow-checks = true
