@@ -1023,11 +1023,14 @@ impl StorageIterator for Storage {
 // Implementation of StorageBackend trait for RocksDB
 impl StorageBackend for Storage {
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
-        Storage::get(self, key.as_slice())
+        self.db
+            .get(key.as_slice())
+            .map(|v| v.map(|vi| vi.to_vec()))
+            .map_err(Into::into)
     }
 
     fn put(&self, key: Vec<u8>, value: Vec<u8>) -> Result<()> {
-        Storage::put(self, key, value)
+        self.db.put(key, value).map_err(Into::into)
     }
 
     fn delete(&self, key: &[u8]) -> Result<()> {

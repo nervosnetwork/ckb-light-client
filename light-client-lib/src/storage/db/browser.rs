@@ -1460,15 +1460,34 @@ use super::super::LightClientStorage;
 // Implementation of StorageBackend trait for IndexedDB
 impl StorageBackend for Storage {
     fn get(&self, key: Vec<u8>) -> crate::error::Result<Option<Vec<u8>>> {
-        Storage::get(self, key)
+        let values = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Read {
+                keys: vec![key],
+            })
+            .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
+        match values {
+            DbCommandResponse::Read { values } => Ok(values.into_iter().last().unwrap()),
+            _ => unreachable!(),
+        }
     }
 
     fn put(&self, key: Vec<u8>, value: Vec<u8>) -> crate::error::Result<()> {
-        Storage::put(self, key, value)
+        self.channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Put {
+                kvs: vec![KV { key, value }],
+            })
+            .map(|_| ())
+            .map_err(|e| Error::Indexdb(format!("{:?}", e)))
     }
 
     fn delete(&self, key: &[u8]) -> crate::error::Result<()> {
-        Storage::delete(self, key)
+        self.channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete {
+                keys: vec![key.to_vec()],
+            })
+            .map(|_| ())
+            .map_err(|e| Error::Indexdb(format!("{:?}", e)))
     }
 
     fn batch(&self) -> Box<dyn BatchWriter> {
