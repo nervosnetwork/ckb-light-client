@@ -22,7 +22,6 @@ use ckb_types::{
 };
 use rusqlite::{Connection, OpenFlags};
 use std::{
-    collections::HashSet,
     path::Path,
     sync::{Arc, Mutex},
 };
@@ -674,50 +673,6 @@ impl Storage {
         batch.commit().expect("batch commit should be ok");
     }
 
-    pub fn filter_block(&self, block: packed::Block) {
-        let scripts: HashSet<(Script, ScriptType)> = self
-            .get_filter_scripts()
-            .into_iter()
-            .map(|ss| (ss.script, ss.script_type))
-            .collect();
-
-        let block_number: BlockNumber = block.header().raw().number().unpack();
-        let mut batch = self.batch();
-
-        for (tx_index, tx) in block.transactions().into_iter().enumerate() {
-            let tx_index = tx_index as u32;
-            let tx_hash = tx.calc_tx_hash();
-
-            // Store transaction
-            let value: Vec<u8> = Value::Transaction(block_number, tx_index, &tx).into();
-            batch.put(Key::TxHash(&tx_hash).into_vec(), value);
-
-            // Process outputs
-            for (output_index, output) in tx.raw().outputs().into_iter().enumerate() {
-                let output_index = output_index as u32;
-
-                let lock_script = output.lock();
-                if scripts.contains(&(lock_script.clone(), ScriptType::Lock)) {
-                    let key =
-                        Key::CellLockScript(&lock_script, block_number, tx_index, output_index)
-                            .into_vec();
-                    batch.put(key, tx_hash.as_slice());
-                }
-
-                if let Some(type_script) = output.type_().to_opt() {
-                    if scripts.contains(&(type_script.clone(), ScriptType::Type)) {
-                        let key =
-                            Key::CellTypeScript(&type_script, block_number, tx_index, output_index)
-                                .into_vec();
-                        batch.put(key, tx_hash.as_slice());
-                    }
-                }
-            }
-        }
-
-        batch.commit().expect("batch commit should be ok");
-    }
-
     pub fn get_transaction_with_header(&self, tx_hash: &Byte32) -> Option<(Transaction, Header)> {
         let value = self.get(Key::TxHash(tx_hash).into_vec()).ok()??;
 
@@ -1079,10 +1034,6 @@ impl super::super::storage_trait::LightClientStorage for Storage {
 
     fn add_fetched_tx(&self, tx: &Transaction, hwe: &HeaderWithExtension) {
         Storage::add_fetched_tx(self, tx, hwe)
-    }
-
-    fn filter_block(&self, block: Block) {
-        Storage::filter_block(self, block)
     }
 
     fn rollback_to_block(&self, to_number: BlockNumber) {

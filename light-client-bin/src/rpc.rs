@@ -103,12 +103,36 @@ pub struct BlockFilterRpcImpl {
     chain_service: LightClientChainService,
 }
 
+impl BlockFilterRpcImpl {
+    pub fn new(
+        cell_service: LightClientService<Storage>,
+        chain_service: LightClientChainService,
+    ) -> Self {
+        Self {
+            cell_service,
+            chain_service,
+        }
+    }
+}
+
 pub struct TransactionRpcImpl {
     service: LightClientChainService,
 }
 
+impl TransactionRpcImpl {
+    pub fn new(service: LightClientChainService) -> Self {
+        Self { service }
+    }
+}
+
 pub struct ChainRpcImpl {
     service: LightClientChainService,
+}
+
+impl ChainRpcImpl {
+    pub fn new(service: LightClientChainService) -> Self {
+        Self { service }
+    }
 }
 
 pub struct NetRpcImpl {
@@ -244,16 +268,9 @@ impl Service {
         let chain_service = LightClientChainService::new(swc.clone(), Arc::clone(&consensus));
         let cell_service = LightClientService::new(Arc::new(storage));
 
-        let block_filter_rpc_impl = BlockFilterRpcImpl {
-            cell_service,
-            chain_service: chain_service.clone(),
-        };
-        let chain_rpc_impl = ChainRpcImpl {
-            service: chain_service.clone(),
-        };
-        let transaction_rpc_impl = TransactionRpcImpl {
-            service: chain_service,
-        };
+        let block_filter_rpc_impl = BlockFilterRpcImpl::new(cell_service, chain_service.clone());
+        let chain_rpc_impl = ChainRpcImpl::new(chain_service.clone());
+        let transaction_rpc_impl = TransactionRpcImpl::new(chain_service);
         let net_rpc_impl = NetRpcImpl {
             service: LightClientNetworkService::new(network_controller, peers),
         };

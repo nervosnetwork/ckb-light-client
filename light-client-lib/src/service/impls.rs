@@ -153,8 +153,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 }
             }
 
-            // Return the key to indicate this item passed all filters
-            Some(key.to_vec())
+            // Return the original value (tx_hash) to indicate this item passed all filters
+            Some(value.to_vec())
         });
 
         let results = self.storage.collect_iterator(
@@ -162,8 +162,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             iter_direction,
             take_while_fn,
             filter_map_fn,
-            limit,
             skip,
+            limit,
         );
 
         // Convert results to Cell objects
@@ -316,7 +316,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 }
             }
 
-            Some(key.to_vec())
+            Some(value.to_vec())
         });
 
         let results = self.storage.collect_iterator(
@@ -324,8 +324,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             iter_direction,
             take_while_fn,
             filter_map_fn,
-            usize::MAX, // Don't limit at iterator level for grouping
             skip,
+            usize::MAX, // Don't limit at iterator level for grouping
         );
 
         if search_key.group_by_transaction.unwrap_or_default() {
@@ -554,8 +554,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             iter_direction,
             take_while_fn,
             filter_map_fn,
-            usize::MAX,
             skip,
+            usize::MAX,
         );
 
         let capacity: u64 = results

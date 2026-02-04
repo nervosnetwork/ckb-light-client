@@ -3,12 +3,16 @@
 // This trait builds on top of StorageBackend to provide business logic with default
 // implementations. Storage backends only need to implement StorageBackend.
 
+use std::collections::{HashMap, HashSet};
+
 use super::{
-    backend::StorageBackend, BlockNumber, Byte32, CpIndex, HeaderWithExtension, MatchedBlocks,
-    ScriptStatus, SetScriptsCommand,
+    backend::StorageBackend, BlockNumber, Byte32, CellIndex, CellType, CpIndex,
+    HeaderWithExtension, Key, MatchedBlocks, OutputIndex, ScriptStatus, ScriptType,
+    SetScriptsCommand, TxIndex, Value,
 };
 use ckb_types::{
-    packed::{Block, Header, Transaction},
+    packed::{self, Block, Header, Transaction},
+    prelude::*,
     U256,
 };
 
@@ -93,7 +97,186 @@ pub trait LightClientStorage: StorageBackend {
     fn add_fetched_tx(&self, tx: &Transaction, hwe: &HeaderWithExtension);
 
     /// Filter and store block data
-    fn filter_block(&self, block: Block);
+    ///
+    /// This method scans through all transactions in a block, matching them against
+    /// the registered filter scripts. When matches are found, it:
+    /// - Deletes spent UTXOs (cells consumed as inputs)
+    /// - Creates new UTXO entries (cells created as outputs)
+    /// - Records transaction history for matched scripts
+    /// - Stores the matched transactions
+    fn filter_block(&self, block: Block) {
+        let scripts: HashSet<(packed::Script, ScriptType)> = self
+            .get_filter_scripts()
+            .into_iter()
+            .map(|ss| (ss.script, ss.script_type))
+            .collect();
+        let block_number: BlockNumber = block.header().raw().number().unpack();
+        let mut filter_matched = false;
+        let mut batch = self.batch();
+        let mut txs: HashMap<Byte32, (u32, Transaction)> = HashMap::new();
+
+        for (tx_index, tx) in block.transactions().into_iter().enumerate() {
+            // Process inputs - delete spent UTXOs and record input history
+            for (input_index, input) in tx.raw().inputs().into_iter().enumerate() {
+                let previous_tx_hash = input.previous_output().tx_hash();
+                if let Some((generated_by_block_number, generated_by_tx_index, previous_tx)) =
+                    self.get_transaction(&previous_tx_hash).or(txs
+                        .get(&previous_tx_hash)
+                        .map(|(tx_idx, tx)| (block_number, *tx_idx, tx.clone())))
+                {
+                    let previous_output_index: u32 = input.previous_output().index().unpack();
+                    if let Some(previous_output) = previous_tx
+                        .raw()
+                        .outputs()
+                        .get(previous_output_index as usize)
+                    {
+                        // Check lock script
+                        let lock_script = previous_output.lock();
+                        if scripts.contains(&(lock_script.clone(), ScriptType::Lock)) {
+                            filter_matched = true;
+                            // Delete UTXO
+                            let key = Key::CellLockScript(
+                                &lock_script,
+                                generated_by_block_number,
+                                generated_by_tx_index,
+                                previous_output_index as OutputIndex,
+                            )
+                            .into_vec();
+                            batch.delete(&key);
+                            // Insert tx history
+                            let key = Key::TxLockScript(
+                                &lock_script,
+                                block_number,
+                                tx_index as TxIndex,
+                                input_index as CellIndex,
+                                CellType::Input,
+                            )
+                            .into_vec();
+                            let tx_hash = tx.calc_tx_hash();
+                            batch.put(&key, tx_hash.as_slice());
+                            // Insert tx
+                            let key = Key::TxHash(&tx_hash).into_vec();
+                            let value: Vec<u8> =
+                                Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
+                            batch.put(&key, &value);
+                        }
+                        // Check type script
+                        if let Some(type_script) = previous_output.type_().to_opt() {
+                            if scripts.contains(&(type_script.clone(), ScriptType::Type)) {
+                                filter_matched = true;
+                                // Delete UTXO
+                                let key = Key::CellTypeScript(
+                                    &type_script,
+                                    generated_by_block_number,
+                                    generated_by_tx_index,
+                                    previous_output_index as OutputIndex,
+                                )
+                                .into_vec();
+                                batch.delete(&key);
+                                // Insert tx history
+                                let key = Key::TxTypeScript(
+                                    &type_script,
+                                    block_number,
+                                    tx_index as TxIndex,
+                                    input_index as CellIndex,
+                                    CellType::Input,
+                                )
+                                .into_vec();
+                                let tx_hash = tx.calc_tx_hash();
+                                batch.put(&key, tx_hash.as_slice());
+                                // Insert tx
+                                let key = Key::TxHash(&tx_hash).into_vec();
+                                let value: Vec<u8> =
+                                    Value::Transaction(block_number, tx_index as TxIndex, &tx)
+                                        .into();
+                                batch.put(&key, &value);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Process outputs - create new UTXOs and record output history
+            for (output_index, output) in tx.raw().outputs().into_iter().enumerate() {
+                let lock_script = output.lock();
+                if scripts.contains(&(lock_script.clone(), ScriptType::Lock)) {
+                    filter_matched = true;
+                    let tx_hash = tx.calc_tx_hash();
+                    // Insert UTXO
+                    let key = Key::CellLockScript(
+                        &lock_script,
+                        block_number,
+                        tx_index as TxIndex,
+                        output_index as OutputIndex,
+                    )
+                    .into_vec();
+                    batch.put(&key, tx_hash.as_slice());
+                    // Insert tx history
+                    let key = Key::TxLockScript(
+                        &lock_script,
+                        block_number,
+                        tx_index as TxIndex,
+                        output_index as CellIndex,
+                        CellType::Output,
+                    )
+                    .into_vec();
+                    batch.put(&key, tx_hash.as_slice());
+                    // Insert tx
+                    let key = Key::TxHash(&tx_hash).into_vec();
+                    let value: Vec<u8> =
+                        Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
+                    batch.put(&key, &value);
+                }
+                if let Some(type_script) = output.type_().to_opt() {
+                    if scripts.contains(&(type_script.clone(), ScriptType::Type)) {
+                        filter_matched = true;
+                        let tx_hash = tx.calc_tx_hash();
+                        // Insert UTXO
+                        let key = Key::CellTypeScript(
+                            &type_script,
+                            block_number,
+                            tx_index as TxIndex,
+                            output_index as OutputIndex,
+                        )
+                        .into_vec();
+                        batch.put(&key, tx_hash.as_slice());
+                        // Insert tx history
+                        let key = Key::TxTypeScript(
+                            &type_script,
+                            block_number,
+                            tx_index as TxIndex,
+                            output_index as CellIndex,
+                            CellType::Output,
+                        )
+                        .into_vec();
+                        batch.put(&key, tx_hash.as_slice());
+                        // Insert tx
+                        let key = Key::TxHash(&tx_hash).into_vec();
+                        let value: Vec<u8> =
+                            Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
+                        batch.put(&key, &value);
+                    }
+                }
+            }
+
+            txs.insert(tx.calc_tx_hash(), (tx_index as u32, tx));
+        }
+
+        // If any transaction matched, store the block header
+        if filter_matched {
+            let block_hash = block.calc_header_hash();
+            let hwe = HeaderWithExtension {
+                header: block.header(),
+                extension: block.extension(),
+            };
+            batch.put(&Key::BlockHash(&block_hash).into_vec(), &hwe.to_vec());
+            batch.put(
+                &Key::BlockNumber(block_number).into_vec(),
+                block_hash.as_slice(),
+            );
+        }
+        batch.commit().expect("batch commit should be ok");
+    }
 
     /// Rollback to specified block number
     fn rollback_to_block(&self, to_number: BlockNumber);

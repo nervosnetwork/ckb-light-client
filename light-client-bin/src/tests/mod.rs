@@ -3,10 +3,12 @@ mod service;
 use ckb_chain_spec::{consensus::Consensus, ChainSpec};
 use ckb_light_client_lib::{
     protocols::{Peers, CHECK_POINT_INTERVAL},
-    storage::Storage,
+    service::{LightClientChainService, LightClientService},
+    storage::{Storage, StorageWithChainData},
 };
 use ckb_resource::Resource;
 
+use crate::rpc::{BlockFilterRpcImpl, ChainRpcImpl, TransactionRpcImpl};
 use std::sync::Arc;
 
 pub(crate) fn new_storage(prefix: &str) -> Storage {
@@ -57,4 +59,35 @@ impl MockChain {
     pub(crate) fn consensus(&self) -> &Consensus {
         &self.consensus
     }
+}
+
+/// Create a BlockFilterRpcImpl from storage and peers
+pub(crate) fn create_block_filter_rpc(storage: Storage, peers: Arc<Peers>) -> BlockFilterRpcImpl {
+    let swc = StorageWithChainData::new(storage.clone(), peers, Default::default());
+    let consensus = Arc::new(Consensus::default());
+    let chain_service = LightClientChainService::new(swc, consensus);
+    let cell_service = LightClientService::new(Arc::new(storage));
+    BlockFilterRpcImpl::new(cell_service, chain_service)
+}
+
+/// Create a ChainRpcImpl from storage and peers
+pub(crate) fn create_chain_rpc(
+    storage: Storage,
+    peers: Arc<Peers>,
+    consensus: Arc<Consensus>,
+) -> ChainRpcImpl {
+    let swc = StorageWithChainData::new(storage, peers, Default::default());
+    let service = LightClientChainService::new(swc, consensus);
+    ChainRpcImpl::new(service)
+}
+
+/// Create a TransactionRpcImpl from storage and peers
+pub(crate) fn create_transaction_rpc(
+    storage: Storage,
+    peers: Arc<Peers>,
+    consensus: Arc<Consensus>,
+) -> TransactionRpcImpl {
+    let swc = StorageWithChainData::new(storage, peers, Default::default());
+    let service = LightClientChainService::new(swc, consensus);
+    TransactionRpcImpl::new(service)
 }
