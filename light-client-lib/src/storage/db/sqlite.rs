@@ -195,29 +195,43 @@ impl StorageBackend for Storage {
         skip: usize,
         limit: usize,
     ) -> Vec<KVPair> {
-        let conn = self.conn.lock().unwrap();
+        // First, collect all matching rows while holding the lock.
+        // This is necessary because filter_map_fn may call storage.get() which needs the lock,
+        // and std::sync::Mutex is not reentrant. By collecting rows first and releasing the lock,
+        // we avoid deadlock when filter_map_fn tries to acquire the lock again.
+        let rows: Vec<(Vec<u8>, Vec<u8>)> = {
+            let conn = self.conn.lock().unwrap();
 
-        let (order_clause, comparison) = match direction {
-            IteratorDirection::Forward => ("ASC", ">="),
-            IteratorDirection::Reverse => ("DESC", "<="),
+            let (order_clause, comparison) = match direction {
+                IteratorDirection::Forward => ("ASC", ">="),
+                IteratorDirection::Reverse => ("DESC", "<="),
+            };
+
+            let query = format!(
+                "SELECT key, value FROM kv_store WHERE key {} ? ORDER BY key {}",
+                comparison, order_clause
+            );
+
+            let mut stmt = conn.prepare(&query).expect("prepare query");
+
+            let query_rows = stmt
+                .query_map(rusqlite::params![&from_key], |row| {
+                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+                })
+                .expect("query rows");
+
+            // Collect rows that pass the take_while condition.
+            // We need to eagerly collect because the lock must be released before filter_map_fn runs.
+            query_rows
+                .filter_map(|r| r.ok())
+                .skip(skip)
+                .take_while(|(key, _)| take_while_fn(key))
+                .collect()
         };
+        // Lock is released here
 
-        let query = format!(
-            "SELECT key, value FROM kv_store WHERE key {} ? ORDER BY key {}",
-            comparison, order_clause
-        );
-
-        let mut stmt = conn.prepare(&query).expect("prepare query");
-
-        let rows = stmt
-            .query_map(rusqlite::params![&from_key], |row| {
-                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-            })
-            .expect("query rows");
-
-        rows.filter_map(|r| r.ok())
-            .skip(skip)
-            .take_while(|(key, _)| take_while_fn(key))
+        // Now process rows with filter_map_fn (which may call storage.get())
+        rows.into_iter()
             .filter_map(|(key, value)| {
                 filter_map_fn(&key, &value).map(|transformed_value| KVPair {
                     key,
