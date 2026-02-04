@@ -25,7 +25,6 @@ use crate::error::{Error, Result};
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::js_sys::{Atomics, Int32Array, SharedArrayBuffer, Uint8Array};
 
-#[allow(clippy::type_complexity)]
 enum CommandRequestWithTakeWhileAndFilterMap {
     Read {
         keys: Vec<Vec<u8>>,
