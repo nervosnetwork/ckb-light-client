@@ -25,26 +25,9 @@ impl From<IteratorDirection> for Direction {
     }
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-impl From<Direction> for IteratorDirection {
-    fn from(dir: Direction) -> Self {
-        match dir {
-            Direction::Forward => IteratorDirection::Forward,
-            Direction::Reverse => IteratorDirection::Reverse,
-        }
-    }
-}
-
 /// Key-Value pair returned by the iterator
 #[cfg(not(target_arch = "wasm32"))]
 pub struct KVPair {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-impl From<(Vec<u8>, Vec<u8>)> for KVPair {
-    fn from((key, value): (Vec<u8>, Vec<u8>)) -> Self {
-        KVPair { key, value }
-    }
 }
