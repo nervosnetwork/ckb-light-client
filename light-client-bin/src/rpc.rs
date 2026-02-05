@@ -23,6 +23,7 @@ use ckb_light_client_lib::{
 };
 
 use ckb_chain_spec::consensus::Consensus;
+use ckb_constant::hardfork::{mainnet, testnet};
 use ckb_jsonrpc_types::{
     BlockView, EstimateCycles, HeaderView, JsonBytes, NodeAddress, RemoteNodeProtocol, Transaction,
     Uint32,
@@ -804,13 +805,32 @@ impl NetRpc for NetRpcImpl {
 
 impl TransactionRpc for TransactionRpcImpl {
     fn send_transaction(&self, tx: Transaction) -> Result<H256> {
+        // Check sync status: reject if local tip hasn't passed the latest hardfork activation epoch
+        let local_tip_header = self.swc.storage().get_last_state().1.into_view();
+        let local_tip_epoch = local_tip_header.epoch().number();
+
+        // Determine the required hardfork epoch based on network
+        let required_hardfork_epoch = match self.consensus.id.as_str() {
+            mainnet::CHAIN_SPEC_NAME => mainnet::CKB2023_START_EPOCH,
+            testnet::CHAIN_SPEC_NAME => testnet::CKB2023_START_EPOCH,
+            _ => 0, // For other networks (dev/integration tests), no hardfork check
+        };
+
+        if local_tip_epoch < required_hardfork_epoch {
+            return Err(Error::invalid_params(format!(
+                "light client is not synced past hardfork: local tip epoch {} < required hardfork epoch {}",
+                local_tip_epoch,
+                required_hardfork_epoch
+            )));
+        }
+
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
         let cycles = verify_tx(
             tx.clone(),
             &self.swc,
             Arc::clone(&self.consensus),
-            &self.swc.storage().get_last_state().1.into_view(),
+            &local_tip_header,
         )
         .map_err(|e| Error::invalid_params(format!("invalid transaction: {:?}", e)))?;
         self.swc
