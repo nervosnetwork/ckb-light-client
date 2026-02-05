@@ -776,6 +776,7 @@ dependencies = [
  "chrono",
  "ckb-async-runtime",
  "ckb-chain-spec",
+ "ckb-constant",
  "ckb-jsonrpc-types",
  "ckb-light-client-lib",
  "ckb-network",

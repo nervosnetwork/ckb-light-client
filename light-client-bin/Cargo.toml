@@ -18,6 +18,7 @@ ckb-jsonrpc-types = "1"
 ckb-types = "1"
 ckb-traits = "1"
 ckb-systemtime = "1"
+ckb-constant = "1"
 
 ckb-light-client-lib = { path = "../light-client-lib" }
 clap = { version = "4", features = ["cargo"] }
