@@ -770,8 +770,11 @@ impl LightClientChainService {
         scripts: Vec<crate::service::ScriptStatus>,
         command: Option<crate::service::SetScriptsCommand>,
     ) {
-        // Both platforms use blocking_write since matched_blocks() returns tokio::sync::RwLock
-        let mut matched_blocks = self.swc.matched_blocks().blocking_write();
+        // Use block_in_place to allow blocking operations within an async runtime context.
+        // This is necessary because set_scripts may be called from RPC handlers running
+        // inside a tokio runtime, where blocking_write() would panic.
+        let mut matched_blocks =
+            tokio::task::block_in_place(|| self.swc.matched_blocks().blocking_write());
 
         let scripts = scripts.into_iter().map(Into::into).collect();
         self.swc
