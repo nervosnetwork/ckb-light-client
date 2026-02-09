@@ -77,10 +77,10 @@ where
 
     if take_while(&raw_kv.key) {
         if !skip_first {
-            if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
+            if let Some(transformed_value) = filter_map(&raw_kv.key, &raw_kv.value).await {
                 res.push(KVPair {
-                    key: new_key,
-                    value: raw_kv.value,
+                    key: raw_kv.key,
+                    value: transformed_value,
                 });
             }
         }
@@ -108,10 +108,10 @@ where
         )
         .unwrap();
         if take_while(&raw_kv.key) {
-            if let Some(new_key) = filter_map(&raw_kv.key, &raw_kv.value).await {
+            if let Some(transformed_value) = filter_map(&raw_kv.key, &raw_kv.value).await {
                 res.push(KVPair {
-                    key: new_key,
-                    value: raw_kv.value,
+                    key: raw_kv.key,
+                    value: transformed_value,
                 });
             }
         } else {
