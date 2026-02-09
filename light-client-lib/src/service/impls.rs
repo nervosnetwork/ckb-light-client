@@ -770,9 +770,14 @@ impl LightClientChainService {
         scripts: Vec<crate::service::ScriptStatus>,
         command: Option<crate::service::SetScriptsCommand>,
     ) {
-        // Use block_in_place to allow blocking operations within an async runtime context.
+        // Platform-specific matched_blocks access
+        // On native, use block_in_place to allow blocking operations within an async runtime context.
         // This is necessary because set_scripts may be called from RPC handlers running
         // inside a tokio runtime, where blocking_write() would panic.
+        // On wasm, blocking_write() can be called directly since it's single-threaded.
+        #[cfg(target_arch = "wasm32")]
+        let mut matched_blocks = self.swc.matched_blocks().blocking_write();
+        #[cfg(not(target_arch = "wasm32"))]
         let mut matched_blocks =
             tokio::task::block_in_place(|| self.swc.matched_blocks().blocking_write());
 
