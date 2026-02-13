@@ -355,19 +355,21 @@ impl BatchWriter for Batch {
     }
 
     fn commit(self) -> Result<()> {
-        if !self.add.is_empty() {
+        // Delete first, then put - this ensures correct "replace" semantics
+        // when the same key appears in both delete and add lists
+        if !self.delete.is_empty() {
             self.comm_arrays
-                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Put {
-                    kvs: self.add,
+                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete {
+                    keys: self.delete,
                 })
                 .map(|_| ())
                 .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
         }
 
-        if !self.delete.is_empty() {
+        if !self.add.is_empty() {
             self.comm_arrays
-                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete {
-                    keys: self.delete,
+                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Put {
+                    kvs: self.add,
                 })
                 .map(|_| ())
                 .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
