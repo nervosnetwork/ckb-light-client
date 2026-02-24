@@ -119,13 +119,18 @@ pub async fn main_loop(log_level: &str) {
                         input_i32_arr.set_index(0, InputCommand::Waiting as i32);
                         result
                     },
-                    |buf, store| {
+                    |buf, value, store| {
                         let buf = buf.to_vec();
+                        let value = value.to_vec();
                         input_i32_arr.set_index(0, InputCommand::Waiting as i32);
-                        log::trace!("Invoking request filter_map with args {:?}", buf);
+                        log::trace!(
+                            "Invoking request filter_map with args key={:?}, value={:?}",
+                            buf,
+                            value
+                        );
                         write_command_with_payload(
                             OutputCommand::RequestFilterMap as i32,
-                            buf,
+                            (buf.clone(), value.clone()),
                             &output_i32_arr,
                             &output_u8_arr,
                         )
@@ -166,7 +171,7 @@ pub async fn main_loop(log_level: &str) {
                                             STORE_NAME,
                                             db_cmd,
                                             |_| panic!("Can't call take while in filter map"),
-                                            |_, _| async {
+                                            |_, _, _| async {
                                                 panic!("Can't call filter map in filter map")
                                             },
                                             Some(store),

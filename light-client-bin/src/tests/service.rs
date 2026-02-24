@@ -21,24 +21,21 @@ use ckb_light_client_lib::{
         FetchStatus, Order, ScriptStatus, ScriptType, SearchKey, SearchKeyFilter,
         SetScriptsCommand, Status, TransactionWithStatus, TxStatus,
     },
-    storage::{self, HeaderWithExtension, StorageWithChainData},
+    storage::{self, HeaderWithExtension, LightClientStorage},
 };
 
 use crate::{
-    rpc::{
-        BlockFilterRpc, BlockFilterRpcImpl, ChainRpc, ChainRpcImpl, TransactionRpc,
-        TransactionRpcImpl,
+    rpc::{BlockFilterRpc, ChainRpc, TransactionRpc},
+    tests::{
+        create_block_filter_rpc, create_chain_rpc, create_peers, create_transaction_rpc,
+        new_storage, MockChain,
     },
-    // tests::prelude::*,
-    // tests::utils::{create_peers, new_storage, MockChain},
-    tests::{create_peers, new_storage, MockChain},
 };
 
 #[test]
 fn rpc() {
-    let storage = new_storage("rpc");
-    let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let (storage, _tmp_dir) = new_storage("rpc");
+    let rpc = create_block_filter_rpc(storage.clone(), create_peers());
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -804,12 +801,11 @@ fn rpc() {
         FetchInfo::new(1111, 0, false, true),
     );
 
-    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
-
-    let rpc = ChainRpcImpl {
-        swc,
-        consensus: Arc::new(Consensus::default()),
-    };
+    let rpc = create_chain_rpc(
+        storage.clone(),
+        Arc::clone(&peers),
+        Arc::new(Consensus::default()),
+    );
     let header = rpc
         .get_header(pre_block.header().hash().unpack())
         .unwrap()
@@ -880,8 +876,7 @@ fn rpc() {
         "rollback should update script filter block number"
     );
 
-    let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let rpc = create_block_filter_rpc(storage.clone(), create_peers());
 
     // test get_cells rpc after rollback
     let cells_page_1 = rpc
@@ -986,12 +981,11 @@ fn rpc() {
         FetchInfo::new(1111, 0, false, true),
     );
 
-    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
-
-    let rpc = TransactionRpcImpl {
-        swc,
-        consensus: Arc::new(Consensus::default()),
-    };
+    let rpc = create_transaction_rpc(
+        storage.clone(),
+        Arc::clone(&peers),
+        Arc::new(Consensus::default()),
+    );
     let fetched_txs: Vec<H256> = [h256!("0xbb11"), h256!("0xbb77"), h256!("0xbb88")]
         .into_iter()
         .map(|header_dep| {
@@ -1068,9 +1062,8 @@ fn rpc() {
 
 #[test]
 fn get_cells_capacity_bug() {
-    let storage = new_storage("get_cells_capacity_bug");
-    let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let (storage, _tmp_dir) = new_storage("get_cells_capacity_bug");
+    let rpc = create_block_filter_rpc(storage.clone(), create_peers());
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -1193,9 +1186,8 @@ fn get_cells_capacity_bug() {
 
 #[test]
 fn get_cells_after_rollback_bug() {
-    let storage = new_storage("get_cells_after_rollback_bug");
-    let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let (storage, _tmp_dir) = new_storage("get_cells_after_rollback_bug");
+    let rpc = create_block_filter_rpc(storage.clone(), create_peers());
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -1386,10 +1378,9 @@ fn get_cells_after_rollback_bug() {
 
 #[test]
 fn test_set_scripts_clear_matched_blocks() {
-    let storage = new_storage("set-scripts-clear-matched-blocks");
+    let (storage, _tmp_dir) = new_storage("set-scripts-clear-matched-blocks");
     let peers = create_peers();
-    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let rpc = create_block_filter_rpc(storage.clone(), Arc::clone(&peers));
 
     storage.update_min_filtered_block_number(1234);
     storage.add_matched_blocks(2233, 200, vec![(H256(rand::random()).pack(), false)]);
@@ -1436,10 +1427,9 @@ fn test_set_scripts_clear_matched_blocks() {
 
 #[test]
 fn test_set_scripts_command() {
-    let storage = new_storage("set-scripts-command");
+    let (storage, _tmp_dir) = new_storage("set-scripts-command");
     let peers = create_peers();
-    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let rpc = create_block_filter_rpc(storage.clone(), Arc::clone(&peers));
 
     rpc.set_scripts(
         vec![
@@ -1523,10 +1513,9 @@ fn test_set_scripts_command() {
 
 #[test]
 fn test_set_scripts_partial_min_filtered_block_number_bug() {
-    let storage = new_storage("set_scripts_partial_min_filtered_block_number_bug");
+    let (storage, _tmp_dir) = new_storage("set_scripts_partial_min_filtered_block_number_bug");
     let peers = create_peers();
-    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let rpc = create_block_filter_rpc(storage.clone(), Arc::clone(&peers));
 
     storage.update_min_filtered_block_number(42);
     rpc.set_scripts(
@@ -1573,10 +1562,9 @@ fn test_set_scripts_partial_min_filtered_block_number_bug() {
 
 #[test]
 fn test_set_scripts_delete_min_filtered_block_number_bug() {
-    let storage = new_storage("set_scripts_delete_min_filtered_block_number_bug");
+    let (storage, _tmp_dir) = new_storage("set_scripts_delete_min_filtered_block_number_bug");
     let peers = create_peers();
-    let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let rpc = create_block_filter_rpc(storage.clone(), Arc::clone(&peers));
 
     storage.update_min_filtered_block_number(42);
     rpc.set_scripts(
@@ -1620,9 +1608,8 @@ fn test_set_scripts_delete_min_filtered_block_number_bug() {
 
 #[test]
 fn test_chain_txs_in_same_block_bug() {
-    let storage = new_storage("chain_txs_in_same_block_bug");
-    let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
-    let rpc = BlockFilterRpcImpl { swc };
+    let (storage, _tmp_dir) = new_storage("chain_txs_in_same_block_bug");
+    let rpc = create_block_filter_rpc(storage.clone(), create_peers());
 
     // setup test data
     let lock_script1 = ScriptBuilder::default()
@@ -1735,8 +1722,7 @@ fn test_send_chain_txs() {
     let storage = chain.client_storage();
     let consensus = Arc::new(chain.consensus().clone());
 
-    let swc = StorageWithChainData::new(storage.clone(), create_peers(), Default::default());
-    let rpc = TransactionRpcImpl { consensus, swc };
+    let rpc = create_transaction_rpc(storage.clone(), create_peers(), consensus);
 
     // https://pudge.explorer.nervos.org/address/ckt1qzda0cr08m85hc8jlnfp3zer7xulejywt49kt2rr0vthywaa50xwsq0l2z2v9305wm7rs5gqrpsf507ey8wj3tggtl4sj
     let script: Script = serde_json::from_str::<ckb_jsonrpc_types::Script>(r#"{"code_hash": "0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8","hash_type": "type","args": "0xff5094c2c5f476fc38510018609a3fd921dd28ad"}"#).unwrap().into();

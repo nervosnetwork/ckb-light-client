@@ -16,7 +16,7 @@ use ckb_light_client_lib::{
         FilterProtocol, LightClientProtocol, Peers, PendingTxs, RelayProtocol, SyncProtocol,
         BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL,
     },
-    storage::Storage,
+    storage::{LightClientStorage, Storage},
     utils,
 };
 

@@ -4,6 +4,7 @@ use log::{debug, trace};
 use rand::seq::SliceRandom as _;
 
 use crate::protocols::{FilterProtocol, Status, StatusCode};
+use crate::storage::LightClientStorage;
 
 pub struct BlockFilterHashesProcess<'a> {
     message: packed::BlockFilterHashesReader<'a>,

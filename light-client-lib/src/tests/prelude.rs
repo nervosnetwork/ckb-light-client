@@ -24,7 +24,7 @@ use crate::{
         FilterProtocol, LastState, LightClientProtocol, Peers, ProveRequest, SyncProtocol,
         CHECK_POINT_INTERVAL,
     },
-    storage::Storage,
+    storage::{LightClientStorage, Storage},
     tests::{ALWAYS_SUCCESS_BIN, ALWAYS_SUCCESS_SCRIPT},
 };
 

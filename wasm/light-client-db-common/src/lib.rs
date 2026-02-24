@@ -8,26 +8,50 @@ pub mod tests;
 
 #[derive(Serialize, Deserialize, Debug)]
 /// Represent a key-value pair
-pub struct KV {
+pub struct KVPair {
     pub key: Vec<u8>,
     pub value: Vec<u8>,
 }
-#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy)]
-/// A serializable CursorDirection
-pub enum CursorDirection {
+
+/// Direction for iteration (forward or backward)
+#[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IteratorDirection {
     #[default]
-    Next,
-    NextUnique,
-    Prev,
-    PrevUnique,
+    Forward,
+    Reverse,
 }
+
+/// Specifies where to start iteration
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub enum IteratorStart {
+    /// Start from the specified key (inclusive)
+    From(Vec<u8>),
+    /// Start after the specified key (exclusive, skips the first match)
+    After(Vec<u8>),
+}
+
+impl IteratorStart {
+    /// Get the key bytes
+    pub fn key(&self) -> &[u8] {
+        match self {
+            IteratorStart::From(key) => key,
+            IteratorStart::After(key) => key,
+        }
+    }
+
+    /// Returns true if the first matching entry should be skipped
+    pub fn should_skip_first(&self) -> bool {
+        matches!(self, IteratorStart::After(_))
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 /// Response of DbCommandRequest. For details, please refer to the doc of DbCommandRequest
 pub enum DbCommandResponse {
     Read { values: Vec<Option<Vec<u8>>> },
     Put,
     Delete,
-    Iterator { kvs: Vec<KV> },
+    Iterator { kvs: Vec<KVPair> },
     IteratorKey { keys: Vec<Vec<u8>> },
 }
 
@@ -41,25 +65,23 @@ pub enum DbCommandRequest {
     /// Write a series of key-value pairs into database
     /// Input: A series of key-value pairs
     /// Output: None
-    Put { kvs: Vec<KV> },
+    Put { kvs: Vec<KVPair> },
     /// Remove a series of entries from database
     /// Input: Keys to remove
     /// Output: None
     Delete { keys: Vec<Vec<u8>> },
-    /// Gets at most `limit` entries, starting from `start_key_bound`, skipping the first `skip` entries, keep fetching until `take_while` evals to false
+    /// Gets at most `limit` entries, keep fetching until `take_while` evals to false
     /// Output: Key value pairs fetched
     Iterator {
-        start_key_bound: Vec<u8>,
-        order: CursorDirection,
+        start: IteratorStart,
+        direction: IteratorDirection,
         limit: usize,
-        skip: usize,
     },
     /// Similar to `Iterator`, but only keys are returned
     IteratorKey {
-        start_key_bound: Vec<u8>,
-        order: CursorDirection,
+        start: IteratorStart,
+        direction: IteratorDirection,
         limit: usize,
-        skip: usize,
     },
 }
 #[repr(i32)]
@@ -142,25 +164,11 @@ impl TryFrom<i32> for OutputCommand {
         }
     }
 }
-/// Translate a [`crate::CursorDirection`] to [`idb::CursorDirection`]
-pub fn ckb_cursor_direction_to_idb(x: crate::CursorDirection) -> idb::CursorDirection {
-    use crate::CursorDirection;
-    match x {
-        CursorDirection::Next => idb::CursorDirection::Next,
-        CursorDirection::NextUnique => idb::CursorDirection::NextUnique,
-        CursorDirection::Prev => idb::CursorDirection::Prev,
-        CursorDirection::PrevUnique => idb::CursorDirection::PrevUnique,
-    }
-}
-/// Translate a [`idb::CursorDirection`] to [`crate::CursorDirection`]
-pub fn idb_cursor_direction_to_ckb(x: idb::CursorDirection) -> crate::CursorDirection {
-    use crate::CursorDirection;
-
-    match x {
-        idb::CursorDirection::Next => CursorDirection::Next,
-        idb::CursorDirection::NextUnique => CursorDirection::NextUnique,
-        idb::CursorDirection::Prev => CursorDirection::Prev,
-        idb::CursorDirection::PrevUnique => CursorDirection::PrevUnique,
+/// Convert IteratorDirection to idb::CursorDirection
+pub fn iterator_direction_to_idb(dir: IteratorDirection) -> idb::CursorDirection {
+    match dir {
+        IteratorDirection::Forward => idb::CursorDirection::NextUnique,
+        IteratorDirection::Reverse => idb::CursorDirection::PrevUnique,
     }
 }
 /// Fill a input buffer/output buffer with a [`crate::InputCommand`]/[`crate::OutputCommand`] and the buffer

@@ -8,7 +8,7 @@ use ckb_types::{
 };
 
 use crate::{
-    storage::{ScriptStatus, ScriptType},
+    storage::{LightClientStorage, ScriptStatus, ScriptType},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},

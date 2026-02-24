@@ -15,6 +15,7 @@ use crate::{
         },
         PeerState, BAD_MESSAGE_BAN_TIME,
     },
+    storage::LightClientStorage,
     tests::{
         prelude::*,
         utils::{setup, MockChain, MockNetworkContext},

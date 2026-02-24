@@ -1,11 +1,11 @@
 use ckb_types::packed::Script;
 
-use crate::storage;
+use crate::storage::{self, LightClientStorage};
 use crate::tests::utils::new_storage;
 
 #[test]
 fn test_forget_update_min_filtred_number() {
-    let storage = new_storage("forget_update_min_filtred_block");
+    let (storage, _tmp_dir) = new_storage("forget_update_min_filtred_block");
     storage.update_min_filtered_block_number(66);
     storage.update_filter_scripts(
         vec![

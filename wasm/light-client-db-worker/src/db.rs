@@ -2,11 +2,12 @@ use std::future::Future;
 
 use anyhow::{anyhow, Context};
 use idb::{
-    CursorDirection, Database, DatabaseEvent, Factory, IndexParams, KeyPath, KeyRange,
-    ManagedCursor, ObjectStore, ObjectStoreParams, TransactionMode, TransactionResult,
+    Database, DatabaseEvent, Factory, IndexParams, KeyPath, KeyRange, ManagedCursor, ObjectStore,
+    ObjectStoreParams, TransactionMode, TransactionResult,
 };
 use light_client_db_common::{
-    ckb_cursor_direction_to_idb, DbCommandRequest, DbCommandResponse, KV,
+    iterator_direction_to_idb, DbCommandRequest, DbCommandResponse, IteratorDirection,
+    IteratorStart, KVPair,
 };
 use log::debug;
 
@@ -15,28 +16,28 @@ use crate::STORE_NAME;
 async fn open_iterator(
     store: &ObjectStore,
     start_key_bound: &[u8],
-    order: CursorDirection,
+    direction: IteratorDirection,
 ) -> Result<ManagedCursor, idb::Error> {
     let index = store.index("key").unwrap();
+    let cursor_direction = iterator_direction_to_idb(direction);
 
     Ok(index
         .open_cursor(
             Some(
-                match order {
-                    CursorDirection::NextUnique => KeyRange::lower_bound(
+                match direction {
+                    IteratorDirection::Forward => KeyRange::lower_bound(
                         &serde_wasm_bindgen::to_value(&start_key_bound).unwrap(),
                         Some(false),
                     ),
-                    CursorDirection::PrevUnique => KeyRange::upper_bound(
+                    IteratorDirection::Reverse => KeyRange::upper_bound(
                         &serde_wasm_bindgen::to_value(&start_key_bound).unwrap(),
                         Some(false),
                     ),
-                    _ => unreachable!(),
                 }
                 .unwrap()
                 .into(),
             ),
-            Some(order),
+            Some(cursor_direction),
         )?
         .await?
         .unwrap()
@@ -45,31 +46,29 @@ async fn open_iterator(
 
 pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
-    start_key_bound: &[u8],
-    order: CursorDirection,
+    start: &IteratorStart,
+    direction: IteratorDirection,
     take_while: F,
     filter_map: FnFilterMap,
     limit: usize,
-    skip: usize,
-) -> anyhow::Result<Vec<KV>>
+) -> anyhow::Result<Vec<KVPair>>
 where
     F: Fn(&[u8]) -> bool,
-    FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
+    FnFilterMap: Fn(&[u8], &[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start_key_bound, order)
+    let mut iter = open_iterator(store, start.key(), direction)
         .await
         .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
 
     let mut res = Vec::new();
-
-    let mut skip_index = 0;
+    let skip_first = start.should_skip_first();
 
     if iter.key().is_err() {
         return Ok(res);
     }
 
-    let raw_kv = serde_wasm_bindgen::from_value::<KV>(
+    let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
         iter.value()
             .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
             .unwrap(),
@@ -77,12 +76,11 @@ where
     .unwrap();
 
     if take_while(&raw_kv.key) {
-        skip_index += 1;
-        if skip_index > skip {
-            if let Some(new_key) = filter_map(&raw_kv.key).await {
-                res.push(KV {
-                    key: new_key,
-                    value: raw_kv.value,
+        if !skip_first {
+            if let Some(transformed_value) = filter_map(&raw_kv.key, &raw_kv.value).await {
+                res.push(KVPair {
+                    key: raw_kv.key,
+                    value: transformed_value,
                 });
             }
         }
@@ -103,21 +101,18 @@ where
             return Ok(res);
         }
 
-        let raw_kv = serde_wasm_bindgen::from_value::<KV>(
+        let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
             iter.value()
                 .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
                 .unwrap(),
         )
         .unwrap();
         if take_while(&raw_kv.key) {
-            skip_index += 1;
-            if skip_index > skip {
-                if let Some(new_key) = filter_map(&raw_kv.key).await {
-                    res.push(KV {
-                        key: new_key,
-                        value: raw_kv.value,
-                    });
-                }
+            if let Some(transformed_value) = filter_map(&raw_kv.key, &raw_kv.value).await {
+                res.push(KVPair {
+                    key: raw_kv.key,
+                    value: transformed_value,
+                });
             }
         } else {
             return Ok(res);
@@ -128,24 +123,23 @@ where
 
 async fn collect_iterator_keys<F, FnFilterMap, FnFilterMapOutput>(
     store: &ObjectStore,
-    start_key_bound: &[u8],
-    order: CursorDirection,
+    start: &IteratorStart,
+    direction: IteratorDirection,
     take_while: F,
     filter_map: FnFilterMap,
     limit: usize,
-    skip: usize,
 ) -> anyhow::Result<Vec<Vec<u8>>>
 where
     F: Fn(&[u8]) -> bool,
     FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start_key_bound, order)
+    let mut iter = open_iterator(store, start.key(), direction)
         .await
         .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
 
     let mut res = Vec::new();
-    let mut skip_index = 0;
+    let skip_first = start.should_skip_first();
 
     if iter.key().is_err() {
         return Ok(res);
@@ -159,8 +153,7 @@ where
     .unwrap();
 
     if take_while(&raw_key) {
-        skip_index += 1;
-        if skip_index > skip {
+        if !skip_first {
             if let Some(new_key) = filter_map(&raw_key).await {
                 res.push(new_key);
             }
@@ -185,11 +178,8 @@ where
 
         let raw_key = serde_wasm_bindgen::from_value::<Vec<u8>>(key.unwrap()).unwrap();
         if take_while(&raw_key) {
-            skip_index += 1;
-            if skip_index > skip {
-                if let Some(new_key) = filter_map(&raw_key).await {
-                    res.push(new_key);
-                }
+            if let Some(new_key) = filter_map(&raw_key).await {
+                res.push(new_key);
             }
         } else {
             return Ok(res);
@@ -208,7 +198,7 @@ pub(crate) async fn handle_db_command<F, FnFilterMap, FnFilterMapOutput>(
 ) -> anyhow::Result<DbCommandResponse>
 where
     F: Fn(&[u8]) -> bool,
-    FnFilterMap: FnOnce(&[u8], ObjectStore) -> FnFilterMapOutput + Clone,
+    FnFilterMap: Fn(&[u8], &[u8], ObjectStore) -> FnFilterMapOutput + Clone,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
     debug!("Handle command: {:?}", cmd);
@@ -247,7 +237,7 @@ where
                         .map_err(|e| anyhow!("Failed to send get request: {:?}", e))?
                         .await
                         .map_err(|e| anyhow!("Failed to fetch value: {:?}", e))?
-                        .map(|v| serde_wasm_bindgen::from_value::<KV>(v).unwrap().value),
+                        .map(|v| serde_wasm_bindgen::from_value::<KVPair>(v).unwrap().value),
                 );
             }
             DbCommandResponse::Read { values: res }
@@ -278,52 +268,49 @@ where
         }
 
         DbCommandRequest::Iterator {
-            start_key_bound,
-            order,
+            start,
+            direction,
             limit,
-            skip,
         } => {
             let kvs = collect_iterator(
                 &store,
-                &start_key_bound,
-                ckb_cursor_direction_to_idb(order),
+                &start,
+                direction,
                 invoke_take_while,
-                |key| {
+                |key, value| {
                     let key = key.to_vec();
+                    let value = value.to_vec();
                     let store = store.clone();
                     let invoke_filter_map = invoke_filter_map.clone();
-                    async move { invoke_filter_map(&key, store.clone()).await }
+                    async move { invoke_filter_map(&key, &value, store.clone()).await }
                 },
                 limit,
-                skip,
             )
             .await
             .with_context(|| anyhow!("Failed to collect iterator"))?;
             debug!(
-                "Called iterator, args=<{:?}, {:?}, {:?}, {:?}>, result={:?}",
-                start_key_bound, order, limit, skip, kvs
+                "Called iterator, args=<{:?}, {:?}, {:?}>, result={:?}",
+                start, direction, limit, kvs
             );
             DbCommandResponse::Iterator { kvs }
         }
         DbCommandRequest::IteratorKey {
-            start_key_bound,
-            order,
+            start,
+            direction,
             limit,
-            skip,
         } => {
             let keys = collect_iterator_keys(
                 &store,
-                &start_key_bound,
-                ckb_cursor_direction_to_idb(order),
+                &start,
+                direction,
                 invoke_take_while,
                 |key| {
                     let key = key.to_vec();
                     let store = store.clone();
                     let invoke_filter_map = invoke_filter_map.clone();
-                    async move { invoke_filter_map(&key, store.clone()).await }
+                    async move { invoke_filter_map(&key, &[], store.clone()).await }
                 },
                 limit,
-                skip,
             )
             .await
             .with_context(|| anyhow!("Failed to collect iterator keys"))?;

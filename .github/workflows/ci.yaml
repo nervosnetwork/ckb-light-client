@@ -37,6 +37,8 @@ jobs:
           rustup target add wasm32-unknown-unknown
       - name: Lint Check
         run: make clippy
+      - name: Lint Check (SQLite)
+        run: make clippy-sqlite
   test-wasm:
     name: Tests / Build & Test (Wasm)
     needs: [ rustfmt, clippy ]
@@ -91,6 +93,20 @@ jobs:
       - name: UnitTest
         if: matrix.os == 'macos-latest'
         run: make test-portable
+  test-sqlite:
+    name: Tests / Build & Test (SQLite)
+    needs: [ rustfmt, clippy ]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-2022 ]
+    steps:
+      - name: Checkout the Repository
+        uses: actions/checkout@v4
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: UnitTest (SQLite)
+        run: make test-sqlite
   code_coverage:
     name: Code Coverage
     needs: [ test ]
