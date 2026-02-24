@@ -805,6 +805,7 @@ dependencies = [
  "jsonrpc-http-server",
  "jsonrpc-server-utils",
  "log",
+ "openssl",
  "rand 0.8.5",
  "serde_json",
  "tempfile",

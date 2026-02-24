@@ -32,6 +32,7 @@ rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
 ], default-features = false, optional = true }
 env_logger = "0.11"
 anyhow = "1.0.56"
+openssl = { version = "0.10", optional = true }
 
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 tikv-jemallocator = "0.6"
@@ -51,6 +52,7 @@ portable = ["rocksdb", "rocksdb/portable", "ckb-light-client-lib/rocksdb"]
 march-native = ["rocksdb", "rocksdb/march-native", "ckb-light-client-lib/rocksdb"]
 sqlite = ["ckb-light-client-lib/sqlite"]
 rocksdb = ["dep:rocksdb"]
+vendored-openssl = ["openssl/vendored"]
 
 # [profile.release]
 # overflow-checks = true
