@@ -61,11 +61,8 @@ pub extern "C" fn Java_com_nervosnetwork_ckblightclient_LightClientNative_native
         }
     };
 
-    // Store JavaVM
-    if JAVA_VM.set(vm).is_err() {
-        eprintln!("Failed to store JavaVM");
-        return JNI_FALSE;
-    }
+    // Store JavaVM (process-lifetime, ignore error if already set from previous session)
+    let _ = JAVA_VM.set(vm);
 
     // Create global ref for status callback
     let status_callback_ref = match env.new_global_ref(status_callback) {
@@ -76,11 +73,8 @@ pub extern "C" fn Java_com_nervosnetwork_ckblightclient_LightClientNative_native
         }
     };
 
-    // Store status callback
-    if STATUS_CALLBACK.set(status_callback_ref).is_err() {
-        eprintln!("Failed to store status callback");
-        return JNI_FALSE;
-    }
+    // Store status callback (session-lifetime, can be updated on re-init)
+    *STATUS_CALLBACK.lock().expect("lock poisoned") = Some(status_callback_ref);
 
     // Initialize Android logger
     android_logger::init_once(
@@ -229,10 +223,7 @@ pub extern "C" fn Java_com_nervosnetwork_ckblightclient_LightClientNative_native
     let (runtime_handle, _receiver, runtime) = new_global_runtime(None);
 
     // Store runtime
-    if RUNTIME.set(runtime).is_err() {
-        error!("Failed to store runtime");
-        return JNI_FALSE;
-    }
+    *RUNTIME.lock().expect("lock poisoned") = Some(runtime);
 
     // Start network service
     info!("Starting network service...");
@@ -257,30 +248,15 @@ pub extern "C" fn Java_com_nervosnetwork_ckblightclient_LightClientNative_native
     };
 
     // Store network controller
-    if NET_CONTROL.set(network_controller.clone()).is_err() {
-        error!("Failed to store network controller");
-        return JNI_FALSE;
-    }
+    *NET_CONTROL.lock().expect("lock poisoned") = Some(network_controller.clone());
 
     // Create StorageWithChainData
     let swc = StorageWithChainData::new(storage.clone(), Arc::clone(&peers), pending_txs.clone());
 
     // Store global state
-    if STORAGE_WITH_DATA.set(swc).is_err() {
-        error!("Failed to store StorageWithChainData");
-        return JNI_FALSE;
-    }
-
-    let consensus_arc = Arc::new(consensus);
-    if CONSENSUS.set(consensus_arc.clone()).is_err() {
-        error!("Failed to store consensus");
-        return JNI_FALSE;
-    }
-
-    if PEERS.set(peers.clone()).is_err() {
-        error!("Failed to store peers");
-        return JNI_FALSE;
-    }
+    *STORAGE_WITH_DATA.lock().expect("lock poisoned") = Some(swc);
+    *CONSENSUS.lock().expect("lock poisoned") = Some(Arc::new(consensus));
+    *PEERS.lock().expect("lock poisoned") = Some(peers.clone());
 
     // Start RPC server if configured
     info!("Starting RPC server on {}...", run_env.rpc.listen_address);
@@ -359,13 +335,13 @@ pub extern "C" fn Java_com_nervosnetwork_ckblightclient_LightClientNative_native
     info!("Waiting for services to exit...");
     wait_all_ckb_services_exit();
 
-    // Transition to STOPPED
-    set_state(STATE_STOPPED);
-
     info!("CKB Light Client stopped successfully!");
 
-    // Notify status callback
+    // Notify status callback before clearing state
     let _ = invoke_status_callback("stopped", "");
+
+    // Clear all session state so nativeInit() can be called again
+    reset_session_state();
 
     JNI_TRUE
 }

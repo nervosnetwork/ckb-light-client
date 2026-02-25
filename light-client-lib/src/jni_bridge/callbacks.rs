@@ -3,12 +3,14 @@
 //! Provides status callbacks for the light client.
 
 use super::types::{JAVA_VM, STATUS_CALLBACK};
-use jni::JNIEnv;
 
 /// Invoke status callback
 pub fn invoke_status_callback(status: &str, data: &str) -> Result<(), Box<dyn std::error::Error>> {
     let vm = JAVA_VM.get().ok_or("JavaVM not initialized")?;
-    let callback = STATUS_CALLBACK.get().ok_or("Status callback not set")?;
+    let callback_guard = STATUS_CALLBACK
+        .lock()
+        .map_err(|e| format!("Failed to lock STATUS_CALLBACK: {}", e))?;
+    let callback = callback_guard.as_ref().ok_or("Status callback not set")?;
 
     // Attach current thread to JVM
     let mut env = vm.attach_current_thread()?;
