@@ -1,12 +1,8 @@
 //! RPC handler for JNI bridge
 //!
-//! Provides direct JNI methods for RPC calls instead of HTTP server
+//! Provides direct JNI methods for RPC calls, delegating to the unified service layer.
 
 use super::types::*;
-use crate::service::ScriptStatus;
-use ckb_jsonrpc_types::{BlockView, HeaderView};
-use ckb_network::extract_peer_id;
-use ckb_types::prelude::{IntoBlockView, IntoHeaderView};
 use jni::objects::{JClass, JString};
 use jni::sys::jstring;
 use jni::JNIEnv;
@@ -65,6 +61,8 @@ macro_rules! jni_rpc_error {
     }};
 }
 
+const MAX_ADDRS: usize = 50;
+
 /// JNI: Call RPC method
 ///
 /// This provides a generic RPC interface that handles common methods:
@@ -80,7 +78,6 @@ pub extern "C" fn Java_com_nervosnetwork_ckblightclient_LightClientNative_callRp
     _class: JClass,
     method_jstr: JString,
 ) -> jstring {
-    // Get method name
     let method: String = match env.get_string(&method_jstr) {
         Ok(s) => s.into(),
         Err(e) => {
@@ -89,109 +86,56 @@ pub extern "C" fn Java_com_nervosnetwork_ckblightclient_LightClientNative_callRp
         }
     };
 
-    // Get storage
-    let swc = match STORAGE_WITH_DATA.get() {
-        Some(s) => s,
-        None => {
-            warn!("Storage not initialized for method: {}", method);
-            return jni_rpc_error!(&mut env, -32603, "Light client not initialized");
-        }
-    };
-
-    // Handle different RPC methods
     match method.as_str() {
         "get_peers" => {
-            // Get network controller
-            let net_ctrl = match NET_CONTROL.get() {
-                Some(nc) => nc,
+            let service = match network_service() {
+                Some(s) => s,
                 None => {
-                    return jni_rpc_error!(&mut env, -32603, "Network controller not initialized");
+                    return jni_rpc_error!(&mut env, -32603, "Network service not initialized");
                 }
             };
-
-            // Get connected peers
-            let peers = net_ctrl
-                .connected_peers()
-                .iter()
-                .map(|(peer_index, peer)| {
-                    let mut addresses = vec![&peer.connected_addr];
-                    addresses.extend(peer.listened_addrs.iter());
-
-                    let node_addresses: Vec<_> = addresses
-                        .iter()
-                        .map(|addr| {
-                            let score = net_ctrl
-                                .addr_info(addr)
-                                .map(|addr_info| addr_info.score)
-                                .unwrap_or(1);
-                            let non_negative_score = if score > 0 { score as u64 } else { 0 };
-                            json!({
-                                "address": addr.to_string(),
-                                "score": format!("0x{:x}", non_negative_score)
-                            })
-                        })
-                        .collect();
-
-                    // Get sync state from PEERS
-                    let sync_state = PEERS.get().and_then(|peers_mgr| {
-                        peers_mgr.get_state(peer_index).map(|state| {
-                            json!({
-                                "requested_best_known_header": state.get_prove_request().map(|req| {
-                                    let header: HeaderView = req.get_last_header().header().to_owned().into();
-                                    header
-                                }),
-                                "proved_best_known_header": state.get_prove_state().map(|req| {
-                                    let header: HeaderView = req.get_last_header().header().to_owned().into();
-                                    header
-                                })
-                            })
-                        })
-                    });
-
-                    json!({
-                        "version": peer.identify_info.as_ref()
-                            .map(|info| info.client_version.clone())
-                            .unwrap_or_else(|| "unknown".to_string()),
-                        "node_id": extract_peer_id(&peer.connected_addr)
-                            .map(|peer_id| peer_id.to_base58())
-                            .unwrap_or_default(),
-                        "addresses": node_addresses,
-                        "connected_duration": format!("0x{:x}",
-                            std::time::Instant::now()
-                                .saturating_duration_since(peer.connected_time)
-                                .as_millis() as u64
-                        ),
-                        "sync_state": sync_state,
-                        "protocols": peer.protocols.iter().map(|(protocol_id, protocol_version)| {
-                            json!({
-                                "id": format!("0x{:x}", protocol_id.value() as u64),
-                                "version": protocol_version
-                            })
-                        }).collect::<Vec<_>>()
-                    })
-                })
-                .collect::<Vec<_>>();
-
+            let peers = service.get_peers();
             jni_rpc_response!(&mut env, peers)
         }
 
         "get_tip_header" => {
-            let tip_header = swc.storage().get_tip_header();
-            let header_view: HeaderView = tip_header.into_view().into();
-            jni_rpc_response!(&mut env, header_view)
+            let service = match chain_service() {
+                Some(s) => s,
+                None => {
+                    return jni_rpc_error!(&mut env, -32603, "Light client not initialized");
+                }
+            };
+            jni_rpc_response!(&mut env, service.get_tip_header())
         }
 
         "get_genesis_block" => {
-            let genesis_block = swc.storage().get_genesis_block();
-            let block_view: BlockView = genesis_block.into_view().into();
-            jni_rpc_response!(&mut env, block_view)
+            let service = match chain_service() {
+                Some(s) => s,
+                None => {
+                    return jni_rpc_error!(&mut env, -32603, "Light client not initialized");
+                }
+            };
+            jni_rpc_response!(&mut env, service.get_genesis_block())
         }
 
         "get_scripts" => {
-            let scripts = swc.storage().get_filter_scripts();
-            let script_statuses: Vec<ScriptStatus> =
-                scripts.into_iter().map(|s| s.into()).collect();
-            jni_rpc_response!(&mut env, script_statuses)
+            let service = match chain_service() {
+                Some(s) => s,
+                None => {
+                    return jni_rpc_error!(&mut env, -32603, "Light client not initialized");
+                }
+            };
+            jni_rpc_response!(&mut env, service.get_scripts())
+        }
+
+        "local_node_info" => {
+            let service = match network_service() {
+                Some(s) => s,
+                None => {
+                    return jni_rpc_error!(&mut env, -32603, "Network service not initialized");
+                }
+            };
+            jni_rpc_response!(&mut env, service.local_node_info(MAX_ADDRS))
         }
 
         _ => {

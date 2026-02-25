@@ -3,7 +3,8 @@
 //! Uses OnceLock for thread-safe singleton pattern, similar to WASM implementation.
 
 use crate::protocols::Peers;
-use crate::storage::StorageWithChainData;
+use crate::service::{LightClientChainService, LightClientNetworkService, LightClientService};
+use crate::storage::{Storage, StorageWithChainData};
 use ckb_chain_spec::consensus::Consensus;
 use ckb_network::NetworkController;
 use jni::objects::GlobalRef;
@@ -71,4 +72,24 @@ pub fn is_running() -> bool {
 /// Helper to check if stopped
 pub fn is_stopped() -> bool {
     is_state(STATE_STOPPED)
+}
+
+/// Create a LightClientService instance from global state
+pub fn cell_service() -> Option<LightClientService<Storage>> {
+    let swc = STORAGE_WITH_DATA.get()?;
+    Some(LightClientService::new(Arc::new(swc.storage().clone())))
+}
+
+/// Create a LightClientChainService instance from global state
+pub fn chain_service() -> Option<LightClientChainService> {
+    let swc = STORAGE_WITH_DATA.get()?.clone();
+    let consensus = CONSENSUS.get()?.clone();
+    Some(LightClientChainService::new(swc, consensus))
+}
+
+/// Create a LightClientNetworkService instance from global state
+pub fn network_service() -> Option<LightClientNetworkService> {
+    let nc = NET_CONTROL.get()?.clone();
+    let peers = PEERS.get()?.clone();
+    Some(LightClientNetworkService::new(nc, peers))
 }
