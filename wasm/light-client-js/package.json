@@ -1,7 +1,7 @@
 {
   "name": "@nervosnetwork/ckb-light-client-js",
   "repository": "https://github.com/nervosnetwork/ckb-light-client",
-  "version": "0.5.4",
+  "version": "0.5.5",
   "main": "dist/index.js",
   "license": "MIT",
   "devDependencies": {

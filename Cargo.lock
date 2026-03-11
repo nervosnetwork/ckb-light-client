@@ -782,7 +782,7 @@ dependencies = [
 
 [[package]]
 name = "ckb-light-client"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "chrono",
@@ -815,7 +815,7 @@ dependencies = [
 
 [[package]]
 name = "ckb-light-client-lib"
-version = "0.5.4"
+version = "0.5.5"
 dependencies = [
  "anyhow",
  "bincode",
