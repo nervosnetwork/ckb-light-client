@@ -5,7 +5,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
-  RUST_TOOLCHAIN: 1.92.0
+  RUST_TOOLCHAIN: 1.95.0
 permissions:
   contents: write
   id-token: write
