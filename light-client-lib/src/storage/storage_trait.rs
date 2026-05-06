@@ -329,13 +329,11 @@ pub trait LightClientStorage: StorageBackend {
 
     /// Update check points
     fn update_check_points(&self, start_index: CpIndex, check_points: &[Byte32]) {
-        let mut index = start_index;
         let mut batch = self.batch();
-        for cp in check_points {
+        for (index, cp) in (start_index..).zip(check_points.iter()) {
             let key = Key::CheckPointIndex(index).into_vec();
             let value: Vec<u8> = Value::BlockFilterHash(cp).into();
             batch.put(&key, &value);
-            index += 1;
         }
         batch.commit().expect("batch commit should be ok");
     }
