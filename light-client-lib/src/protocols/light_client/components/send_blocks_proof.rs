@@ -214,7 +214,7 @@ impl<'a> SendBlocksProofProcess<'a> {
                 }
             }
 
-            for (header, extension) in headers.into_iter().zip(extensions.into_iter()) {
+            for (header, extension) in headers.into_iter().zip(extensions) {
                 if self.protocol.peers().remove_fetching_header(&header.hash()) {
                     self.protocol
                         .storage()
