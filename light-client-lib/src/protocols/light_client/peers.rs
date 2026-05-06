@@ -1898,7 +1898,7 @@ impl Peers {
                 .get_latest_block_filter_hashes(finalized_check_point_index)
                 .len();
             finalized_check_point_number + latest_block_filter_hashes_count as BlockNumber
-                >= min_filtered_block_number + 1
+                > min_filtered_block_number
         } else {
             // Check:
             // - If cached block filter hashes is same check point as the required,
