@@ -189,7 +189,7 @@ impl<'a> BlockFiltersProcess<'a> {
             .filters()
             .into_iter()
             .take(limit)
-            .zip(expected_block_filter_hashes.into_iter())
+            .zip(expected_block_filter_hashes)
             .enumerate()
         {
             let current_hash = calc_filter_hash(&parent_block_filter_hash, &filter).pack();
