@@ -776,7 +776,7 @@ pub(crate) fn check_if_response_is_matched(
             let last_last_n_header_number = headers[headers.len() - 1].header().number();
             let last_number = last_header.header().number();
             if first_last_n_header_number != start_number
-                || last_last_n_header_number + 1 != last_number
+                || last_last_n_header_number.checked_add(1) != Some(last_number)
             {
                 let errmsg = format!(
                 "there should be all blocks of [{}, {}) since no sampled blocks, but got [{}, {}]",
