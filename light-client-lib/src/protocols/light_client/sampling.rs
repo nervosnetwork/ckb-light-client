@@ -92,7 +92,13 @@ pub(crate) fn sample_blocks(
     last_difficulty: &U256,
     last_n_blocks: BlockNumber,
 ) -> (U256, Vec<U256>) {
-    let blocks_count = last_number - start_number;
+    let Some(blocks_count) = last_number.checked_sub(start_number) else {
+        warn!(
+            "sampling: start_number ({}) >= last_number ({}), returning empty result",
+            start_number, last_number
+        );
+        return (start_difficulty.clone(), Vec::new());
+    };
     let k = estimate_k(last_n_blocks, blocks_count, C_FRACTION);
     let samples_count = estimate_samples_count(blocks_count, last_n_blocks, k, LAMBDA);
 
@@ -140,6 +146,9 @@ pub(crate) fn sample_blocks(
 //
 // [FlyClient: Super-Light Clients for Cryptocurrencies]: https://eprint.iacr.org/2019/226.pdf
 pub(crate) fn estimate_k(l: BlockNumber, n: BlockNumber, c: f64) -> f64 {
+    if n == 0 {
+        return 0.0;
+    }
     ((l as f64) / (n as f64)).log(c)
 }
 
