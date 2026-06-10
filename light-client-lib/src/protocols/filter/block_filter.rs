@@ -44,38 +44,50 @@ impl FilterProtocol {
         &self,
         block_filters: packed::BlockFilters,
         limit: usize,
-    ) -> Vec<packed::Byte32> {
+    ) -> Result<Vec<packed::Byte32>, Status> {
         let start_number: BlockNumber = block_filters.start_number().unpack();
         let reader = GCSFilterReader::new(SipHasher24Builder::new(0, 0), M, P);
         let script_hashes = self
             .storage
             .get_scripts_hash(start_number + limit as BlockNumber);
-        block_filters
-            .filters()
-            .into_iter()
-            .take(limit)
-            .enumerate()
-            .filter_map(|(index, block_filter)| {
-                let mut input = Cursor::new(block_filter.raw_data());
-                if reader
-                    .match_any(&mut input, &mut script_hashes.iter().map(|v| v.as_slice()))
-                    .expect("GCSFilterReader#match_any should be ok")
-                {
-                    let block_hash = block_filters
-                        .block_hashes()
-                        .get(index)
-                        .expect("checked index");
-                    info!("check_filters_data matched, block_hash: {:#x}", block_hash);
-                    Some(block_hash)
-                } else {
-                    trace!(
-                        "check_filters_data not matched, block_hash: {:#x}",
-                        block_filters.block_hashes().get(index).expect("msg")
-                    );
-                    None
+        let mut matched = Vec::new();
+        for (index, block_filter) in block_filters.filters().into_iter().take(limit).enumerate() {
+            let mut input = Cursor::new(block_filter.raw_data());
+            let is_match = reader
+                .match_any(&mut input, &mut script_hashes.iter().map(|v| v.as_slice()))
+                .map_err(|e| {
+                    let errmsg = format!("GCSFilterReader#match_any failed: {}", e);
+                    StatusCode::MalformedProtocolMessage.with_context(errmsg)
+                })?;
+            if is_match {
+                let block_hash = match block_filters.block_hashes().get(index) {
+                    Some(h) => h,
+                    None => {
+                        let errmsg = format!(
+                            "block_hashes index {} out of bounds (len: {})",
+                            index,
+                            block_filters.block_hashes().len()
+                        );
+                        return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
+                    }
+                };
+                info!("check_filters_data matched, block_hash: {:#x}", block_hash);
+                matched.push(block_hash);
+            } else {
+                match block_filters.block_hashes().get(index) {
+                    Some(h) => trace!("check_filters_data not matched, block_hash: {:#x}", h),
+                    None => {
+                        let errmsg = format!(
+                            "block_hashes index {} out of bounds (len: {})",
+                            index,
+                            block_filters.block_hashes().len()
+                        );
+                        return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
+                    }
                 }
-            })
-            .collect()
+            }
+        }
+        Ok(matched)
     }
 
     async fn should_ask(&self, immediately: bool) -> bool {
