@@ -687,18 +687,32 @@ impl LatestBlockFilterHashes {
             );
             return Err(StatusCode::Ignore.with_context(errmsg));
         }
-        let mut end_number = start_number + block_filter_hashes.len() as BlockNumber - 1;
-        if finalized_check_point_number >= end_number {
-            let errmsg = format!(
-                "finalized check point ({}) is not less than end number ({})",
-                finalized_check_point_number, end_number,
-            );
-            return Err(StatusCode::Ignore.with_context(errmsg));
-        }
         if start_number > last_proved_number {
             let errmsg = format!(
                 "start number ({}) is greater than the proved number ({})",
                 start_number, last_proved_number
+            );
+            return Err(StatusCode::Ignore.with_context(errmsg));
+        }
+        let mut end_number = match block_filter_hashes
+            .len()
+            .checked_add(start_number as usize)
+            .and_then(|v| v.checked_sub(1))
+        {
+            Some(v) => v as BlockNumber,
+            None => {
+                let errmsg = format!(
+                    "overflow computing end number: start_number ({}) + len ({}) - 1",
+                    start_number,
+                    block_filter_hashes.len()
+                );
+                return Err(StatusCode::Ignore.with_context(errmsg));
+            }
+        };
+        if finalized_check_point_number >= end_number {
+            let errmsg = format!(
+                "finalized check point ({}) is not less than end number ({})",
+                finalized_check_point_number, end_number,
             );
             return Err(StatusCode::Ignore.with_context(errmsg));
         }
