@@ -761,6 +761,13 @@ pub(crate) fn check_if_response_is_matched(
             .count();
         let last_n_count = total_count - before_boundary_count;
         if last_n_count > last_n_blocks {
+            if before_boundary_count < reorg_count {
+                let errmsg = format!(
+                    "inconsistent proof data: reorg_count ({}) > before_boundary_count ({})",
+                    reorg_count, before_boundary_count
+                );
+                return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
+            }
             (before_boundary_count - reorg_count, last_n_count)
         } else {
             (total_count - reorg_count - last_n_blocks, last_n_blocks)
