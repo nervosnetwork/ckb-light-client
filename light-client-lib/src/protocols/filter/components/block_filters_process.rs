@@ -206,7 +206,8 @@ impl<'a> BlockFiltersProcess<'a> {
             parent_block_filter_hash = current_hash;
         }
 
-        let possible_match_blocks = self.filter.check_filters_data(block_filters, limit);
+        let possible_match_blocks =
+            return_if_failed!(self.filter.check_filters_data(block_filters, limit));
         let possible_match_blocks_len = possible_match_blocks.len();
         trace!(
             "peer {}, matched blocks: {}",
