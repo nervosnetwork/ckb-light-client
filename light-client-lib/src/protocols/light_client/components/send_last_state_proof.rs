@@ -717,6 +717,17 @@ pub(crate) fn check_if_response_is_matched(
     let total_count = headers.len();
 
     let start_number: BlockNumber = prev_request.start_number().unpack();
+    let last_number = last_header.header().number();
+
+    // Reject if start_number is beyond the last header.
+    if start_number > last_number {
+        let errmsg = format!(
+            "start_number ({}) is greater than last_header number ({})",
+            start_number, last_number
+        );
+        return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
+    }
+
     let reorg_count = headers
         .iter()
         .take_while(|h| h.header().number() < start_number)
