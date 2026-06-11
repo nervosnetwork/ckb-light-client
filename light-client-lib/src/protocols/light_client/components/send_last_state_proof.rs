@@ -1140,6 +1140,10 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
         );
         return Err(StatusCode::InvalidProof.with_context(errmsg));
     };
+    if last_header.header().is_genesis() {
+        let errmsg = "last_header is genesis, which has no parent chain root to verify against";
+        return Err(StatusCode::InvalidParentBlock.with_context(errmsg));
+    }
     let parent_chain_root = last_header.parent_chain_root();
     let proof: MMRProof = {
         let mmr_size = leaf_index_to_mmr_size(parent_chain_root.end_number().unpack());
@@ -1164,7 +1168,7 @@ pub(crate) fn verify_mmr_proof<'a, T: Iterator<Item = &'a HeaderView>>(
             Ok(tmp) => tmp,
             Err(err) => {
                 let errmsg = format!("failed to verify all digest since {}", err);
-                return Err(StatusCode::InvalidProof.with_context(errmsg));
+                return Err(StatusCode::InvalidParentBlock.with_context(errmsg));
             }
         }
     };
