@@ -790,8 +790,16 @@ impl LightClientProtocol {
                     .unwrap_or(false)
             }) {
                 debug!("send transaction proof request to peer: {}", peer_index);
+                let dedup_hashes: Vec<_> = {
+                    let mut seen = std::collections::HashSet::new();
+                    tx_hashes
+                        .iter()
+                        .filter(|h| seen.insert(*h))
+                        .cloned()
+                        .collect()
+                };
                 let content = packed::GetTransactionsProof::new_builder()
-                    .tx_hashes(tx_hashes.to_vec().pack())
+                    .tx_hashes(dedup_hashes.clone().pack())
                     .last_hash(last_hash.clone())
                     .build();
                 let message = packed::LightClientMessage::new_builder()
@@ -809,7 +817,7 @@ impl LightClientProtocol {
                         format!("nc.send_message LightClientMessage, error: {:?}", err);
                     info!("{}", error_message);
                 }
-                self.peers.fetching_idle_txs(tx_hashes, now);
+                self.peers.fetching_idle_txs(&dedup_hashes, now);
             } else {
                 debug!("all valid peers are busy for fetching transactions");
                 break;
