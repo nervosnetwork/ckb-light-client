@@ -254,6 +254,7 @@ impl<'a> SendLastStateProofProcess<'a> {
                     } else if reorg_count == 0 {
                         new_last_headers
                     } else if sampled_count == 0
+                        && reorg_count < headers.len()
                         && check_continuous_headers(&headers[(reorg_count - 1)..=reorg_count])
                             .is_ok()
                     {
