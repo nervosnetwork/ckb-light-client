@@ -137,6 +137,17 @@ impl<'a> SendBlocksProofProcess<'a> {
                     .map(|extension| extension.to_entity().to_opt())
                     .collect();
 
+                if uncle_hashes.len() != headers.len() || extensions.len() != headers.len() {
+                    let errmsg = format!(
+                        "SendBlocksProof v1 field length mismatch: \
+                         headers={}, uncle_hashes={}, extensions={}",
+                        headers.len(),
+                        uncle_hashes.len(),
+                        extensions.len()
+                    );
+                    return StatusCode::MalformedProtocolMessage.with_context(errmsg);
+                }
+
                 return_if_failed!(verify_extra_hash(&headers, &uncle_hashes, &extensions));
                 extensions
             } else {

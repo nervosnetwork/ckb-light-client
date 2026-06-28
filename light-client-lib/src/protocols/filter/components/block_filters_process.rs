@@ -142,13 +142,17 @@ impl<'a> BlockFiltersProcess<'a> {
                     return StatusCode::Ignore.with_context(errmsg);
                 }
                 if start_number == cached_check_point_number + 1 {
-                    let cached_check_point = self
+                    let Some(cached_check_point) = self
                         .filter
                         .storage
                         .get_check_points(cached_check_point_index, 1)
                         .first()
                         .cloned()
-                        .expect("all check points before finalized should be existed");
+                    else {
+                        let errmsg =
+                            format!("check point at index {cached_check_point_index} is missing");
+                        return StatusCode::CheckPointsIsUnexpected.with_context(errmsg);
+                    };
                     (cached_check_point, cached_block_filter_hashes)
                 } else {
                     let start_index = (start_number - cached_check_point_number) as usize - 2;
