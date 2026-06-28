@@ -70,7 +70,14 @@ impl<'a> BlockFiltersProcess<'a> {
 
         let min_filtered_block_number = self.filter.storage.get_min_filtered_block_number();
         debug!("current min filtered block number: {min_filtered_block_number}");
-        if min_filtered_block_number + 1 != start_number {
+        let Some(expected_start_number) = min_filtered_block_number.checked_add(1) else {
+            info!(
+                "ignoring, min_filtered_block_number overflow: {}",
+                min_filtered_block_number
+            );
+            return Status::ok();
+        };
+        if expected_start_number != start_number {
             info!(
                 "ignoring, the start_number of block_filters message {} is not continuous with min_filtered_block_number: {}",
                 start_number,
@@ -216,7 +223,16 @@ impl<'a> BlockFiltersProcess<'a> {
         );
         let actual_blocks_count = blocks_count.min(limit);
         let tip_header = self.filter.storage.get_tip_header();
-        let filtered_block_number = start_number - 1 + actual_blocks_count as BlockNumber;
+        let Some(filtered_block_number) = start_number
+            .checked_sub(1)
+            .and_then(|n| n.checked_add(actual_blocks_count as BlockNumber))
+        else {
+            let errmsg = format!(
+                "overflow computing filtered_block_number: \
+                 start_number={start_number}, actual_blocks_count={actual_blocks_count}"
+            );
+            return StatusCode::Ignore.with_context(errmsg);
+        };
 
         if possible_match_blocks_len != 0 {
             let blocks = possible_match_blocks
