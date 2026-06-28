@@ -757,7 +757,13 @@ impl LatestBlockFilterHashes {
         } else {
             let diff = start_number - finalized_check_point_number;
             let index = diff as usize - 2;
-            let filter_hash = &self.inner[index];
+            let Some(filter_hash) = self.inner.get(index) else {
+                let errmsg = format!(
+                    "filter hash index {index} out of bounds, inner len: {}",
+                    self.inner.len()
+                );
+                return Err(StatusCode::Ignore.with_context(errmsg));
+            };
             if filter_hash != parent_block_filter_hash {
                 let errmsg = format!(
                     "filter hash for block {} is {:#x} but parent hash is {:#}",
