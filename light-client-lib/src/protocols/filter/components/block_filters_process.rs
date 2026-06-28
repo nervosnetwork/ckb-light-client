@@ -152,6 +152,14 @@ impl<'a> BlockFiltersProcess<'a> {
                     (cached_check_point, cached_block_filter_hashes)
                 } else {
                     let start_index = (start_number - cached_check_point_number) as usize - 2;
+                    if start_index >= cached_block_filter_hashes.len() {
+                        let errmsg = format!(
+                            "cached block filter hashes index {start_index} out of bounds, \
+                             len: {}",
+                            cached_block_filter_hashes.len()
+                        );
+                        return StatusCode::Ignore.with_context(errmsg);
+                    }
                     let parent_hash = cached_block_filter_hashes[start_index].clone();
                     cached_block_filter_hashes.drain(..=start_index);
                     (parent_hash, cached_block_filter_hashes)
