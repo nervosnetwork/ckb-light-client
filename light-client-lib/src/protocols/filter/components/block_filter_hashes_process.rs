@@ -142,10 +142,31 @@ impl<'a> BlockFilterHashesProcess<'a> {
                     return StatusCode::Ignore.with_context(errmsg);
                 }
             };
-            let end_number = start_number + block_filter_hashes.len() as BlockNumber - 1;
+            let Some(end_number) = start_number
+                .checked_add(block_filter_hashes.len() as BlockNumber)
+                .and_then(|n| n.checked_sub(1))
+            else {
+                let errmsg = format!(
+                    "overflow computing end_number: start_number={}, len={}",
+                    start_number,
+                    block_filter_hashes.len()
+                );
+                return StatusCode::Ignore.with_context(errmsg);
+            };
             if end_number > next_cached_check_point_number {
                 let diff = end_number - next_cached_check_point_number;
-                let index = block_filter_hashes.len() - (diff as usize) - 1;
+                let Some(index) = block_filter_hashes
+                    .len()
+                    .checked_sub(diff as usize)
+                    .and_then(|n| n.checked_sub(1))
+                else {
+                    let errmsg = format!(
+                        "underflow computing block filter hash index: \
+                         len={}, diff={diff}",
+                        block_filter_hashes.len(),
+                    );
+                    return StatusCode::Ignore.with_context(errmsg);
+                };
                 let new_hash = &block_filter_hashes[index];
                 if next_cached_check_point != *new_hash {
                     let errmsg = format!(
