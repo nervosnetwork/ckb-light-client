@@ -68,7 +68,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
             if uncle_hashes_len != filtered_blocks_len || extensions_len != filtered_blocks_len {
                 let error_message = format!(
                     "SendTransactionsProof v1 field length mismatch: \
-                     headers={}, uncle_hashes={}, extensions={}",
+                     filtered_blocks={}, uncle_hashes={}, extensions={}",
                     filtered_blocks_len, uncle_hashes_len, extensions_len
                 );
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
