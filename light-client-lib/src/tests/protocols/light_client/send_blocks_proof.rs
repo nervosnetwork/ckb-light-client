@@ -451,7 +451,7 @@ async fn rejects_v1_fields_when_all_blocks_are_missing() {
         last_block_number: 20,
         missing_block_hashes: missing_block_hashes.clone(),
         returned_missing_block_hashes: missing_block_hashes,
-        returned_uncles_hash: Some(vec![packed::Byte32::default()]),
+        returned_uncles_hashes: Some(vec![packed::Byte32::default()]),
         expected_status: Some(StatusCode::MalformedProtocolMessage),
         ..Default::default()
     };
@@ -630,7 +630,7 @@ struct TestParameter {
     returned_headers: Vec<BlockNumber>,
     missing_block_hashes: Vec<packed::Byte32>,
     returned_missing_block_hashes: Vec<packed::Byte32>,
-    returned_uncles_hash: Option<Vec<packed::Byte32>>,
+    returned_uncles_hashes: Option<Vec<packed::Byte32>>,
     expected_status: Option<StatusCode>,
 }
 
@@ -723,13 +723,13 @@ async fn test_send_blocks_proof(param: TestParameter) {
             if param.proved_block_numbers == all_block_numbers {
                 assert!(proof.is_empty());
             }
-            if let Some(uncles_hash) = &param.returned_uncles_hash {
+            if let Some(uncles_hashes) = &param.returned_uncles_hashes {
                 let content = packed::SendBlocksProofV1::new_builder()
                     .last_header(last_header)
                     .proof(proof)
                     .headers(headers.pack())
                     .missing_block_hashes(param.returned_missing_block_hashes.clone().pack())
-                    .blocks_uncles_hash(uncles_hash.to_owned().pack())
+                    .blocks_uncles_hash(uncles_hashes.to_owned().pack())
                     .build();
                 packed::LightClientMessage::new_builder()
                     .set(content)
