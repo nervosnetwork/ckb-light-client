@@ -7,12 +7,48 @@ use ckb_types::{
 };
 
 use crate::{
-    protocols::{LastState, ProveRequest, ProveState, StatusCode},
+    protocols::{
+        light_client::prelude::HeaderUtils, LastState, LightClientProtocol, ProveRequest,
+        ProveState, StatusCode,
+    },
+    storage::LightClientStorage,
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
     },
 };
+
+fn assert_last_state_proof_requested(
+    network_context: &MockNetworkContext,
+    expected_last_hash: &packed::Byte32,
+) {
+    let sent_messages = network_context.sent_messages().borrow();
+    assert_eq!(sent_messages.len(), 1);
+    let sent_message_bytes = &sent_messages[0].2;
+    let message = packed::LightClientMessageReader::new_unchecked(sent_message_bytes);
+    let content = if let packed::LightClientMessageUnionReader::GetLastStateProof(content) =
+        message.to_enum()
+    {
+        content
+    } else {
+        panic!("unexpected message");
+    };
+    assert_eq!(
+        content.last_hash().as_slice(),
+        expected_last_hash.as_slice()
+    );
+}
+
+fn prove_state_is_parent_of(prove_state: &ProveState, last_state: &LastState) -> bool {
+    prove_state
+        .get_last_header()
+        .header()
+        .is_parent_of(last_state.as_ref().header())
+}
+
+fn stored_last_header(protocol: &LightClientProtocol) -> packed::Header {
+    protocol.storage().get_last_state().1
+}
 
 #[tokio::test]
 async fn peer_state_is_not_found() {
@@ -153,18 +189,7 @@ async fn initialize_last_state() {
         .get_peer_state(&peer_index)
         .expect("has peer state");
     assert!(peer_state.get_last_state().is_some());
-    assert_eq!(nc.sent_messages().borrow().len(), 1);
-
-    let data = &nc.sent_messages().borrow()[0].2;
-    let message = packed::LightClientMessageReader::new_unchecked(data);
-    let content = if let packed::LightClientMessageUnionReader::GetLastStateProof(content) =
-        message.to_enum()
-    {
-        content
-    } else {
-        panic!("unexpected message");
-    };
-    assert_eq!(content.last_hash().as_slice(), last_hash.as_slice());
+    assert_last_state_proof_requested(&nc, &last_hash);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -304,25 +329,30 @@ async fn update_to_continuous_last_state() {
         let last_header: VerifiableHeader = last_header.into();
         let last_state = LastState::new(last_header.clone());
 
-        let prove_state = protocol
+        let prove_state_before = protocol
             .get_peer_state(&peer_index)
             .expect("has peer state")
             .get_prove_state()
             .expect("has prove state")
             .to_owned();
-        assert!(prove_state.is_parent_of(&last_state));
+        assert!(prove_state_is_parent_of(&prove_state_before, &last_state));
+        let stored_last_header_before = stored_last_header(&protocol);
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        assert!(nc.sent_messages().borrow().is_empty());
+        assert_last_state_proof_requested(&nc, &last_header.header().hash());
 
-        let prove_state = protocol
+        let prove_state_after = protocol
             .get_peer_state(&peer_index)
             .expect("has peer state")
             .get_prove_state()
             .expect("has prove state")
             .to_owned();
-        assert!(prove_state.is_same_as(&last_header));
+        assert!(prove_state_after.is_same_as(prove_state_before.get_last_header()));
+        assert_eq!(
+            stored_last_header(&protocol).as_slice(),
+            stored_last_header_before.as_slice()
+        );
     }
 }
 
@@ -410,11 +440,11 @@ async fn update_to_noncontinuous_last_state() {
             .get_prove_state()
             .expect("has prove state")
             .to_owned();
-        assert!(!prove_state.is_parent_of(&last_state));
+        assert!(!prove_state_is_parent_of(&prove_state, &last_state));
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        assert!(nc.sent_messages().borrow().is_empty());
+        assert_last_state_proof_requested(&nc, &last_header.header().hash());
 
         let prove_state = protocol
             .get_peer_state(&peer_index)
@@ -534,7 +564,7 @@ async fn update_to_continuous_but_forked_last_state() {
             .get_prove_state()
             .expect("has prove state")
             .to_owned();
-        assert!(!prove_state.is_parent_of(&last_state));
+        assert!(!prove_state_is_parent_of(&prove_state, &last_state));
 
         protocol.received(nc.context(), peer_index, data).await;
 
