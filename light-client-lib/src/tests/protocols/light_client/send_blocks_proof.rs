@@ -439,6 +439,21 @@ async fn empty_proof_since_all_blocks_are_missing() {
         returned_headers: block_numbers,
         missing_block_hashes: missing_block_hashes.clone(),
         returned_missing_block_hashes: missing_block_hashes,
+        ..Default::default()
+    };
+    test_send_blocks_proof(param).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rejects_v1_fields_when_all_blocks_are_missing() {
+    let missing_block_hashes = vec![h256!("0x1").pack(), h256!("0x2").pack()];
+    let param = TestParameter {
+        last_block_number: 20,
+        missing_block_hashes: missing_block_hashes.clone(),
+        returned_missing_block_hashes: missing_block_hashes,
+        returned_uncles_hash: Some(vec![packed::Byte32::default()]),
+        expected_status: Some(StatusCode::MalformedProtocolMessage),
+        ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
@@ -456,6 +471,7 @@ async fn nonempty_proof_since_all_blocks_are_missing() {
         returned_headers,
         missing_block_hashes: missing_block_hashes.clone(),
         returned_missing_block_hashes: missing_block_hashes,
+        ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
@@ -472,6 +488,7 @@ async fn valid_proof_with_missing_block_hashes() {
         returned_headers: block_numbers,
         missing_block_hashes: missing_block_hashes.clone(),
         returned_missing_block_hashes: missing_block_hashes,
+        ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
@@ -489,6 +506,7 @@ async fn invalid_proof_with_insufficient_missing_block_hashes() {
         returned_headers: block_numbers,
         missing_block_hashes,
         returned_missing_block_hashes,
+        ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
@@ -506,6 +524,7 @@ async fn invalid_proof_with_redundant_missing_block_hashes() {
         returned_headers: block_numbers,
         missing_block_hashes,
         returned_missing_block_hashes,
+        ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
@@ -523,6 +542,7 @@ async fn invalid_proof_with_duplicate_missing_block_hashes() {
         returned_headers: block_numbers,
         missing_block_hashes,
         returned_missing_block_hashes,
+        ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
@@ -610,6 +630,8 @@ struct TestParameter {
     returned_headers: Vec<BlockNumber>,
     missing_block_hashes: Vec<packed::Byte32>,
     returned_missing_block_hashes: Vec<packed::Byte32>,
+    returned_uncles_hash: Option<Vec<packed::Byte32>>,
+    expected_status: Option<StatusCode>,
 }
 
 async fn test_send_blocks_proof(param: TestParameter) {
@@ -701,15 +723,28 @@ async fn test_send_blocks_proof(param: TestParameter) {
             if param.proved_block_numbers == all_block_numbers {
                 assert!(proof.is_empty());
             }
-            let content = packed::SendBlocksProof::new_builder()
-                .last_header(last_header)
-                .proof(proof)
-                .headers(headers.pack())
-                .missing_block_hashes(param.returned_missing_block_hashes.clone().pack())
-                .build();
-            packed::LightClientMessage::new_builder()
-                .set(content)
-                .build()
+            if let Some(uncles_hash) = &param.returned_uncles_hash {
+                let content = packed::SendBlocksProofV1::new_builder()
+                    .last_header(last_header)
+                    .proof(proof)
+                    .headers(headers.pack())
+                    .missing_block_hashes(param.returned_missing_block_hashes.clone().pack())
+                    .blocks_uncles_hash(uncles_hash.to_owned().pack())
+                    .build();
+                packed::LightClientMessage::new_builder()
+                    .set(content)
+                    .build()
+            } else {
+                let content = packed::SendBlocksProof::new_builder()
+                    .last_header(last_header)
+                    .proof(proof)
+                    .headers(headers.pack())
+                    .missing_block_hashes(param.returned_missing_block_hashes.clone().pack())
+                    .build();
+                packed::LightClientMessage::new_builder()
+                    .set(content)
+                    .build()
+            }
         }
         .as_bytes();
 
@@ -717,7 +752,10 @@ async fn test_send_blocks_proof(param: TestParameter) {
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        if param.block_numbers == param.proved_block_numbers
+        if let Some(expected_status) = param.expected_status {
+            assert!(nc.banned_since(peer_index, expected_status));
+            assert!(nc.sent_messages().borrow().is_empty());
+        } else if param.block_numbers == param.proved_block_numbers
             && param.block_numbers == param.returned_headers
             && param.missing_block_hashes == param.returned_missing_block_hashes
         {
