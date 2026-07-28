@@ -149,9 +149,9 @@ impl<'a> BlockFiltersProcess<'a> {
                         .first()
                         .cloned()
                     else {
-                        let errmsg =
+                        let error_message =
                             format!("check point at index {cached_check_point_index} is missing");
-                        return StatusCode::CheckPointsIsUnexpected.with_context(errmsg);
+                        return StatusCode::InternalError.with_context(error_message);
                     };
                     (cached_check_point, cached_block_filter_hashes)
                 } else {
