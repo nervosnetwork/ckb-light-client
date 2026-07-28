@@ -57,53 +57,28 @@ impl<'a> SendTransactionsProofProcess<'a> {
         };
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
-        let filtered_blocks: Vec<packed::FilteredBlock> = self
-            .message
-            .filtered_blocks()
-            .to_entity()
-            .into_iter()
-            .collect();
-        let headers: Vec<_> = filtered_blocks
-            .iter()
-            .map(|block| block.header().into_view())
-            .collect();
-
+        let filtered_blocks_len = self.message.filtered_blocks().len();
         let is_v1 = self.message.count_extra_fields() >= 2;
-        let (uncle_hashes, extensions) = if is_v1 {
+        if is_v1 {
             let message_v1 =
                 packed::SendTransactionsProofV1Reader::new_unchecked(self.message.as_slice());
-            let uncle_hashes: Vec<_> = message_v1
-                .blocks_uncles_hash()
-                .iter()
-                .map(|uncle_hashes| uncle_hashes.to_entity())
-                .collect();
+            let uncle_hashes_len = message_v1.blocks_uncles_hash().len();
+            let extensions_len = message_v1.blocks_extension().len();
 
-            let extensions: Vec<_> = message_v1
-                .blocks_extension()
-                .iter()
-                .map(|extension| extension.to_entity().to_opt())
-                .collect();
-
-            if uncle_hashes.len() != headers.len() || extensions.len() != headers.len() {
+            if uncle_hashes_len != filtered_blocks_len || extensions_len != filtered_blocks_len {
                 let error_message = format!(
                     "SendTransactionsProof v1 field length mismatch: \
                      headers={}, uncle_hashes={}, extensions={}",
-                    headers.len(),
-                    uncle_hashes.len(),
-                    extensions.len()
+                    filtered_blocks_len, uncle_hashes_len, extensions_len
                 );
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
             }
-
-            (Some(uncle_hashes), extensions)
-        } else {
-            (None, vec![None; headers.len()])
-        };
+        }
 
         // Update the last state if the response contains a new one.
         if original_request.last_hash() != last_header.header().hash() {
             if self.message.proof().is_empty()
-                && filtered_blocks.is_empty()
+                && self.message.filtered_blocks().is_empty()
                 && self.message.missing_tx_hashes().is_empty()
             {
                 return_if_failed!(self
@@ -122,6 +97,17 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 return StatusCode::UnexpectedResponse.into();
             }
         }
+
+        let filtered_blocks: Vec<packed::FilteredBlock> = self
+            .message
+            .filtered_blocks()
+            .to_entity()
+            .into_iter()
+            .collect();
+        let headers: Vec<_> = filtered_blocks
+            .iter()
+            .map(|block| block.header().into_view())
+            .collect();
 
         // Check if the response is match the request.
         let received_tx_hashes = filtered_blocks
@@ -153,9 +139,25 @@ impl<'a> SendTransactionsProofProcess<'a> {
             return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
             // Check extra hash for blocks
-            if let Some(uncle_hashes) = uncle_hashes.as_ref() {
-                return_if_failed!(verify_extra_hash(&headers, uncle_hashes, &extensions));
-            }
+            let extensions = if is_v1 {
+                let message_v1 =
+                    packed::SendTransactionsProofV1Reader::new_unchecked(self.message.as_slice());
+                let uncle_hashes: Vec<_> = message_v1
+                    .blocks_uncles_hash()
+                    .iter()
+                    .map(|uncle_hashes| uncle_hashes.to_entity())
+                    .collect();
+                let extensions: Vec<_> = message_v1
+                    .blocks_extension()
+                    .iter()
+                    .map(|extension| extension.to_entity().to_opt())
+                    .collect();
+
+                return_if_failed!(verify_extra_hash(&headers, &uncle_hashes, &extensions));
+                extensions
+            } else {
+                vec![None; headers.len()]
+            };
 
             // Verify the proof
             return_if_failed!(verify_mmr_proof(

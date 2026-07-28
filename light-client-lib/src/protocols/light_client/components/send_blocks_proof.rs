@@ -57,49 +57,28 @@ impl<'a> SendBlocksProofProcess<'a> {
         };
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
-        let headers: Vec<_> = self
-            .message
-            .headers()
-            .iter()
-            .map(|header| header.to_entity().into_view())
-            .collect();
-
+        let headers_len = self.message.headers().len();
         let is_v1 = self.message.count_extra_fields() >= 2;
-        let (uncle_hashes, extensions) = if is_v1 {
+        if is_v1 {
             let message_v1 =
                 packed::SendBlocksProofV1Reader::new_unchecked(self.message.as_slice());
-            let uncle_hashes: Vec<_> = message_v1
-                .blocks_uncles_hash()
-                .iter()
-                .map(|uncle_hashes| uncle_hashes.to_entity())
-                .collect();
+            let uncle_hashes_len = message_v1.blocks_uncles_hash().len();
+            let extensions_len = message_v1.blocks_extension().len();
 
-            let extensions: Vec<_> = message_v1
-                .blocks_extension()
-                .iter()
-                .map(|extension| extension.to_entity().to_opt())
-                .collect();
-
-            if uncle_hashes.len() != headers.len() || extensions.len() != headers.len() {
+            if uncle_hashes_len != headers_len || extensions_len != headers_len {
                 let error_message = format!(
                     "SendBlocksProof v1 field length mismatch: \
                      headers={}, uncle_hashes={}, extensions={}",
-                    headers.len(),
-                    uncle_hashes.len(),
-                    extensions.len()
+                    headers_len, uncle_hashes_len, extensions_len
                 );
                 return StatusCode::MalformedProtocolMessage.with_context(error_message);
             }
-
-            (Some(uncle_hashes), extensions)
-        } else {
-            (None, vec![None; headers.len()])
-        };
+        }
 
         // Update the last state if the response contains a new one.
         if original_request.last_hash() != last_header.header().hash() {
             if self.message.proof().is_empty()
-                && headers.is_empty()
+                && self.message.headers().is_empty()
                 && self.message.missing_block_hashes().is_empty()
             {
                 return_if_failed!(self
@@ -118,6 +97,13 @@ impl<'a> SendBlocksProofProcess<'a> {
                 return StatusCode::UnexpectedResponse.into();
             }
         }
+
+        let headers: Vec<_> = self
+            .message
+            .headers()
+            .iter()
+            .map(|header| header.to_entity().into_view())
+            .collect();
 
         // Check if the response is match the request.
         let received_block_hashes = headers
@@ -152,9 +138,25 @@ impl<'a> SendBlocksProofProcess<'a> {
             return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
             // Check extra hash for blocks
-            if let Some(uncle_hashes) = uncle_hashes.as_ref() {
-                return_if_failed!(verify_extra_hash(&headers, uncle_hashes, &extensions));
-            }
+            let extensions = if is_v1 {
+                let message_v1 =
+                    packed::SendBlocksProofV1Reader::new_unchecked(self.message.as_slice());
+                let uncle_hashes: Vec<_> = message_v1
+                    .blocks_uncles_hash()
+                    .iter()
+                    .map(|uncle_hashes| uncle_hashes.to_entity())
+                    .collect();
+                let extensions: Vec<_> = message_v1
+                    .blocks_extension()
+                    .iter()
+                    .map(|extension| extension.to_entity().to_opt())
+                    .collect();
+
+                return_if_failed!(verify_extra_hash(&headers, &uncle_hashes, &extensions));
+                extensions
+            } else {
+                vec![None; headers.len()]
+            };
 
             // Verify the proof
             return_if_failed!(verify_mmr_proof(
