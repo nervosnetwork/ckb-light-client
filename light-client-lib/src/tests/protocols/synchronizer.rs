@@ -181,6 +181,19 @@ async fn rejects_block_with_extension_not_committed_by_header() {
 }
 
 #[tokio::test]
+async fn rejects_block_with_uncles_not_committed_by_header() {
+    let block_view = BlockBuilder::default().build();
+    let received_uncle = packed::UncleBlock::new_builder().build();
+    let received_block = block_view
+        .data()
+        .as_builder()
+        .uncles(vec![received_uncle].pack())
+        .build();
+
+    assert_rejects_block_body(block_view, received_block).await;
+}
+
+#[tokio::test]
 async fn rejects_block_with_uncle_proposals_not_committed_by_uncle_header() {
     let uncle = packed::UncleBlock::new_builder().build().into_view();
     let block_view = BlockBuilder::default().uncle(uncle.clone()).build();
