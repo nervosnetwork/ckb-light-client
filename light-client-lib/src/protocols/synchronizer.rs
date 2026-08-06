@@ -1,11 +1,12 @@
+use std::collections::HashSet;
+use std::sync::Arc;
+
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{
     async_trait, bytes::Bytes, BoxedCKBProtocolContext, CKBProtocolHandler, PeerIndex,
 };
-use ckb_types::{packed, prelude::*};
+use ckb_types::{core::BlockView, packed, prelude::*};
 use log::{info, trace, warn};
-use std::collections::HashSet;
-use std::sync::Arc;
 
 use super::BAD_MESSAGE_BAN_TIME;
 use crate::protocols::Peers;
@@ -15,6 +16,16 @@ use crate::utils::network::prove_or_download_matched_blocks;
 pub struct SyncProtocol {
     storage: Storage,
     peers: Arc<Peers>,
+}
+
+fn block_body_matches_header(block: &BlockView) -> bool {
+    block.transactions_root() == block.calc_transactions_root()
+        && block.proposals_hash() == block.calc_proposals_hash()
+        && block.extra_hash() == block.calc_extra_hash().extra_hash()
+        && block
+            .uncles()
+            .into_iter()
+            .all(|uncle| uncle.proposals_hash() == uncle.calc_proposals_hash())
 }
 
 impl SyncProtocol {
@@ -60,7 +71,47 @@ impl CKBProtocolHandler for SyncProtocol {
         match message {
             packed::SyncMessageUnionReader::SendBlock(reader) => {
                 let new_block = reader.to_entity().block();
-                let mut matched_blocks = self.peers.matched_blocks().write().await;
+                let block_hash = new_block.header().calc_header_hash();
+                let block_hash_key = block_hash.unpack();
+                let mut body_validated = false;
+                // The proof state can change after releasing the read lock. Recheck it
+                // under the write lock and validate before caching if it became proved.
+                let mut matched_blocks = loop {
+                    let should_validate = self
+                        .peers
+                        .matched_blocks()
+                        .read()
+                        .await
+                        .get(&block_hash_key)
+                        .is_some_and(|(proved, _)| *proved);
+                    if should_validate && !body_validated {
+                        let block = new_block.clone().into_view_without_reset_header();
+                        if !block_body_matches_header(&block) {
+                            warn!(
+                                "SyncProtocol received a block whose body does not match \
+                                 the proved header from peer={}",
+                                peer
+                            );
+                            nc.ban_peer(
+                                peer,
+                                BAD_MESSAGE_BAN_TIME,
+                                String::from("block body does not match header"),
+                            );
+                            return;
+                        }
+                        body_validated = true;
+                    }
+
+                    let matched_blocks = self.peers.matched_blocks().write().await;
+                    let is_proved = matched_blocks
+                        .get(&block_hash_key)
+                        .is_some_and(|(proved, _)| *proved);
+                    if is_proved && !body_validated {
+                        drop(matched_blocks);
+                        continue;
+                    }
+                    break matched_blocks;
+                };
                 self.peers.add_block(&mut matched_blocks, new_block);
                 if !matched_blocks.is_empty()
                     && self.peers.all_matched_blocks_downloaded(&matched_blocks)

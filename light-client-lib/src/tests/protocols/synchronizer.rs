@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
-    core::BlockBuilder,
+    core::{BlockBuilder, BlockView},
     packed::{self, Script},
     prelude::*,
 };
@@ -85,4 +85,128 @@ async fn test_sync_add_block() {
     let filtered_block_number = start_number - 1 + blocks_count;
     assert_eq!(storage_filtered_block_number, filtered_block_number);
     assert!(nc.sent_messages().borrow().is_empty());
+}
+
+async fn assert_rejects_block_body(block_view: BlockView, received_block: packed::Block) {
+    let chain = MockChain::new_with_dummy_pow("test-sync");
+    let network_context = MockNetworkContext::new(SupportProtocols::Sync);
+
+    let scripts = vec![ScriptStatus {
+        script: Script::default(),
+        script_type: ScriptType::Lock,
+        block_number: 1,
+    }];
+    chain
+        .client_storage()
+        .update_filter_scripts(scripts, Default::default());
+
+    let proved_block_hash = block_view.hash();
+    chain
+        .client_storage()
+        .add_matched_blocks(2, 1, vec![(proved_block_hash.clone(), true)]);
+
+    let peer_index = PeerIndex::new(3);
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(peer_index);
+        {
+            let mut matched_blocks = peers.matched_blocks().write().await;
+            peers.add_matched_blocks(&mut matched_blocks, vec![(proved_block_hash.clone(), true)]);
+        }
+        peers
+    };
+
+    let message = packed::SyncMessage::new_builder()
+        .set(
+            packed::SendBlock::new_builder()
+                .block(received_block)
+                .build(),
+        )
+        .build()
+        .as_bytes();
+
+    let mut protocol = chain.create_sync_protocol(Arc::clone(&peers));
+    protocol
+        .received(network_context.context(), peer_index, message)
+        .await;
+
+    assert!(network_context.has_banned(peer_index).is_some());
+    assert!(peers
+        .matched_blocks()
+        .read()
+        .await
+        .get(&proved_block_hash.unpack())
+        .is_some_and(|(_, block)| block.is_none()));
+    assert!(chain
+        .client_storage()
+        .get_earliest_matched_blocks()
+        .is_some());
+}
+
+#[tokio::test]
+async fn rejects_block_with_transactions_not_committed_by_header() {
+    let block_view = BlockBuilder::default().build();
+    let received_block = block_view
+        .data()
+        .as_builder()
+        .transactions(vec![packed::Transaction::default()].pack())
+        .build();
+
+    assert_rejects_block_body(block_view, received_block).await;
+}
+
+#[tokio::test]
+async fn rejects_block_with_proposals_not_committed_by_header() {
+    let block_view = BlockBuilder::default().build();
+    let received_block = block_view
+        .data()
+        .as_builder()
+        .proposals(vec![packed::ProposalShortId::default()].pack())
+        .build();
+
+    assert_rejects_block_body(block_view, received_block).await;
+}
+
+#[tokio::test]
+async fn rejects_block_with_extension_not_committed_by_header() {
+    let extension = packed::Bytes::new_builder().push(1u8).build();
+    let block_view = BlockBuilder::default().build();
+    let received_block = block_view
+        .as_advanced_builder()
+        .extension(Some(extension))
+        .build_unchecked()
+        .data();
+
+    assert_rejects_block_body(block_view, received_block).await;
+}
+
+#[tokio::test]
+async fn rejects_block_with_uncles_not_committed_by_header() {
+    let block_view = BlockBuilder::default().build();
+    let received_uncle = packed::UncleBlock::new_builder().build();
+    let received_block = block_view
+        .data()
+        .as_builder()
+        .uncles(vec![received_uncle].pack())
+        .build();
+
+    assert_rejects_block_body(block_view, received_block).await;
+}
+
+#[tokio::test]
+async fn rejects_block_with_uncle_proposals_not_committed_by_uncle_header() {
+    let uncle = packed::UncleBlock::new_builder().build().into_view();
+    let block_view = BlockBuilder::default().uncle(uncle.clone()).build();
+    let received_uncle = uncle
+        .data()
+        .as_builder()
+        .proposals(vec![packed::ProposalShortId::default()].pack())
+        .build();
+    let received_block = block_view
+        .data()
+        .as_builder()
+        .uncles(vec![received_uncle].pack())
+        .build();
+
+    assert_rejects_block_body(block_view, received_block).await;
 }
