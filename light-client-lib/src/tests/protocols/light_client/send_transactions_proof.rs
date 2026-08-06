@@ -414,6 +414,15 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_send_txs_proof_is_empty() {
+    test_empty_txs_proof(false, false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rejects_v1_fields_before_processing_changed_last_state() {
+    test_empty_txs_proof(true, true).await;
+}
+
+async fn test_empty_txs_proof(with_unexpected_extension: bool, last_state_changed: bool) {
     let chain = MockChain::new_with_dummy_pow("test-send-txs").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
     let peer_index = PeerIndex::new(3);
@@ -425,7 +434,18 @@ async fn test_send_txs_proof_is_empty() {
         .snapshot()
         .get_verifiable_header_by_number(20)
         .unwrap();
-    let message = {
+    let message = if with_unexpected_extension {
+        let unexpected_extension = packed::BytesOpt::new_builder()
+            .set(Some(packed::Bytes::default()))
+            .build();
+        let content = packed::SendTransactionsProofV1::new_builder()
+            .last_header(last_header.clone())
+            .blocks_extension(vec![unexpected_extension])
+            .build();
+        packed::LightClientMessage::new_builder()
+            .set(content)
+            .build()
+    } else {
         let content = packed::SendTransactionsProof::new_builder()
             .last_header(last_header.clone())
             .build();
@@ -433,6 +453,86 @@ async fn test_send_txs_proof_is_empty() {
             .set(content)
             .build()
     };
+
+    let peers = {
+        let peers = chain.create_peers();
+        let txs_proof_request = packed::GetTransactionsProof::new_builder()
+            .last_hash(if last_state_changed {
+                packed::Byte32::default()
+            } else {
+                last_header.header().calc_header_hash()
+            })
+            .build();
+        peers.add_peer(peer_index);
+        peers
+            .mock_prove_state(peer_index, last_header.into())
+            .unwrap();
+        peers.update_txs_proof_request(peer_index, Some(txs_proof_request));
+        peers
+    };
+
+    let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
+    protocol
+        .received(nc.context(), peer_index, message.as_bytes())
+        .await;
+
+    if with_unexpected_extension {
+        assert!(nc.banned_since(peer_index, StatusCode::MalformedProtocolMessage));
+    } else {
+        assert!(nc.not_banned(peer_index));
+    }
+    assert!(nc.sent_messages().borrow().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rejects_malformed_v1_extra_fields() {
+    // A V1 proof whose trailing `blocks_extension` field is too short to hold a
+    // Molecule Vec header (total_size + item_count). The base message still
+    // parses, so the response reaches the handler, but the V1 extra field is
+    // structurally invalid. Under the previous `new_unchecked` + `.len()` path
+    // this panicked inside `unpack_number`; with the validating reader it must
+    // be rejected as a malformed protocol message instead.
+    let chain = MockChain::new_with_dummy_pow("test-send-txs").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+    let peer_index = PeerIndex::new(3);
+
+    chain.mine_to(20);
+    let last_header = chain
+        .shared()
+        .snapshot()
+        .get_verifiable_header_by_number(20)
+        .unwrap();
+
+    // Build a structurally valid V1 message, then truncate its trailing field.
+    let extension = packed::BytesOpt::new_builder()
+        .set(Some(packed::Bytes::default()))
+        .build();
+    let content = packed::SendTransactionsProofV1::new_builder()
+        .last_header(last_header.clone())
+        .blocks_extension(vec![extension])
+        .build();
+
+    let mut bytes = content.as_slice().to_vec();
+    {
+        // `blocks_extension` is the last field, so it occupies the tail
+        // `[extension_offset, total_size)` of the table.
+        let reader = packed::SendTransactionsProofV1Reader::new_unchecked(&bytes);
+        let extension_len = reader.blocks_extension().as_slice().len();
+        let mut header = [0u8; 4];
+        header.copy_from_slice(&bytes[0..4]);
+        let total_size = u32::from_le_bytes(header) as usize;
+        let extension_offset = total_size - extension_len;
+        // Keep only 2 bytes of the trailing field: too short for a Vec header,
+        // so `from_compatible_slice` rejects it while the base message still
+        // parses.
+        bytes.truncate(extension_offset + 2);
+        let new_total = bytes.len() as u32;
+        bytes[0..4].copy_from_slice(&new_total.to_le_bytes());
+    }
+    let malformed = packed::SendTransactionsProofV1::new_unchecked(bytes.into());
+    let message = packed::LightClientMessage::new_builder()
+        .set(malformed)
+        .build();
 
     let peers = {
         let peers = chain.create_peers();
@@ -452,7 +552,7 @@ async fn test_send_txs_proof_is_empty() {
         .received(nc.context(), peer_index, message.as_bytes())
         .await;
 
-    assert!(nc.not_banned(peer_index));
+    assert!(nc.banned_since(peer_index, StatusCode::MalformedProtocolMessage));
     assert!(nc.sent_messages().borrow().is_empty());
 }
 
