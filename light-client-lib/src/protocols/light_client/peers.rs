@@ -12,12 +12,11 @@ use ckb_types::{
     packed::Byte32,
     prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader,
-    H256, U256,
+    H256,
 };
 use dashmap::DashMap;
 use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
 
-use super::prelude::*;
 use crate::{
     mutex_lock,
     protocols::{Status, StatusCode, BAD_MESSAGE_ALLOWED_EACH_HOUR, MESSAGE_TIMEOUT},
@@ -256,14 +255,6 @@ impl LastState {
         }
     }
 
-    pub(crate) fn total_difficulty(&self) -> U256 {
-        self.as_ref().total_difficulty()
-    }
-
-    pub(crate) fn header(&self) -> &HeaderView {
-        self.as_ref().header()
-    }
-
     pub(crate) fn update_ts(&self) -> u64 {
         self.update_ts
     }
@@ -380,28 +371,6 @@ impl ProveState {
             reorg_last_headers,
             last_headers,
         }
-    }
-
-    pub(crate) fn new_child(&self, child_last_state: LastState, last_n_blocks: usize) -> Self {
-        let parent_header = self.get_last_header().header();
-        let mut last_headers = self.last_headers.clone();
-        let reorg_last_headers = self.reorg_last_headers.clone();
-        // To avoid unlimited memory growth.
-        if last_headers.len() >= last_n_blocks {
-            last_headers.remove(0);
-        }
-        last_headers.push(parent_header.clone());
-        Self {
-            last_state: child_last_state,
-            reorg_last_headers,
-            last_headers,
-        }
-    }
-
-    pub(crate) fn is_parent_of(&self, child_last_state: &LastState) -> bool {
-        self.get_last_header()
-            .header()
-            .is_parent_of(child_last_state.header())
     }
 
     pub fn get_last_header(&self) -> &VerifiableHeader {

@@ -314,26 +314,6 @@ impl LightClientProtocol {
         Ok(())
     }
 
-    /// Update the prove state to the child block.
-    /// - Update the peer's cache.
-    /// - Try to update the storage without caring about fork.
-    async fn update_prove_state_to_child(
-        &self,
-        peer_index: PeerIndex,
-        new_prove_state: ProveState,
-    ) -> Result<(), Status> {
-        let (old_total_difficulty, _) = self.storage.get_last_state();
-        let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
-        if new_total_difficulty > old_total_difficulty {
-            self.storage.update_last_state(
-                &new_total_difficulty,
-                &new_prove_state.get_last_header().header().data(),
-                new_prove_state.get_last_headers(),
-            );
-        }
-        self.peers().update_prove_state(peer_index, new_prove_state)
-    }
-
     /// Update the prove state base on the previous request.
     /// - Update the peer's cache.
     /// - Try to update the storage and handle potential fork.

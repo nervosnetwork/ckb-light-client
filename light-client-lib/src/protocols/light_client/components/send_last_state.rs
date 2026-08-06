@@ -36,7 +36,7 @@ impl<'a> SendLastStateProcess<'a> {
 
         let last_state = LastState::new(last_header);
 
-        if let Some(prev_last_state) = peer_state.get_last_state() {
+        let is_updated = if let Some(prev_last_state) = peer_state.get_last_state() {
             if last_state.is_same_as(prev_last_state) {
                 trace!(
                     "peer {}: receive the same last state as previous {}",
@@ -45,6 +45,7 @@ impl<'a> SendLastStateProcess<'a> {
                 );
                 // Do NOT update the timestamp for same last state,
                 // so it could be banned after timeout check.
+                false
             } else {
                 trace!(
                     "peer {}: update last state from {} to {}",
@@ -56,23 +57,8 @@ impl<'a> SendLastStateProcess<'a> {
                 return_if_failed!(self
                     .protocol
                     .peers()
-                    .update_last_state(self.peer_index, last_state.clone()));
-
-                if prev_last_state.total_difficulty() < last_state.total_difficulty() {
-                    if let Some(prove_state) = peer_state.get_prove_state() {
-                        if prove_state.is_parent_of(&last_state) {
-                            trace!("peer {}: new last state could be trusted", self.peer_index);
-                            let last_n_blocks = self.protocol.last_n_blocks() as usize;
-                            let child_prove_state =
-                                prove_state.new_child(last_state, last_n_blocks);
-                            return_if_failed!(
-                                self.protocol
-                                    .update_prove_state_to_child(self.peer_index, child_prove_state)
-                                    .await
-                            );
-                        }
-                    }
-                }
+                    .update_last_state(self.peer_index, last_state));
+                true
             }
         } else {
             trace!(
@@ -85,7 +71,10 @@ impl<'a> SendLastStateProcess<'a> {
                 .protocol
                 .peers()
                 .update_last_state(self.peer_index, last_state));
+            true
+        };
 
+        if is_updated {
             let is_sent = return_if_failed!(
                 self.protocol
                     .get_last_state_proof(self.nc, self.peer_index)
