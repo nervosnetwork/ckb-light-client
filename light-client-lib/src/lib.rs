@@ -11,3 +11,7 @@ pub mod storage;
 pub mod types;
 pub mod utils;
 pub mod verify;
+
+// JNI bridge for Android
+#[cfg(all(feature = "jni-bridge", target_os = "android"))]
+pub mod jni_bridge;

@@ -7,3 +7,15 @@
 /package-lock.json
 /.vscode
 /data
+
+# Android/Gradle
+android-app/.gradle/
+android-app/app/build/
+android-app/local.properties
+*.apk
+*.aab
+
+# Build artifacts
+*.o
+*.a
+*.so

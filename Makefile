@@ -66,3 +66,60 @@ coverage-collect-data:
 
 coverage-generate-report:
 	genhtml -o "${GRCOV_OUTPUT:.info=}" "${GRCOV_OUTPUT}"
+
+
+android-package:
+	@echo "======================================"
+	@echo "Building Android APK"
+	@echo "======================================"
+	@echo ""
+	@echo "📦 Step 1: Building native JNI libraries..."
+	./build-android-jni.sh
+	@echo ""
+	@echo "📦 Step 2: Copying JNI libraries to Android project..."
+	mkdir -p android-app/app/src/main/jniLibs/arm64-v8a
+	cp target/aarch64-linux-android/release/libckb_light_client_lib.so android-app/app/src/main/jniLibs/arm64-v8a/
+	@if [ -f android-app/app/src/main/jniLibs/arm64-v8a/libc++_shared.so ]; then \
+		echo "  ✓ libc++_shared.so already present"; \
+	else \
+		echo "  ⚠ libc++_shared.so not found (build-android-jni.sh should have copied it)"; \
+	fi
+	@echo ""
+	@echo "📱 Step 3: Building Android APK with Gradle..."
+	cd android-app && chmod +x gradlew && ANDROID_HOME=$${ANDROID_HOME:-$$HOME/Android/Sdk} ./gradlew assembleDebug
+	@echo ""
+	@echo "======================================"
+	@echo "✅ Build completed successfully!"
+	@echo "======================================"
+	@echo ""
+	@echo "📦 APK location:"
+	@ls -lh android-app/app/build/outputs/apk/debug/app-debug.apk 2>/dev/null || echo "  APK not found"
+	@echo ""
+	@echo "To install on device: make android-install"
+	@echo ""
+
+android-install:
+	@echo "📲 Installing APK to connected device..."
+	@if [ ! -f android-app/app/build/outputs/apk/debug/app-debug.apk ]; then \
+		echo "❌ APK not found. Run 'make android-package' first."; \
+		exit 1; \
+	fi
+	adb install -r android-app/app/build/outputs/apk/debug/app-debug.apk
+	@echo "✅ APK installed successfully!"
+	@echo "🚀 Launching app..."
+	adb shell monkey -p com.nervosnetwork.ckblightclient -c android.intent.category.LAUNCHER 1
+	@echo ""
+	@echo "📱 Monitor logs with: adb logcat | grep -i 'ckb\|LightClient'"
+	@echo ""
+
+android-clean:
+	@echo "🧹 Cleaning Android build artifacts..."
+	rm -rf android-app/app/build
+	rm -rf android-app/app/src/main/jniLibs
+	rm -rf android-app/.gradle
+	rm -rf target/aarch64-linux-android
+	rm -rf target/android-stubs
+	@echo "✅ Android build artifacts cleaned!"
+	@echo ""
+
+.PHONY: fmt clippy build build-wasm test test-portable test-wasm coverage-clean coverage-install-tools coverage-run-unittests coverage-collect-data coverage-generate-report android-package android-install android-clean

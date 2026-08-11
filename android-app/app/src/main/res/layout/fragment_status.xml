@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Light Client Status"
+            android:textSize="20sp"
+            android:textStyle="bold"
+            android:paddingBottom="16dp" />
+
+        <Button
+            android:id="@+id/refresh_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Refresh"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Connected Peers"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp" />
+
+        <TextView
+            android:id="@+id/peers_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Loading..."
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Tip Header"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tip_header_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Loading..."
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:paddingBottom="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Monitored Scripts"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingTop="8dp"
+            android:paddingBottom="4dp" />
+
+        <TextView
+            android:id="@+id/scripts_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Loading..."
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:paddingBottom="24dp" />
+
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="1dp"
+            android:background="#CCCCCC"
+            android:layout_marginBottom="16dp" />
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Custom RPC Call"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:paddingBottom="8dp" />
+
+        <EditText
+            android:id="@+id/rpc_method_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="RPC Method (e.g., get_tip_header)"
+            android:inputType="text"
+            android:padding="12dp"
+            android:background="@android:drawable/editbox_background" />
+
+        <EditText
+            android:id="@+id/rpc_params_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:hint="Params (JSON array, e.g. [&quot;param1&quot;, &quot;param2&quot;])"
+            android:inputType="textMultiLine"
+            android:minLines="2"
+            android:maxLines="4"
+            android:padding="12dp"
+            android:background="@android:drawable/editbox_background"
+            android:layout_marginTop="8dp" />
+
+        <Button
+            android:id="@+id/rpc_call_button"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Call RPC"
+            android:layout_marginTop="8dp" />
+
+        <TextView
+            android:id="@+id/rpc_result_text"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="RPC result will appear here..."
+            android:textSize="12sp"
+            android:fontFamily="monospace"
+            android:paddingTop="8dp" />
+
+    </LinearLayout>
+</ScrollView>

@@ -96,7 +96,7 @@ pub enum SetScriptsCommand {
     Delete,
 }
 
-#[derive(PartialEq, Eq, Hash)]
+#[derive(PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum ScriptType {
     Lock,
     Type,
