@@ -7,6 +7,7 @@ use ckb_types::{
 };
 use log::{debug, error, info, warn};
 use rand::seq::SliceRandom;
+use std::collections::HashSet;
 
 use crate::storage::{HeaderWithExtension, LightClientStorage};
 
@@ -291,6 +292,8 @@ impl<'a> SendBlocksProofProcess<'a> {
             }
 
             // Phase 2: apply actions (no active borrow on matched_blocks)
+            let mut lowest_rollback: Option<BlockNumber> = None;
+            let mut skipped_peers: HashSet<PeerIndex> = HashSet::new();
             for (hash, action) in actions {
                 match action {
                     Action::Retry {
@@ -319,6 +322,12 @@ impl<'a> SendBlocksProofProcess<'a> {
                             .storage()
                             .update_min_filtered_block_number(rollback_to);
 
+                        lowest_rollback = Some(match lowest_rollback {
+                            Some(cur) => cur.min(rollback_to),
+                            None => rollback_to,
+                        });
+                        skipped_peers.insert(bad_peer);
+
                         matched_blocks.remove(&hash.unpack());
                         retried_count += 1;
                     }
@@ -343,6 +352,42 @@ impl<'a> SendBlocksProofProcess<'a> {
                      will re-fetch BlockFilters from different peers.",
                     retried_count
                 );
+
+                // Immediately send a GetBlockFilters request so the retry
+                // doesn't wait for the FilterProtocol timer to fire.
+                if let Some(rollback_to) = lowest_rollback {
+                    let start_number = rollback_to + 1;
+                    let tip_header = self.protocol.storage().get_tip_header();
+                    let best_peers: Vec<_> = self
+                        .protocol
+                        .peers()
+                        .get_best_proved_peers(&tip_header)
+                        .into_iter()
+                        .filter(|p| !skipped_peers.contains(p))
+                        .collect();
+                    if let Some(peer) = best_peers.choose(&mut rand::thread_rng()) {
+                        let content = packed::GetBlockFilters::new_builder()
+                            .start_number(start_number)
+                            .build();
+                        let message = packed::BlockFilterMessage::new_builder()
+                            .set(content)
+                            .build();
+                        debug!(
+                            "Immediately sending GetBlockFilters to peer {}, start={}",
+                            peer, start_number
+                        );
+                        if let Err(err) = self.nc.send_message(
+                            SupportProtocols::Filter.protocol_id(),
+                            *peer,
+                            message.as_bytes(),
+                        ) {
+                            info!(
+                                "Failed to send immediate GetBlockFilters to {}: {:?}",
+                                peer, err
+                            );
+                        }
+                    }
+                }
             }
 
             // Check if batch is now complete
