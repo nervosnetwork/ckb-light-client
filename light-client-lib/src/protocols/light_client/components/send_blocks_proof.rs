@@ -1,17 +1,18 @@
 use ckb_network::{BoxedCKBProtocolContext, PeerIndex, SupportProtocols};
 use ckb_types::{
-    core::{ExtraHashView, HeaderView},
+    core::{BlockNumber, ExtraHashView, HeaderView},
     packed,
     prelude::*,
     utilities::merkle_mountain_range::VerifiableHeader,
 };
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use rand::seq::SliceRandom;
+use std::collections::HashSet;
 
 use crate::storage::{HeaderWithExtension, LightClientStorage};
 
 use super::{
-    super::{LightClientProtocol, Status, StatusCode},
+    super::{LightClientProtocol, Status, StatusCode, BAD_MESSAGE_BAN_TIME},
     verify_mmr_proof,
 };
 
@@ -252,48 +253,156 @@ impl<'a> SendBlocksProofProcess<'a> {
             .peers()
             .mark_fetching_headers_missing(&missing_block_hashes);
 
-        // Remove missing blocks from matched_blocks to prevent batch stall
-        // This is safe because:
-        // 1. If these are uncle blocks from an old fork, they've already been re-filtered
-        // 2. If from a recent reorg, SendLastStateProof will detect it and trigger
-        //    rollback_to_block(), which resets min_filtered_block_number and re-runs filters
-        // 3. New main chain blocks at the same heights will be checked during re-filtering
+        // Handle missing blocks: if we know which peer provided the hash via
+        // BlockFilters, a missing response may indicate a malicious peer sent
+        // a fake block_hash. Roll back the filter cursor and retry from a
+        // different peer (up to MAX_MISSING_RETRIES times). If we don't know
+        // the source (DB recovery) or retries are exhausted, remove silently.
+        const MAX_MISSING_RETRIES: u8 = 3;
         if original_request.should_get_blocks() && !missing_block_hashes.is_empty() {
             let mut matched_blocks = self.protocol.peers().matched_blocks().write().await;
             let mut removed_count = 0;
+            let mut retried_count = 0;
+
+            // Phase 1: collect decisions (must drop borrow before remove)
+            enum Action {
+                Retry {
+                    bad_peer: PeerIndex,
+                    block_number: BlockNumber,
+                },
+                Remove,
+            }
+            let mut actions: Vec<(packed::Byte32, Action)> = Vec::new();
 
             for missing_hash in &missing_block_hashes {
-                if matched_blocks.remove(&missing_hash.unpack()).is_some() {
-                    removed_count += 1;
-                    debug!(
-                        "Removed missing block {:#x} from matched_blocks \
-                         (likely uncle block or peer doesn't have it)",
-                        missing_hash
-                    );
+                let hash_key = missing_hash.unpack();
+                if let Some(state) = matched_blocks.get_mut(&hash_key) {
+                    let action = match state.filter_source {
+                        Some(bad_peer) if state.missing_count < MAX_MISSING_RETRIES => {
+                            state.missing_count += 1;
+                            Action::Retry {
+                                bad_peer,
+                                block_number: state.block_number,
+                            }
+                        }
+                        _ => Action::Remove,
+                    };
+                    actions.push((hash_key.pack(), action));
+                }
+            }
+
+            // Phase 2: apply actions (no active borrow on matched_blocks)
+            let mut lowest_rollback: Option<BlockNumber> = None;
+            let mut skipped_peers: HashSet<PeerIndex> = HashSet::new();
+            for (hash, action) in actions {
+                match action {
+                    Action::Retry {
+                        bad_peer,
+                        block_number,
+                    } => {
+                        let rollback_to = block_number.saturating_sub(1);
+
+                        warn!(
+                            "Block {:#x} (height {}) from peer {} not found in MMR. \
+                             Rolling back filter cursor to {} and banning peer.",
+                            hash, block_number, bad_peer, rollback_to
+                        );
+
+                        self.nc.ban_peer(
+                            bad_peer,
+                            BAD_MESSAGE_BAN_TIME,
+                            format!(
+                                "sent block hash {:#x} via BlockFilters \
+                                 that is not in the MMR",
+                                hash,
+                            ),
+                        );
+
+                        self.protocol
+                            .storage()
+                            .update_min_filtered_block_number(rollback_to);
+
+                        lowest_rollback = Some(match lowest_rollback {
+                            Some(cur) => cur.min(rollback_to),
+                            None => rollback_to,
+                        });
+                        skipped_peers.insert(bad_peer);
+
+                        matched_blocks.remove(&hash.unpack());
+                        retried_count += 1;
+                    }
+                    Action::Remove => {
+                        matched_blocks.remove(&hash.unpack());
+                        removed_count += 1;
+                        debug!("Removed missing block {:#x} from matched_blocks", hash);
+                    }
                 }
             }
 
             if removed_count > 0 {
                 info!(
-                    "Removed {} missing block(s) from matched_blocks. \
-                     If due to reorg, filters will re-run from fork point to check new blocks.",
+                    "Removed {} missing block(s) from matched_blocks \
+                     (genuinely unavailable or retries exhausted).",
                     removed_count
                 );
+            }
+            if retried_count > 0 {
+                info!(
+                    "Rolled back filter cursor for {} block(s); \
+                     will re-fetch BlockFilters from different peers.",
+                    retried_count
+                );
 
-                // Check if batch is now complete (all remaining blocks have been downloaded)
-                let all_downloaded = self
-                    .protocol
-                    .peers()
-                    .all_matched_blocks_downloaded(&matched_blocks);
-
-                if all_downloaded && !matched_blocks.is_empty() {
-                    info!(
-                        "Batch complete after removing missing blocks, {} blocks ready",
-                        matched_blocks.len()
-                    );
-                } else if matched_blocks.is_empty() {
-                    debug!("matched_blocks now empty after removing missing blocks");
+                // Immediately send a GetBlockFilters request so the retry
+                // doesn't wait for the FilterProtocol timer to fire.
+                if let Some(rollback_to) = lowest_rollback {
+                    let start_number = rollback_to + 1;
+                    let tip_header = self.protocol.storage().get_tip_header();
+                    let best_peers: Vec<_> = self
+                        .protocol
+                        .peers()
+                        .get_best_proved_peers(&tip_header)
+                        .into_iter()
+                        .filter(|p| !skipped_peers.contains(p))
+                        .collect();
+                    if let Some(peer) = best_peers.choose(&mut rand::thread_rng()) {
+                        let content = packed::GetBlockFilters::new_builder()
+                            .start_number(start_number)
+                            .build();
+                        let message = packed::BlockFilterMessage::new_builder()
+                            .set(content)
+                            .build();
+                        debug!(
+                            "Immediately sending GetBlockFilters to peer {}, start={}",
+                            peer, start_number
+                        );
+                        if let Err(err) = self.nc.send_message(
+                            SupportProtocols::Filter.protocol_id(),
+                            *peer,
+                            message.as_bytes(),
+                        ) {
+                            info!(
+                                "Failed to send immediate GetBlockFilters to {}: {:?}",
+                                peer, err
+                            );
+                        }
+                    }
                 }
+            }
+
+            // Check if batch is now complete
+            let all_downloaded = self
+                .protocol
+                .peers()
+                .all_matched_blocks_downloaded(&matched_blocks);
+
+            if all_downloaded && !matched_blocks.is_empty() {
+                info!(
+                    "Batch complete after processing missing blocks, {} blocks ready",
+                    matched_blocks.len()
+                );
+            } else if matched_blocks.is_empty() {
+                debug!("matched_blocks now empty after processing missing blocks");
             }
         }
 

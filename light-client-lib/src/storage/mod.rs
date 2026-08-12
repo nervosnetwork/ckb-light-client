@@ -35,7 +35,7 @@ pub use db::{Batch, Storage};
 pub use db::{Batch, Storage};
 
 use crate::{
-    protocols::{Peers, PendingTxs},
+    protocols::{MatchedBlockState, Peers, PendingTxs},
     types::RwLock,
 };
 
@@ -158,9 +158,7 @@ impl StorageWithChainData {
         &self.pending_txs
     }
 
-    pub fn matched_blocks(
-        &self,
-    ) -> &tokio::sync::RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
+    pub fn matched_blocks(&self) -> &tokio::sync::RwLock<HashMap<H256, MatchedBlockState>> {
         self.peers.matched_blocks()
     }
     /// return (added_ts, first_sent, missing)

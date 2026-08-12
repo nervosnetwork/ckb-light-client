@@ -8,7 +8,10 @@ use ckb_types::{
 use log::debug;
 
 use crate::{
-    protocols::{light_client::prelude::*, LastState, ProveRequest, ProveState, StatusCode},
+    protocols::{
+        light_client::prelude::*, LastState, MatchedBlockState, ProveRequest, ProveState,
+        StatusCode,
+    },
     storage::LightClientStorage,
     tests::{
         prelude::*,
@@ -1707,11 +1710,10 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
         peers.request_last_state(peer_index).unwrap();
-        peers
-            .matched_blocks()
-            .write()
-            .await
-            .insert(downloading_matched_block.clone(), (false, None));
+        peers.matched_blocks().write().await.insert(
+            downloading_matched_block.clone(),
+            MatchedBlockState::new(0, false, None),
+        );
         peers
     };
     let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));

@@ -27,6 +27,34 @@ use crate::{
 
 pub type BadMessageRateLimiter<T> = RateLimiter<T, DefaultKeyedStateStore<T>, DefaultClock>;
 
+/// State of a matched block in the filter→download pipeline.
+#[derive(Debug)]
+pub struct MatchedBlockState {
+    /// Block number (height) where this block was matched.
+    pub block_number: BlockNumber,
+    /// Whether the MMR proof has verified this block is in the chain.
+    pub proved: bool,
+    /// The downloaded block, if fetched.
+    pub block: Option<packed::Block>,
+    /// Peer that provided this block hash via a BlockFilters message.
+    /// None if loaded from DB recovery.
+    pub filter_source: Option<PeerIndex>,
+    /// How many different peers have reported this hash as missing.
+    pub missing_count: u8,
+}
+
+impl MatchedBlockState {
+    pub fn new(block_number: BlockNumber, proved: bool, filter_source: Option<PeerIndex>) -> Self {
+        Self {
+            block_number,
+            proved,
+            block: None,
+            filter_source,
+            missing_count: 0,
+        }
+    }
+}
+
 pub struct Peers {
     inner: DashMap<PeerIndex, Peer>,
     // The headers are fetching, the value is:
@@ -34,10 +62,8 @@ pub struct Peers {
     // The transactions are fetching, the value is:
     fetching_txs: DashMap<Byte32, FetchInfo>,
 
-    // The matched block filters to download, the key is the block hash, the value is:
-    //   * if the block is proved
-    //   * the downloaded block
-    matched_blocks: tokio::sync::RwLock<HashMap<H256, (bool, Option<packed::Block>)>>,
+    // The matched block filters to download, the key is the block hash.
+    matched_blocks: tokio::sync::RwLock<HashMap<H256, MatchedBlockState>>,
 
     // Data:
     // - Cached check point index.
@@ -1297,9 +1323,7 @@ impl Peers {
         }
     }
 
-    pub fn matched_blocks(
-        &self,
-    ) -> &tokio::sync::RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
+    pub fn matched_blocks(&self) -> &tokio::sync::RwLock<HashMap<H256, MatchedBlockState>> {
         &self.matched_blocks
     }
 
@@ -1419,18 +1443,18 @@ impl Peers {
 
     pub(crate) fn add_block(
         &self,
-        matched_blocks: &mut HashMap<H256, (bool, Option<packed::Block>)>,
+        matched_blocks: &mut HashMap<H256, MatchedBlockState>,
         block: packed::Block,
     ) -> Option<bool> {
         let block_hash = block.header().calc_header_hash();
         for mut pair in self.inner.iter_mut() {
             pair.value_mut().add_block(&block_hash);
         }
-        matched_blocks.get_mut(&block_hash.unpack()).map(|value| {
-            if value.0 {
-                value.1 = Some(block);
+        matched_blocks.get_mut(&block_hash.unpack()).map(|state| {
+            if state.proved {
+                state.block = Some(block);
             }
-            value.0
+            state.proved
         })
     }
 
@@ -1476,22 +1500,26 @@ impl Peers {
 
     pub fn add_matched_blocks(
         &self,
-        matched_blocks: &mut HashMap<H256, (bool, Option<packed::Block>)>,
+        matched_blocks: &mut HashMap<H256, MatchedBlockState>,
+        start_number: BlockNumber,
         block_hashes: Vec<(Byte32, bool)>,
+        filter_source: Option<PeerIndex>,
     ) {
-        for (block_hash, proved) in block_hashes {
-            matched_blocks.insert(block_hash.unpack(), (proved, None));
+        for (index, (block_hash, proved)) in block_hashes.into_iter().enumerate() {
+            let block_number = start_number + index as BlockNumber;
+            let state = MatchedBlockState::new(block_number, proved, filter_source);
+            matched_blocks.insert(block_hash.unpack(), state);
         }
     }
     // mark block as proved to matched blocks
     pub(crate) fn mark_matched_blocks_proved(
         &self,
-        matched_blocks: &mut HashMap<H256, (bool, Option<packed::Block>)>,
+        matched_blocks: &mut HashMap<H256, MatchedBlockState>,
         block_hashes: &[Byte32],
     ) {
         for block_hash in block_hashes {
-            if let Some(value) = matched_blocks.get_mut(&block_hash.unpack()) {
-                value.0 = true;
+            if let Some(state) = matched_blocks.get_mut(&block_hash.unpack()) {
+                state.proved = true;
             }
         }
     }
@@ -1499,7 +1527,7 @@ impl Peers {
     // get matched blocks which not yet downloaded and not in any BlocksRequest
     pub(crate) fn get_matched_blocks_to_prove(
         &self,
-        matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
+        matched_blocks: &HashMap<H256, MatchedBlockState>,
         limit: usize,
     ) -> Vec<Byte32> {
         let mut proof_requested_hashes = HashSet::new();
@@ -1513,13 +1541,13 @@ impl Peers {
         }
         matched_blocks
             .iter()
-            .filter_map(|(key, value)| {
+            .filter_map(|(key, state)| {
                 // Skip if already in a proof request
                 if proof_requested_hashes.contains(key) {
                     return None;
                 }
                 // Skip if already proved
-                if value.0 {
+                if state.proved {
                     return None;
                 }
                 // Skip if marked as missing by peers (e.g., uncle blocks)
@@ -1540,7 +1568,7 @@ impl Peers {
     // get matched blocks which not yet downloaded and not in any BlocksRequest
     pub(crate) fn get_matched_blocks_to_download(
         &self,
-        matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
+        matched_blocks: &HashMap<H256, MatchedBlockState>,
         limit: usize,
     ) -> Vec<Byte32> {
         let mut block_requested_hashes = HashSet::new();
@@ -1554,9 +1582,8 @@ impl Peers {
         }
         matched_blocks
             .iter()
-            .filter_map(|(key, value)| {
-                let (proved, block_opt) = value;
-                if !block_requested_hashes.contains(key) && *proved && block_opt.is_none() {
+            .filter_map(|(key, state)| {
+                if !block_requested_hashes.contains(key) && state.proved && state.block.is_none() {
                     Some(key.pack())
                 } else {
                     None
@@ -1568,21 +1595,19 @@ impl Peers {
 
     pub(crate) fn all_matched_blocks_downloaded(
         &self,
-        matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
+        matched_blocks: &HashMap<H256, MatchedBlockState>,
     ) -> bool {
-        matched_blocks
-            .values()
-            .all(|(_, block_opt)| block_opt.is_some())
+        matched_blocks.values().all(|state| state.block.is_some())
     }
 
     // remove all matched blocks info and return the downloaded blocks (sorted by block number)
     pub(crate) fn clear_matched_blocks(
         &self,
-        matched_blocks: &mut HashMap<H256, (bool, Option<packed::Block>)>,
+        matched_blocks: &mut HashMap<H256, MatchedBlockState>,
     ) -> Vec<packed::Block> {
         let mut blocks = Vec::with_capacity(matched_blocks.len());
-        for (_key, (_, block_opt)) in matched_blocks.iter_mut() {
-            if let Some(block) = block_opt.take() {
+        for (_hash, state) in matched_blocks.iter_mut() {
+            if let Some(block) = state.block.take() {
                 blocks.push(block);
             }
         }
