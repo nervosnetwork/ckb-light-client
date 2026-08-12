@@ -51,7 +51,12 @@ async fn test_sync_add_block() {
         peers.add_peer(peer_index);
         {
             let mut matched_blocks = peers.matched_blocks().write().await;
-            peers.add_matched_blocks(&mut matched_blocks, vec![(proved_block_hash, true)]);
+            peers.add_matched_blocks(
+                &mut matched_blocks,
+                0,
+                vec![(proved_block_hash, true)],
+                None,
+            );
         }
         peers
     };
@@ -111,7 +116,12 @@ async fn assert_rejects_block_body(block_view: BlockView, received_block: packed
         peers.add_peer(peer_index);
         {
             let mut matched_blocks = peers.matched_blocks().write().await;
-            peers.add_matched_blocks(&mut matched_blocks, vec![(proved_block_hash.clone(), true)]);
+            peers.add_matched_blocks(
+                &mut matched_blocks,
+                0,
+                vec![(proved_block_hash.clone(), true)],
+                None,
+            );
         }
         peers
     };
@@ -136,7 +146,7 @@ async fn assert_rejects_block_body(block_view: BlockView, received_block: packed
         .read()
         .await
         .get(&proved_block_hash.unpack())
-        .is_some_and(|(_, block)| block.is_none()));
+        .is_some_and(|state| state.block.is_none()));
     assert!(chain
         .client_storage()
         .get_earliest_matched_blocks()

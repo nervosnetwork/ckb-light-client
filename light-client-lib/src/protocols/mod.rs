@@ -16,6 +16,7 @@ pub(crate) use filter::GET_BLOCK_FILTERS_TOKEN;
 pub use light_client::{FetchInfo, LastState, PeerState, ProveRequest, ProveState};
 
 pub use filter::FilterProtocol;
+pub(crate) use light_client::MatchedBlockState;
 pub use light_client::{LightClientProtocol, Peers};
 pub use relayer::{PendingTxs, RelayProtocol};
 pub use status::{Status, StatusCode};

@@ -1,4 +1,4 @@
-use crate::protocols::{Peers, GET_BLOCKS_PROOF_LIMIT};
+use crate::protocols::{MatchedBlockState, Peers, GET_BLOCKS_PROOF_LIMIT};
 use ckb_network::{CKBProtocolContext, SupportProtocols};
 use ckb_types::{packed, prelude::*, H256};
 use log::{debug, info};
@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub(crate) fn prove_or_download_matched_blocks(
     peers: Arc<Peers>,
     best_tip: &packed::Header,
-    matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
+    matched_blocks: &HashMap<H256, MatchedBlockState>,
     nc: &dyn CKBProtocolContext,
     init_blocks_in_transit_per_peer: usize,
 ) {

@@ -261,11 +261,13 @@ impl<'a> BlockFiltersProcess<'a> {
                 if let Some(db_matched_blocks) = self.filter.storage.get_earliest_matched_blocks() {
                     self.filter.peers.add_matched_blocks(
                         &mut matched_blocks,
+                        db_matched_blocks.start_number,
                         db_matched_blocks
                             .blocks
                             .into_iter()
                             .map(|b| (b.hash, b.proved))
                             .collect(),
+                        Some(self.peer),
                     );
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.filter.peers),
