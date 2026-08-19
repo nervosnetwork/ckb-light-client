@@ -163,6 +163,12 @@ impl<'a> SendBlocksProofProcess<'a> {
                 return_if_failed!(verify_extra_hash(&headers, &uncle_hashes, &extensions));
                 extensions
             } else {
+                // A legacy (v0) response carries neither uncle hashes nor
+                // block extensions. Only accept it for headers which commit
+                // to no such data; otherwise a malicious peer could omit a
+                // CKB2023 block extension and the client would verify
+                // transactions against incomplete data.
+                return_if_failed!(verify_legacy_extra_hash(&headers));
                 vec![None; headers.len()]
             };
 
@@ -326,5 +332,28 @@ pub(crate) fn verify_extra_hash(
         }
     }
 
+    Ok(())
+}
+
+/// Verifies that headers in a legacy (v0) proof message commit to no extra
+/// data.
+///
+/// A legacy `SendBlocksProof`/`SendTransactionsProof` message carries neither
+/// uncle hashes nor block extensions. For a block without uncles and without
+/// an extension, `extra_hash` is `Byte32::zero()`; any other value commits to
+/// data the legacy message cannot provide. Accepting such a header would let
+/// a malicious peer omit a CKB2023 block extension and make the client verify
+/// transactions against incomplete data.
+pub(crate) fn verify_legacy_extra_hash(headers: &[HeaderView]) -> Result<(), Status> {
+    for header in headers {
+        if header.extra_hash() != packed::Byte32::zero() {
+            let errmsg = format!(
+                "legacy proof message omits uncle hashes/extensions committed by block#{} (hash: {:#x})",
+                header.number(),
+                header.hash(),
+            );
+            return Err(StatusCode::InvalidProof.with_context(errmsg));
+        }
+    }
     Ok(())
 }
