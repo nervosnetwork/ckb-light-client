@@ -15,7 +15,10 @@ use ckb_types::{
 use crate::storage::{LightClientStorage, SetScriptsCommand};
 use crate::storage::{ScriptStatus, ScriptType};
 use crate::{
-    protocols::{BAD_MESSAGE_BAN_TIME, GET_BLOCK_FILTERS_TOKEN},
+    protocols::{
+        light_client::constant::REFRESH_PEERS_TOKEN, BAD_MESSAGE_BAN_TIME, CHECK_POINT_INTERVAL,
+        GET_BLOCK_FILTERS_TOKEN, GET_BLOCK_FILTER_HASHES_TOKEN,
+    },
     tests::{
         prelude::*,
         utils::{setup, MockChain, MockNetworkContext},
@@ -526,6 +529,81 @@ async fn test_block_filter_notify_ask_filters() {
             message.as_bytes()
         )]
     );
+}
+
+#[tokio::test]
+async fn test_filter_hash_request_after_checkpoint_quorum_loss() {
+    let chain = MockChain::new_with_dummy_pow("test-block-filter");
+    let light_client_network_context = MockNetworkContext::new(SupportProtocols::LightClient);
+    let filter_network_context = MockNetworkContext::new(SupportProtocols::Filter);
+
+    let storage = chain.client_storage();
+    let (initial_check_point_index, initial_check_point) = storage.get_last_check_point();
+    assert_eq!(initial_check_point_index, 0);
+
+    let next_check_point = H256(rand::random()).pack();
+    let proved_number = CHECK_POINT_INTERVAL * 2;
+    let tip_header = VerifiableHeader::new(
+        HeaderBuilder::default()
+            .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
+            .number(proved_number)
+            .build(),
+        Default::default(),
+        None,
+        Default::default(),
+    );
+    let peer_indexes = (1..=4).map(PeerIndex::new).collect::<Vec<_>>();
+    let peers = chain.create_peers();
+    peers.set_max_outbound_peers(8);
+    for peer_index in &peer_indexes {
+        peers.add_peer(*peer_index);
+        peers
+            .mock_prove_state(*peer_index, tip_header.clone())
+            .unwrap();
+        let next_start_number = peers
+            .add_check_points(
+                *peer_index,
+                proved_number,
+                0,
+                &[initial_check_point.clone(), next_check_point.clone()],
+            )
+            .unwrap();
+        assert!(next_start_number.is_none());
+    }
+
+    let mut light_client_protocol = chain.create_light_client_protocol(Arc::clone(&peers));
+    light_client_protocol
+        .notify(light_client_network_context.context(), REFRESH_PEERS_TOKEN)
+        .await;
+    assert_eq!(storage.get_last_check_point(), (1, next_check_point));
+
+    peers.remove_peer(peer_indexes[3]).await;
+    light_client_protocol
+        .notify(light_client_network_context.context(), REFRESH_PEERS_TOKEN)
+        .await;
+
+    let mut filter_protocol = chain.create_filter_protocol(peers);
+    filter_protocol
+        .notify(
+            filter_network_context.context(),
+            GET_BLOCK_FILTER_HASHES_TOKEN,
+        )
+        .await;
+
+    let expected_message = packed::BlockFilterMessage::new_builder()
+        .set(
+            packed::GetBlockFilterHashes::new_builder()
+                .start_number(1u64)
+                .build(),
+        )
+        .build()
+        .as_bytes();
+    let sent_messages = filter_network_context.sent_messages().borrow();
+    assert_eq!(sent_messages.len(), 1);
+    let (protocol_id, peer_index, message) = &sent_messages[0];
+    assert_eq!(*protocol_id, SupportProtocols::Filter.protocol_id());
+    assert!(peer_indexes[..3].contains(peer_index));
+    assert_eq!(message, &expected_message);
 }
 
 #[tokio::test]

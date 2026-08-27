@@ -536,27 +536,15 @@ impl LightClientProtocol {
             }
         }
 
-        if peers_with_data.len() < required_peers_count {
-            debug!(
-                "no enough peers for finalizing check points, \
-                requires {} but got {}",
-                required_peers_count,
-                peers_with_data.len()
-            );
-            return;
-        }
-        trace!(
-            "requires {} peers for finalizing check points and got {}",
-            required_peers_count,
-            peers_with_data.len()
-        );
         let (last_cpindex, last_check_point) = self.storage.get_last_check_point();
         trace!(
             "finalized check point is {}, {:#x}",
             last_cpindex,
             last_check_point
         );
-        // Clean finalized check points for new proved peers.
+        // Normalizing peers against an already finalized local check point does not require a
+        // quorum. Do it before checking the peer count so a quorum loss cannot leave stale start
+        // indexes that prevent block filter hash requests.
         {
             let mut peers_should_be_skipped = Vec::new();
             for (peer_index, (start_cpindex, check_points)) in peers_with_data.iter_mut() {
@@ -610,7 +598,7 @@ impl LightClientProtocol {
             }
         }
         if peers_with_data.len() < required_peers_count {
-            trace!(
+            debug!(
                 "no enough peers for finalizing check points after cleaning, \
                 requires {} but got {}",
                 required_peers_count,
@@ -618,6 +606,11 @@ impl LightClientProtocol {
             );
             return;
         }
+        trace!(
+            "requires {} peers for finalizing check points and got {}",
+            required_peers_count,
+            peers_with_data.len()
+        );
         // Find a new check point to finalized.
         let check_point_opt =
             {
