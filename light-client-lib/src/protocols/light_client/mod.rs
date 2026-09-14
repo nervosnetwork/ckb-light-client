@@ -18,7 +18,7 @@ use ckb_types::{
     core::{BlockNumber, EpochNumber, HeaderView},
     packed,
     prelude::*,
-    utilities::merkle_mountain_range::VerifiableHeader,
+    utilities::{compact_to_difficulty, merkle_mountain_range::VerifiableHeader},
     U256,
 };
 
@@ -297,6 +297,26 @@ impl LightClientProtocol {
                 header.hash()
             );
             return Err(StatusCode::InvalidChainRoot.with_context(errmsg));
+        }
+        // Check Total Difficulty
+        let parent_total_difficulty: U256 = verifiable_header
+            .parent_chain_root()
+            .total_difficulty()
+            .into();
+        let block_difficulty = compact_to_difficulty(header.compact_target());
+        if parent_total_difficulty
+            .checked_add(&block_difficulty)
+            .is_none()
+        {
+            let errmsg = format!(
+                "failed to verify total difficulty for block#{}, hash: {:#x}, \
+                 parent total difficulty: {:#x}, block difficulty: {:#x}",
+                header.number(),
+                header.hash(),
+                parent_total_difficulty,
+                block_difficulty,
+            );
+            return Err(StatusCode::InvalidTotalDifficulty.with_context(errmsg));
         }
         Ok(())
     }

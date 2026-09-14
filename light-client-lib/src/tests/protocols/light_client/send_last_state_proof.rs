@@ -169,6 +169,125 @@ async fn update_last_state() {
     }
 }
 
+fn header_with_overflowing_total_difficulty(
+    base: packed::VerifiableHeader,
+) -> packed::VerifiableHeader {
+    base.as_builder()
+        .parent_chain_root(
+            packed::HeaderDigest::new_builder()
+                .total_difficulty(U256::max_value().pack())
+                .build(),
+        )
+        .build()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reject_last_header_with_overflowing_total_difficulty() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+
+    let num = 12;
+    chain.mine_to(num + 2);
+    let snapshot = chain.shared().snapshot();
+
+    // Set up an outstanding GetLastStateProof request for a real header.
+    {
+        let peer_state = protocol
+            .get_peer_state(&peer_index)
+            .expect("has peer state");
+        let prove_request = {
+            let last_header: VerifiableHeader = snapshot
+                .get_verifiable_header_by_number(num)
+                .expect("block stored")
+                .into();
+            let content = protocol
+                .build_prove_request_content(&peer_state, &last_header)
+                .await
+                .expect("build prove request content");
+            let last_state = LastState::new(last_header);
+            protocol
+                .peers()
+                .update_last_state(peer_index, last_state.clone())
+                .unwrap();
+            ProveRequest::new(last_state, content)
+        };
+        protocol
+            .peers()
+            .update_prove_request(peer_index, prove_request)
+            .unwrap();
+    }
+
+    let last_header = header_with_overflowing_total_difficulty(
+        snapshot
+            .get_verifiable_header_by_number(1)
+            .expect("block stored"),
+    );
+    let data = {
+        let content = packed::SendLastStateProof::new_builder()
+            .last_header(last_header)
+            .build();
+        packed::LightClientMessage::new_builder()
+            .set(content)
+            .build()
+    }
+    .as_bytes();
+
+    protocol.received(nc.context(), peer_index, data).await;
+
+    assert!(nc.banned_since(peer_index, StatusCode::InvalidTotalDifficulty));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn reject_same_last_header_with_overwritten_total_difficulty() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let peer_index = PeerIndex::new(1);
+    let peers = chain.create_peers();
+    peers.add_peer(peer_index);
+    let mut protocol = chain.create_light_client_protocol(peers);
+
+    chain.mine_to(3);
+    let snapshot = chain.shared().snapshot();
+
+    let outstanding_header = snapshot
+        .get_verifiable_header_by_number(1)
+        .expect("block stored");
+    {
+        let last_header: VerifiableHeader = outstanding_header.clone().into();
+        let last_state = LastState::new(last_header);
+        let prove_request = ProveRequest::new(last_state, Default::default());
+        protocol
+            .peers()
+            .mock_prove_request(peer_index, prove_request)
+            .unwrap();
+    }
+
+    let last_header = header_with_overflowing_total_difficulty(outstanding_header.clone());
+    let data = {
+        let content = packed::SendLastStateProof::new_builder()
+            .last_header(last_header)
+            .build();
+        packed::LightClientMessage::new_builder()
+            .set(content)
+            .build()
+    }
+    .as_bytes();
+
+    protocol.received(nc.context(), peer_index, data).await;
+
+    assert!(nc.banned_since(peer_index, StatusCode::InvalidTotalDifficulty));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn unknown_proof() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();

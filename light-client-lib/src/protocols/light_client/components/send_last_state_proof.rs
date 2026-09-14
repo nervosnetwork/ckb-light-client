@@ -53,6 +53,8 @@ impl<'a> SendLastStateProofProcess<'a> {
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
 
+        return_if_failed!(self.protocol.check_verifiable_header(&last_header));
+
         // Update the last state if the response contains a new one.
         if !original_request.is_same_as(&last_header) {
             if self.message.proof().is_empty() {
