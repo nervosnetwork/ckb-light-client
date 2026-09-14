@@ -7,7 +7,7 @@ use ckb_types::{
 use log::{debug, error};
 
 use crate::{
-    protocols::light_client::components::verify_extra_hash,
+    protocols::light_client::components::{verify_extra_hash, verify_legacy_extra_hash},
     storage::{HeaderWithExtension, LightClientStorage},
 };
 
@@ -168,6 +168,12 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 return_if_failed!(verify_extra_hash(&headers, &uncle_hashes, &extensions));
                 extensions
             } else {
+                // A legacy (v0) response carries neither uncle hashes nor
+                // block extensions. Only accept it for headers which commit
+                // to no such data; otherwise a malicious peer could omit a
+                // CKB2023 block extension and the client would verify
+                // transactions against incomplete data.
+                return_if_failed!(verify_legacy_extra_hash(&headers));
                 vec![None; headers.len()]
             };
 
