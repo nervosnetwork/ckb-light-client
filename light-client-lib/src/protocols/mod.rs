@@ -11,7 +11,7 @@ mod relayer;
 mod synchronizer;
 
 #[cfg(test)]
-pub(crate) use filter::GET_BLOCK_FILTERS_TOKEN;
+pub(crate) use filter::{GET_BLOCK_FILTERS_TOKEN, GET_BLOCK_FILTER_HASHES_TOKEN};
 
 pub use light_client::{FetchInfo, LastState, PeerState, ProveRequest, ProveState};
 
