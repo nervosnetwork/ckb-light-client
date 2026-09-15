@@ -199,7 +199,7 @@ async fn test_light_client_get_idle_matched_blocks() {
     ];
     {
         let mut matched_blocks = peers.matched_blocks().write().await;
-        peers.add_matched_blocks(&mut matched_blocks, blocks);
+        peers.add_matched_blocks(&mut matched_blocks, 0, blocks, None);
     }
 
     let mut protocol = chain.create_light_client_protocol(peers);

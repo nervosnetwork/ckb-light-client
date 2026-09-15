@@ -38,6 +38,7 @@ pub use self::peers::FetchInfo;
 
 use prelude::*;
 
+pub(crate) use self::peers::MatchedBlockState;
 pub use self::peers::{LastState, Peer};
 pub use self::peers::{PeerState, Peers, ProveRequest, ProveState};
 use super::{

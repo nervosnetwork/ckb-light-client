@@ -1389,7 +1389,9 @@ fn test_set_scripts_clear_matched_blocks() {
         let mut matched_blocks = peers.matched_blocks().blocking_write();
         peers.add_matched_blocks(
             &mut matched_blocks,
+            0,
             vec![(H256(rand::random()).pack(), false)],
+            None,
         );
     }
     let block_number_a: u64 = 3;

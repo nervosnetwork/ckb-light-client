@@ -83,7 +83,7 @@ impl CKBProtocolHandler for SyncProtocol {
                         .read()
                         .await
                         .get(&block_hash_key)
-                        .is_some_and(|(proved, _)| *proved);
+                        .is_some_and(|state| state.proved);
                     if should_validate && !body_validated {
                         let block = new_block.clone().into_view_without_reset_header();
                         if !block_body_matches_header(&block) {
@@ -105,7 +105,7 @@ impl CKBProtocolHandler for SyncProtocol {
                     let matched_blocks = self.peers.matched_blocks().write().await;
                     let is_proved = matched_blocks
                         .get(&block_hash_key)
-                        .is_some_and(|(proved, _)| *proved);
+                        .is_some_and(|state| state.proved);
                     if is_proved && !body_validated {
                         drop(matched_blocks);
                         continue;
@@ -149,11 +149,13 @@ impl CKBProtocolHandler for SyncProtocol {
                     if let Some(db_matched_blocks) = self.storage.get_earliest_matched_blocks() {
                         self.peers.add_matched_blocks(
                             &mut matched_blocks,
+                            db_matched_blocks.start_number,
                             db_matched_blocks
                                 .blocks
                                 .into_iter()
                                 .map(|b| (b.hash, b.proved))
                                 .collect(),
+                            None, // DB recovery, no filter source peer
                         );
                         let tip_header = self.storage.get_tip_header();
                         prove_or_download_matched_blocks(

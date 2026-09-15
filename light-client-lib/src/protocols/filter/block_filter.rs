@@ -71,6 +71,27 @@ impl FilterProtocol {
                         return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
                     }
                 };
+
+                // SECURITY: Validate the peer-provided block hash against our stored
+                // block hash for this block number, if we already have one.
+                // block_filter_hashes only authenticate the filter *data* via
+                // calc_filter_hash(parent_hash, filter_data) — the block_hash field
+                // in the BlockFilters message is a separate, unauthenticated sidecar.
+                // A malicious peer could send correct filter data with a wrong block_hash.
+                // Cross-checking against our already-proven headers catches this.
+                let block_number = start_number + index as BlockNumber;
+                if let Some(stored_hash) = self.storage.get_block_hash(block_number) {
+                    if stored_hash != block_hash {
+                        let errmsg = format!(
+                            "block hash mismatch: peer claims block {} has hash {:#x} \
+                             but stored hash is {:#x}",
+                            block_number, block_hash, stored_hash
+                        );
+                        warn!("{}", errmsg);
+                        return Err(StatusCode::BlockFilterDataIsUnexpected.with_context(errmsg));
+                    }
+                }
+
                 info!("check_filters_data matched, block_hash: {:#x}", block_hash);
                 matched.push(block_hash);
             } else {
@@ -223,8 +244,12 @@ impl FilterProtocol {
                     }
 
                     // recover matched blocks from storage (only non-missing ones)
-                    self.peers
-                        .add_matched_blocks(&mut matched_blocks, filtered_blocks);
+                    self.peers.add_matched_blocks(
+                        &mut matched_blocks,
+                        db_matched_blocks.start_number,
+                        filtered_blocks,
+                        None,
+                    );
                     let tip_header = self.storage.get_tip_header();
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.peers),
@@ -242,8 +267,8 @@ impl FilterProtocol {
                     }
                 } else {
                     debug!("matched blocks are not empty:");
-                    matched_blocks.iter().for_each(|matched_block| {
-                        debug!("matched_block: {}, {:?}", matched_block.0, matched_block.1);
+                    matched_blocks.iter().for_each(|(hash, state)| {
+                        debug!("matched_block: {:#x}, proved={}", hash, state.proved);
                     });
                 }
             } else if self.should_ask(immediately).await && could_ask_more {
