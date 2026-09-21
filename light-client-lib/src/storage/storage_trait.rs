@@ -11,8 +11,8 @@ use super::{
     parse_matched_blocks, BlockNumber, Byte32, CellIndex, CellType, CpIndex, HeaderWithExtension,
     Key, KeyPrefix, MatchedBlock, MatchedBlocks, OutputIndex, Script, ScriptStatus, ScriptType,
     SetScriptsCommand, TxIndex, Value, WrappedBlockView, FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY,
-    LAST_N_HEADERS_KEY, LAST_STATE_KEY, MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX,
-    MIN_FILTERED_BLOCK_NUMBER,
+    LAST_N_HEADERS_KEY, LAST_STATE_KEY, MATCHED_BLOCKS_FORMAT_V2, MATCHED_FILTER_BLOCKS_KEY,
+    MAX_CHECK_POINT_INDEX, MIN_FILTERED_BLOCK_NUMBER,
 };
 use ckb_types::{
     core::HeaderView,
@@ -234,20 +234,32 @@ pub trait LightClientStorage: StorageBackend {
     }
 
     /// Add matched blocks
+    ///
+    /// Entries are written in ascending height order with the height recorded
+    /// explicitly, because only blocks whose filter matched are listed: the record
+    /// is a sparse subset of `[start_number, start_number + blocks_count)`, so a
+    /// position-derived height would be wrong.
     fn add_matched_blocks(
         &self,
         start_number: u64,
         blocks_count: u64,
-        matched_blocks: Vec<(Byte32, bool)>,
+        matched_blocks: Vec<(Byte32, BlockNumber, bool)>,
     ) {
         assert!(!matched_blocks.is_empty());
         let mut key = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         key.extend(start_number.to_be_bytes());
 
-        let mut value = blocks_count.to_le_bytes().to_vec();
-        for (block_hash, proved) in matched_blocks {
+        // Opens with a marker so the reader can tell this layout from the legacy
+        // one without guessing from the length (see `parse_matched_blocks`).
+        let mut value = MATCHED_BLOCKS_FORMAT_V2.to_vec();
+        value.extend(blocks_count.to_le_bytes());
+        for (block_hash, _block_number, proved) in &matched_blocks {
             value.extend(block_hash.as_slice());
-            value.push(u8::from(proved));
+            value.push(u8::from(*proved));
+        }
+        // Heights trail the entries, in the same order.
+        for (_block_hash, block_number, _proved) in &matched_blocks {
+            value.extend(block_number.to_le_bytes());
         }
         StorageBackend::put(self, key, value).expect("db put matched blocks should be ok");
     }
@@ -1061,7 +1073,44 @@ pub trait LightClientStorage: StorageBackend {
             let (blocks_count, raw_blocks) = parse_matched_blocks(value);
             let blocks = raw_blocks
                 .into_iter()
-                .map(|(hash, proved)| MatchedBlock { hash, proved })
+                .filter_map(|(hash, block_number, proved)| {
+                    let Some(block_number) = block_number.or_else(|| {
+                        // Legacy record, written before heights were stored. The
+                        // height is not derivable from the entry's position (only
+                        // matched blocks are listed), but we can still recover it
+                        // from the header we stored when the block was downloaded,
+                        // and confirm it falls inside this range. If we cannot, drop
+                        // the entry rather than guess: a wrong height is worse than
+                        // a re-filter, which the cursor will drive.
+                        self.get_header(&hash).map(|header| header.number())
+                    }) else {
+                        log::warn!(
+                            "dropping matched block {:#x} from entry at {}: \
+                             no height recorded and none recoverable from storage",
+                            hash, start_number
+                        );
+                        return None;
+                    };
+
+                    if block_number < start_number
+                        || block_number >= start_number.saturating_add(blocks_count)
+                    {
+                        log::warn!(
+                            "dropping matched block {:#x}: height {} outside the recorded range [{}, {})",
+                            hash,
+                            block_number,
+                            start_number,
+                            start_number.saturating_add(blocks_count)
+                        );
+                        return None;
+                    }
+
+                    Some(MatchedBlock {
+                        hash,
+                        block_number,
+                        proved,
+                    })
+                })
                 .collect();
             MatchedBlocks {
                 start_number,

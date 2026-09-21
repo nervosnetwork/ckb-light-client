@@ -35,7 +35,7 @@ pub use db::{Batch, Storage};
 pub use db::{Batch, Storage};
 
 use crate::{
-    protocols::{Peers, PendingTxs},
+    protocols::{MatchedBlockState, Peers, PendingTxs},
     types::RwLock,
 };
 
@@ -43,6 +43,11 @@ pub const LAST_STATE_KEY: &str = "LAST_STATE";
 const GENESIS_BLOCK_KEY: &str = "GENESIS_BLOCK";
 const FILTER_SCRIPTS_KEY: &str = "FILTER_SCRIPTS";
 const MATCHED_FILTER_BLOCKS_KEY: &str = "MATCHED_BLOCKS";
+
+/// Marks a matched-blocks record written in the layout that stores per-entry
+/// heights. Records without it are the legacy layout, which leaves the height
+/// implicit. See `parse_matched_blocks`.
+const MATCHED_BLOCKS_FORMAT_V2: [u8; 4] = *b"MBv2";
 const MIN_FILTERED_BLOCK_NUMBER: &str = "MIN_FILTERED_NUMBER";
 const LAST_N_HEADERS_KEY: &str = "LAST_N_HEADERS";
 const MAX_CHECK_POINT_INDEX: &str = "MAX_CHECK_POINT_INDEX";
@@ -73,6 +78,12 @@ pub struct ScriptStatus {
 pub struct MatchedBlock {
     /// The block hash
     pub hash: Byte32,
+    /// The height the block filter matched this block at.
+    ///
+    /// This is the block's real height, which is *not* derivable from its position
+    /// in `blocks`: only blocks whose filter matched are listed, so the list is a
+    /// sparse subset of the range.
+    pub block_number: BlockNumber,
     /// Whether this block has been proved
     pub proved: bool,
 }
@@ -158,9 +169,7 @@ impl StorageWithChainData {
         &self.pending_txs
     }
 
-    pub fn matched_blocks(
-        &self,
-    ) -> &tokio::sync::RwLock<HashMap<H256, (bool, Option<packed::Block>)>> {
+    pub fn matched_blocks(&self) -> &tokio::sync::RwLock<HashMap<H256, MatchedBlockState>> {
         self.peers.matched_blocks()
     }
     /// return (added_ts, first_sent, missing)
@@ -428,22 +437,72 @@ fn append_key(
     encoded.extend_from_slice(&io_index.to_be_bytes());
 }
 
-fn parse_matched_blocks(data: &[u8]) -> (u64, Vec<(Byte32, bool)>) {
-    let mut u64_bytes = [0u8; 8];
-    u64_bytes.copy_from_slice(&data[0..8]);
-    let blocks_count = u64::from_le_bytes(u64_bytes);
-    assert!((data.len() - 8).is_multiple_of(33));
-    let matched_len = (data.len() - 8) / 33;
-    let matched_blocks = (0..matched_len)
-        .map(|i| {
-            let offset = 8 + i * 33;
-            let part = &data[offset..offset + 32];
-            let hash = packed::Byte32Reader::from_slice_should_be_ok(part).to_entity();
-            let proved = data[offset + 32] == 1;
-            (hash, proved)
-        })
-        .collect::<Vec<_>>();
-    (blocks_count, matched_blocks)
+/// Decode a matched-blocks record.
+///
+/// Two layouts exist. The legacy one stores only `(hash, proved)` per entry and
+/// leaves the height implicit, which is wrong for a sparse match list — see
+/// `MatchedBlock::block_number`. The current one appends a parallel heights array.
+///
+/// The current layout opens with [`MATCHED_BLOCKS_FORMAT_V2`] so the two are told
+/// apart by an explicit marker. Length alone cannot do it: a legacy body of `33n`
+/// bytes and a current body of `41m` bytes coincide whenever `n` is a multiple of
+/// 41, and 41 matches in one filter range is ordinary, so a legacy record would be
+/// silently decoded as a shorter current one and lose its entries.
+#[allow(clippy::type_complexity)]
+fn parse_matched_blocks(data: &[u8]) -> (u64, Vec<(Byte32, Option<BlockNumber>, bool)>) {
+    let (blocks_count, body) = if let Some(rest) = data.strip_prefix(&MATCHED_BLOCKS_FORMAT_V2) {
+        let mut u64_bytes = [0u8; 8];
+        u64_bytes.copy_from_slice(&rest[0..8]);
+        (u64::from_le_bytes(u64_bytes), &rest[8..])
+    } else {
+        let mut u64_bytes = [0u8; 8];
+        u64_bytes.copy_from_slice(&data[0..8]);
+        (u64::from_le_bytes(u64_bytes), &data[8..])
+    };
+
+    if data.starts_with(&MATCHED_BLOCKS_FORMAT_V2) {
+        // Current layout: `n` entries of (hash, proved) followed by `n` heights.
+        assert!(
+            body.len().is_multiple_of(41),
+            "v2 matched blocks record has an unrecognised length: {}",
+            data.len()
+        );
+        let matched_len = body.len() / 41;
+        let (entries, height_bytes) = body.split_at(matched_len * 33);
+        let matched_blocks = (0..matched_len)
+            .map(|i| {
+                let offset = i * 33;
+                let hash =
+                    packed::Byte32Reader::from_slice_should_be_ok(&entries[offset..offset + 32])
+                        .to_entity();
+                let proved = entries[offset + 32] == 1;
+                let mut number_bytes = [0u8; 8];
+                number_bytes.copy_from_slice(&height_bytes[i * 8..i * 8 + 8]);
+                (hash, Some(u64::from_le_bytes(number_bytes)), proved)
+            })
+            .collect::<Vec<_>>();
+        (blocks_count, matched_blocks)
+    } else if body.len().is_multiple_of(33) {
+        // Legacy layout, no heights. Callers must treat `None` as "unknown" rather
+        // than falling back to a position-derived height — that derivation is the
+        // very bug this format exists to fix.
+        let matched_len = body.len() / 33;
+        let matched_blocks = (0..matched_len)
+            .map(|i| {
+                let offset = i * 33;
+                let part = &body[offset..offset + 32];
+                let hash = packed::Byte32Reader::from_slice_should_be_ok(part).to_entity();
+                let proved = body[offset + 32] == 1;
+                (hash, None, proved)
+            })
+            .collect::<Vec<_>>();
+        (blocks_count, matched_blocks)
+    } else {
+        panic!(
+            "matched blocks record has an unrecognised length: {}",
+            data.len()
+        );
+    }
 }
 
 // a helper fn extracts script fields raw data

@@ -43,7 +43,7 @@ async fn test_sync_add_block() {
     chain.client_storage().add_matched_blocks(
         start_number,
         blocks_count,
-        vec![(proved_block_hash.clone(), true)],
+        vec![(proved_block_hash.clone(), start_number, true)],
     );
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -51,7 +51,12 @@ async fn test_sync_add_block() {
         peers.add_peer(peer_index);
         {
             let mut matched_blocks = peers.matched_blocks().write().await;
-            peers.add_matched_blocks(&mut matched_blocks, vec![(proved_block_hash, true)]);
+            peers.add_matched_blocks(
+                &mut matched_blocks,
+                0,
+                vec![(proved_block_hash, start_number, true)],
+                None,
+            );
         }
         peers
     };
@@ -103,7 +108,7 @@ async fn assert_rejects_block_body(block_view: BlockView, received_block: packed
     let proved_block_hash = block_view.hash();
     chain
         .client_storage()
-        .add_matched_blocks(2, 1, vec![(proved_block_hash.clone(), true)]);
+        .add_matched_blocks(2, 1, vec![(proved_block_hash.clone(), 2, true)]);
 
     let peer_index = PeerIndex::new(3);
     let peers = {
@@ -111,7 +116,12 @@ async fn assert_rejects_block_body(block_view: BlockView, received_block: packed
         peers.add_peer(peer_index);
         {
             let mut matched_blocks = peers.matched_blocks().write().await;
-            peers.add_matched_blocks(&mut matched_blocks, vec![(proved_block_hash.clone(), true)]);
+            peers.add_matched_blocks(
+                &mut matched_blocks,
+                0,
+                vec![(proved_block_hash.clone(), 2, true)],
+                None,
+            );
         }
         peers
     };
@@ -136,7 +146,7 @@ async fn assert_rejects_block_body(block_view: BlockView, received_block: packed
         .read()
         .await
         .get(&proved_block_hash.unpack())
-        .is_some_and(|(_, block)| block.is_none()));
+        .is_some_and(|state| state.block.is_none()));
     assert!(chain
         .client_storage()
         .get_earliest_matched_blocks()
