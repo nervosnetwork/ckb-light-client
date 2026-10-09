@@ -190,26 +190,18 @@ impl StorageWithChainData {
         pending_txs
             .get(&out_point.tx_hash())
             .and_then(|(tx, _, _)| {
-                tx.raw()
-                    .outputs()
-                    .get(out_point.index().unpack())
-                    .map(|cell_output| {
-                        let output_data = tx
-                            .raw()
-                            .outputs_data()
-                            .get(out_point.index().unpack())
-                            .expect("output_data's index should be same as output")
-                            .raw_data();
-                        let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
-                        CellMeta {
-                            out_point: out_point.clone(),
-                            cell_output,
-                            transaction_info: None,
-                            data_bytes: output_data.len() as u64,
-                            mem_cell_data: Some(output_data),
-                            mem_cell_data_hash: Some(output_data_data_hash),
-                        }
-                    })
+                let index = out_point.index().unpack();
+                let cell_output = tx.raw().outputs().get(index)?;
+                let output_data = tx.raw().outputs_data().get(index)?.raw_data();
+                let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
+                Some(CellMeta {
+                    out_point: out_point.clone(),
+                    cell_output,
+                    transaction_info: None,
+                    data_bytes: output_data.len() as u64,
+                    mem_cell_data: Some(output_data),
+                    mem_cell_data_hash: Some(output_data_data_hash),
+                })
             })
     }
 }
