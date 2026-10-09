@@ -64,6 +64,13 @@ fn status(flag: u8) -> bool {
 fn change_status(flag: u8) {
     START_FLAG.store(flag, Ordering::SeqCst);
 }
+
+fn parse_h256(value: &str) -> Result<H256, JsValue> {
+    let hex = value
+        .strip_prefix("0x")
+        .ok_or_else(|| JsValue::from_str("hash should start with 0x"))?;
+    H256::from_str(hex).map_err(|e| JsValue::from_str(&e.to_string()))
+}
 #[allow(clippy::enum_variant_names)]
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -303,7 +310,7 @@ pub fn get_header(hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let block_hash = parse_h256(hash)?;
     Ok(get_chain_service()
         .get_header(&block_hash)
         .serialize(&SERIALIZER)?)
@@ -314,7 +321,7 @@ pub fn fetch_header(hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let block_hash = parse_h256(hash)?;
     Ok(get_chain_service()
         .fetch_header(&block_hash)
         .serialize(&SERIALIZER)?)
@@ -470,7 +477,7 @@ pub fn get_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let tx_hash = parse_h256(tx_hash)?;
     Ok(get_chain_service()
         .get_transaction(&tx_hash)
         .serialize(&SERIALIZER)?)
@@ -481,7 +488,7 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let tx_hash = parse_h256(tx_hash)?;
     Ok(get_chain_service()
         .fetch_transaction(&tx_hash)
         .serialize(&SERIALIZER)?)
