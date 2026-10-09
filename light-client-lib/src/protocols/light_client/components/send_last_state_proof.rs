@@ -993,10 +993,29 @@ pub(crate) fn verify_tau(
     } else {
         let start_block_difficulty = compact_to_difficulty(start_compact_target);
         let end_block_difficulty = compact_to_difficulty(end_compact_target);
-        let start_epoch_difficulty = start_block_difficulty * start_epoch.length();
-        let end_epoch_difficulty = end_block_difficulty * end_epoch.length();
+        let Some(start_epoch_difficulty) =
+            start_block_difficulty.checked_mul(&U256::from(start_epoch.length()))
+        else {
+            let errmsg = format!(
+                "failed since the difficulty of the start epoch ({start_epoch:#}) overflows"
+            );
+            return Err(StatusCode::InvalidEpoch.with_context(errmsg));
+        };
+        let Some(end_epoch_difficulty) =
+            end_block_difficulty.checked_mul(&U256::from(end_epoch.length()))
+        else {
+            let errmsg =
+                format!("failed since the difficulty of the end epoch ({end_epoch:#}) overflows");
+            return Err(StatusCode::InvalidEpoch.with_context(errmsg));
+        };
         // How many times are epochs switched?
-        let epochs_switch_count = end_epoch.number() - start_epoch.number();
+        let Some(epochs_switch_count) = end_epoch.number().checked_sub(start_epoch.number()) else {
+            let errmsg = format!(
+                "failed since the end epoch ({end_epoch:#}) is earlier than \
+                the start epoch ({start_epoch:#})"
+            );
+            return Err(StatusCode::InvalidEpoch.with_context(errmsg));
+        };
         let epoch_difficulty_trend =
             EpochDifficultyTrend::new(&start_epoch_difficulty, &end_epoch_difficulty);
         Ok(epoch_difficulty_trend.check_tau(tau, epochs_switch_count))

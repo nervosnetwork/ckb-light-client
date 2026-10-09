@@ -330,6 +330,38 @@ fn test_verify_tau() {
 }
 
 #[test]
+fn test_verify_tau_rejects_invalid_epoch_range() {
+    let tau = TAU;
+    let compact_target = difficulty_to_compact(u256!("0x40"));
+    // The end epoch is earlier than the start epoch.
+    let actual_result = verify_tau(
+        epoch!(10, 0, 10),
+        compact_target,
+        epoch!(9, 0, 10),
+        compact_target,
+        tau,
+    );
+    assert!(
+        actual_result.is_err(),
+        "expected an error, got {actual_result:?}"
+    );
+
+    // The epoch difficulty does not fit into `U256`.
+    let large_compact_target = difficulty_to_compact(!U256::zero());
+    let actual_result = verify_tau(
+        epoch!(10, 0, 10),
+        large_compact_target,
+        epoch!(15, 0, 10),
+        compact_target,
+        tau,
+    );
+    assert!(
+        actual_result.is_err(),
+        "expected an error, got {actual_result:?}"
+    );
+}
+
+#[test]
 fn test_verify_total_difficulty_in_same_epoch() {
     let tau = TAU;
     let block_difficulty = U256::from(4u32);
