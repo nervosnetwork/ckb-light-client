@@ -1044,8 +1044,24 @@ pub(crate) fn verify_total_difficulty(
     let start_block_difficulty = &compact_to_difficulty(start_compact_target);
 
     if start_epoch.number() == end_epoch.number() {
-        let total_blocks_count = end_epoch.index() - start_epoch.index();
-        let total_difficulty_calculated = start_block_difficulty * total_blocks_count;
+        let Some(total_blocks_count) = end_epoch.index().checked_sub(start_epoch.index()) else {
+            let errmsg = format!(
+                "failed since the end epoch index ({}) is less than the start epoch index ({}) \
+                during epochs ([{start_epoch:#},{end_epoch:#}])",
+                end_epoch.index(),
+                start_epoch.index(),
+            );
+            return Err(errmsg);
+        };
+        let Some(total_difficulty_calculated) =
+            start_block_difficulty.checked_mul(&U256::from(total_blocks_count))
+        else {
+            let errmsg = format!(
+                "failed since the total difficulty calculation overflows \
+                during epochs ([{start_epoch:#},{end_epoch:#}])"
+            );
+            return Err(errmsg);
+        };
         if total_difficulty != total_difficulty_calculated {
             let errmsg = format!(
                 "failed since total difficulty is {:#x} \
@@ -1063,10 +1079,29 @@ pub(crate) fn verify_total_difficulty(
     } else {
         let end_block_difficulty = &compact_to_difficulty(end_compact_target);
 
-        let start_epoch_difficulty = start_block_difficulty * start_epoch.length();
-        let end_epoch_difficulty = end_block_difficulty * end_epoch.length();
+        let Some(start_epoch_difficulty) =
+            start_block_difficulty.checked_mul(&U256::from(start_epoch.length()))
+        else {
+            let errmsg = format!(
+                "failed since the difficulty of the start epoch ({start_epoch:#}) overflows"
+            );
+            return Err(errmsg);
+        };
+        let Some(end_epoch_difficulty) =
+            end_block_difficulty.checked_mul(&U256::from(end_epoch.length()))
+        else {
+            let errmsg =
+                format!("failed since the difficulty of the end epoch ({end_epoch:#}) overflows");
+            return Err(errmsg);
+        };
         // How many times are epochs switched?
-        let epochs_switch_count = end_epoch.number() - start_epoch.number();
+        let Some(epochs_switch_count) = end_epoch.number().checked_sub(start_epoch.number()) else {
+            let errmsg = format!(
+                "failed since the end epoch ({end_epoch:#}) is earlier than \
+                the start epoch ({start_epoch:#})"
+            );
+            return Err(errmsg);
+        };
         let epoch_difficulty_trend =
             EpochDifficultyTrend::new(&start_epoch_difficulty, &end_epoch_difficulty);
 
@@ -1082,10 +1117,34 @@ pub(crate) fn verify_total_difficulty(
             })?;
 
         // Step-2 Check the range of total difficulty.
-        let start_epoch_blocks_count = start_epoch.length() - start_epoch.index() - 1;
+        let Some(start_epoch_blocks_count) = start_epoch
+            .length()
+            .checked_sub(start_epoch.index())
+            .and_then(|blocks_count| blocks_count.checked_sub(1))
+        else {
+            let errmsg = format!(
+                "failed since the epoch index ({}) of the start epoch is not less than \
+                its length ({}) during epochs ([{start_epoch:#},{end_epoch:#}])",
+                start_epoch.index(),
+                start_epoch.length(),
+            );
+            return Err(errmsg);
+        };
         let end_epoch_blocks_count = end_epoch.index() + 1;
-        let unaligned_difficulty_calculated = start_block_difficulty * start_epoch_blocks_count
-            + end_block_difficulty * end_epoch_blocks_count;
+        let Some(unaligned_difficulty_calculated) = start_block_difficulty
+            .checked_mul(&U256::from(start_epoch_blocks_count))
+            .and_then(|start_part| {
+                end_block_difficulty
+                    .checked_mul(&U256::from(end_epoch_blocks_count))
+                    .and_then(|end_part| start_part.checked_add(&end_part))
+            })
+        else {
+            let errmsg = format!(
+                "failed since the unaligned difficulty calculation overflows \
+                during epochs ([{start_epoch:#},{end_epoch:#}])"
+            );
+            return Err(errmsg);
+        };
         if epochs_switch_count == 1 {
             if total_difficulty != unaligned_difficulty_calculated {
                 let errmsg = format!(
