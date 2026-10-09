@@ -949,12 +949,15 @@ pub trait LightClientStorage: StorageBackend {
     fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, u32, Transaction)> {
         StorageBackend::get(self, Key::TxHash(tx_hash).into_vec())
             .map(|v| {
-                v.map(|v| {
-                    (
-                        BlockNumber::from_be_bytes(v[0..8].try_into().expect("stored BlockNumber")),
-                        TxIndex::from_be_bytes(v[8..12].try_into().expect("stored TxIndex")),
-                        Transaction::from_slice(&v[12..]).expect("stored Transaction"),
-                    )
+                v.and_then(|v| {
+                    let block_number: [u8; 8] = v.get(0..8)?.try_into().ok()?;
+                    let tx_index: [u8; 4] = v.get(8..12)?.try_into().ok()?;
+                    let transaction = Transaction::from_slice(v.get(12..)?).ok()?;
+                    Some((
+                        BlockNumber::from_be_bytes(block_number),
+                        TxIndex::from_be_bytes(tx_index),
+                        transaction,
+                    ))
                 })
             })
             .expect("db get should be ok")
