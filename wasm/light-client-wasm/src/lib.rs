@@ -9,7 +9,6 @@ use std::{
 };
 
 use ckb_light_client_lib::{
-    error::Error,
     protocols::{
         FilterProtocol, LightClientProtocol, Peers, PendingTxs, RelayProtocol, SyncProtocol,
         BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL,
@@ -100,9 +99,9 @@ pub async fn light_client(
         return Err(JsValue::from_str("Can't start twice"));
     }
     utils::set_panic_hook();
-    wasm_logger::init(wasm_logger::Config::new(
-        log::Level::from_str(&log_level).expect("Bad log level"),
-    ));
+    let log_level =
+        log::Level::from_str(&log_level).map_err(|_| JsValue::from_str("invalid log level"))?;
+    wasm_logger::init(wasm_logger::Config::new(log_level));
     let network_flag: NetworkSetting = serde_wasm_bindgen::from_value(network_setting)?;
 
     let wasm_transport_type: WasmTransportType =
@@ -146,11 +145,11 @@ pub async fn light_client(
         NetworkSetting::TestNet { .. } => Resource::bundled("specs/testnet.toml".to_string()),
         NetworkSetting::DevNet { spec, .. } => Resource::raw(spec),
     })
-    .expect("load spec should be OK");
+    .map_err(|e| JsValue::from_str(&format!("failed to load spec since {e}")))?;
 
     let consensus = chain_spec
         .build_consensus()
-        .expect("build consensus should be ok");
+        .map_err(|e| JsValue::from_str(&format!("failed to build consensus since {e}")))?;
     let genesis = consensus.genesis_block().data();
 
     storage.init_genesis_block(genesis);
@@ -161,8 +160,7 @@ pub async fn light_client(
 
     let pending_txs = Arc::new(tokio::sync::RwLock::new(PendingTxs::default()));
     let max_outbound_peers = config.network.max_outbound_peers;
-    let network_secret_key =
-        serde_wasm_bindgen::from_value(network_secret_key).expect("Invalid network secret key");
+    let network_secret_key = serde_wasm_bindgen::from_value(network_secret_key)?;
     config.network.secret_key = network_secret_key;
     let network_state = NetworkState::from_config(config.network)
         .await
@@ -177,9 +175,8 @@ pub async fn light_client(
         })
         .map_err(|err| {
             let errmsg = format!("failed to initialize network state since {}", err);
-            Error::runtime(errmsg)
-        })
-        .unwrap();
+            JsValue::from_str(&errmsg)
+        })?;
     let required_protocol_ids = vec![
         SupportProtocols::Sync.protocol_id(),
         SupportProtocols::LightClient.protocol_id(),
@@ -244,9 +241,8 @@ pub async fn light_client(
     .start(&handle)
     .map_err(|err| {
         let errmsg = format!("failed to start network since {}", err);
-        Error::runtime(errmsg)
-    })
-    .unwrap();
+        JsValue::from_str(&errmsg)
+    })?;
 
     let storage_with_data = StorageWithChainData::new(storage, peers, pending_txs);
 
@@ -260,7 +256,9 @@ pub async fn light_client(
 #[wasm_bindgen]
 pub fn stop() {
     broadcast_exit_signals();
-    STORAGE_WITH_DATA.get().unwrap().storage().shutdown();
+    if let Some(storage_with_data) = STORAGE_WITH_DATA.get() {
+        storage_with_data.storage().shutdown();
+    }
     change_status(0b10);
 }
 
