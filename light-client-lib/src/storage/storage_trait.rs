@@ -1052,22 +1052,40 @@ pub trait LightClientStorage: StorageBackend {
             1,
         );
 
-        results.into_iter().next().map(|kv| {
+        results.into_iter().next().and_then(|kv| {
             let key = &kv.key;
             let value = &kv.value;
-            let mut u64_bytes = [0u8; 8];
-            u64_bytes.copy_from_slice(&key[key_prefix.len()..]);
-            let start_number = u64::from_be_bytes(u64_bytes);
-            let (blocks_count, raw_blocks) = parse_matched_blocks(value);
+            let Some(start_number_bytes) = key.get(key_prefix.len()..) else {
+                log::error!(
+                    "stored matched blocks key is too short: {} bytes",
+                    key.len()
+                );
+                return None;
+            };
+            let Ok(start_number_bytes) = <[u8; 8]>::try_from(start_number_bytes) else {
+                log::error!(
+                    "stored matched blocks key has an invalid length: {} bytes",
+                    key.len()
+                );
+                return None;
+            };
+            let start_number = u64::from_be_bytes(start_number_bytes);
+            let (blocks_count, raw_blocks) = match parse_matched_blocks(value) {
+                Ok(parsed) => parsed,
+                Err(errmsg) => {
+                    log::error!("failed to parse matched blocks: {errmsg}");
+                    return None;
+                }
+            };
             let blocks = raw_blocks
                 .into_iter()
                 .map(|(hash, proved)| MatchedBlock { hash, proved })
                 .collect();
-            MatchedBlocks {
+            Some(MatchedBlocks {
                 start_number,
                 blocks_count,
                 blocks,
-            }
+            })
         })
     }
 }
