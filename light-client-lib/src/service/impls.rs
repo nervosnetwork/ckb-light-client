@@ -334,7 +334,13 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 let key = kv_pair.key;
                 let value = kv_pair.value;
 
-                let tx_hash = packed::Byte32::from_slice(&value).ok().unwrap();
+                let Ok(tx_hash) = packed::Byte32::from_slice(&value) else {
+                    log::warn!(
+                        "skip malformed transaction history value: {} bytes",
+                        value.len()
+                    );
+                    continue;
+                };
 
                 if tx_with_cells.len() == limit
                     && tx_with_cells.last().unwrap().transaction.hash != tx_hash.unpack()
@@ -344,15 +350,22 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 
                 last_key = key.clone();
 
-                let tx_data = self
-                    .storage
-                    .get(Key::TxHash(&tx_hash).into_vec())
-                    .ok()
-                    .unwrap()
-                    .unwrap();
-                let tx = packed::Transaction::from_slice(&tx_data[12..])
-                    .ok()
-                    .unwrap();
+                let Some(Some(tx_data)) = self.storage.get(Key::TxHash(&tx_hash).into_vec()).ok()
+                else {
+                    log::warn!("stored transaction is missing: {:#x}", tx_hash);
+                    continue;
+                };
+                let Some(tx_bytes) = tx_data.get(12..) else {
+                    log::warn!(
+                        "stored transaction value is too short: {} bytes",
+                        tx_data.len()
+                    );
+                    continue;
+                };
+                let Ok(tx) = packed::Transaction::from_slice(tx_bytes) else {
+                    log::warn!("stored transaction value is malformed: {:#x}", tx_hash);
+                    continue;
+                };
 
                 let block_number =
                     u64::from_be_bytes(key[key.len() - 17..key.len() - 9].try_into().unwrap());
