@@ -228,7 +228,15 @@ pub fn read_command_payload<T: DeserializeOwned>(
     i32arr: &Int32Array,
     u8arr: &Uint8Array,
 ) -> anyhow::Result<T> {
+    let Some(payload_capacity) = u8arr.length().checked_sub(8) else {
+        anyhow::bail!("command buffer is too small: {} bytes", u8arr.length());
+    };
     let length = i32arr.get_index(1) as u32;
+    if length > payload_capacity {
+        anyhow::bail!(
+            "command payload length {length} exceeds the buffer capacity {payload_capacity}"
+        );
+    }
     let mut buf = vec![0u8; length as usize];
     u8arr.subarray(8, 8 + length).copy_to(&mut buf);
 
