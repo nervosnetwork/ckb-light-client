@@ -280,19 +280,19 @@ pub trait LightClientStorage: StorageBackend {
             for block in &matched_blocks.blocks {
                 if let Some(header) = self.get_header(&block.hash) {
                     let stored_number: u64 = header.number();
-                    if stored_number < start_number || stored_number >= start_number + blocks_count
-                    {
+                    let expected_range_end = start_number.saturating_add(blocks_count);
+                    if stored_number < start_number || stored_number >= expected_range_end {
                         warn!(
                             "Invalid matched block {:#x} at number {} outside expected range [{}, {}), removing entry at start_number={}",
-                            block.hash, stored_number, start_number, start_number + blocks_count, start_number
+                            block.hash, stored_number, start_number, expected_range_end, start_number
                         );
                         should_remove = true;
                         break;
                     }
-                } else if start_number + 1000 < tip_number {
+                } else if start_number.saturating_add(1000) < tip_number {
                     warn!(
                         "Matched block {:#x} not found in storage, entry at start_number={} is {} blocks behind tip, removing",
-                        block.hash, start_number, tip_number - start_number
+                        block.hash, start_number, tip_number.saturating_sub(start_number)
                     );
                     should_remove = true;
                     break;
