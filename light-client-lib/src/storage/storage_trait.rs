@@ -703,12 +703,16 @@ pub trait LightClientStorage: StorageBackend {
                     IteratorStart::From(start_key),
                     IteratorDirection::Reverse,
                     Box::new(move |key| {
-                        key.starts_with(&key_prefix_clone)
-                            && BlockNumber::from_be_bytes(
-                                key[key_prefix_len..key_prefix_len + 8]
-                                    .try_into()
-                                    .expect("stored BlockNumber"),
-                            ) >= to_number
+                        if !key.starts_with(&key_prefix_clone) {
+                            return false;
+                        }
+                        let Some(block_number_bytes) = key
+                            .get(key_prefix_len..key_prefix_len + 8)
+                            .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                        else {
+                            return false;
+                        };
+                        BlockNumber::from_be_bytes(block_number_bytes) >= to_number
                     }),
                     Box::new(|_key, value| Some(value.to_vec())),
                     usize::MAX,
@@ -717,28 +721,67 @@ pub trait LightClientStorage: StorageBackend {
                 for kv in results {
                     let key = &kv.key;
                     let value = &kv.value;
-                    let block_number = BlockNumber::from_be_bytes(
-                        key[key_prefix_len..key_prefix_len + 8]
-                            .try_into()
-                            .expect("stored BlockNumber"),
-                    );
+                    let Some(block_number_bytes) = key
+                        .get(key_prefix_len..key_prefix_len + 8)
+                        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                    else {
+                        log::warn!(
+                            "skip malformed transaction history key: {} bytes",
+                            key.len()
+                        );
+                        continue;
+                    };
+                    let Some(tx_index_bytes) = key
+                        .get(key_prefix_len + 8..key_prefix_len + 12)
+                        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                    else {
+                        log::warn!(
+                            "skip malformed transaction history key: {} bytes",
+                            key.len()
+                        );
+                        continue;
+                    };
+                    let Some(cell_index_bytes) = key
+                        .get(key_prefix_len + 12..key_prefix_len + 16)
+                        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                    else {
+                        log::warn!(
+                            "skip malformed transaction history key: {} bytes",
+                            key.len()
+                        );
+                        continue;
+                    };
+                    let block_number = BlockNumber::from_be_bytes(block_number_bytes);
                     log::debug!("rollback {}", block_number);
-                    let tx_index = TxIndex::from_be_bytes(
-                        key[key_prefix_len + 8..key_prefix_len + 12]
-                            .try_into()
-                            .expect("stored TxIndex"),
-                    );
-                    let cell_index = CellIndex::from_be_bytes(
-                        key[key_prefix_len + 12..key_prefix_len + 16]
-                            .try_into()
-                            .expect("stored CellIndex"),
-                    );
-                    let tx_hash = packed::Byte32Reader::from_slice_should_be_ok(value).to_entity();
-                    if key[key_prefix_len + 16] == 0 {
-                        let (_, _, tx) = self
-                            .get_transaction(&tx_hash)
-                            .expect("stored transaction history");
-                        let input = tx.raw().inputs().get(cell_index as usize).unwrap();
+                    let tx_index = TxIndex::from_be_bytes(tx_index_bytes);
+                    let cell_index = CellIndex::from_be_bytes(cell_index_bytes);
+                    let cell_type = match key.get(key_prefix_len + 16) {
+                        Some(0) => CellType::Input,
+                        Some(_) => CellType::Output,
+                        None => {
+                            log::warn!(
+                                "skip malformed transaction history key: {} bytes",
+                                key.len()
+                            );
+                            continue;
+                        }
+                    };
+                    let Ok(tx_hash) = packed::Byte32::from_slice(value) else {
+                        log::warn!(
+                            "skip malformed transaction history value: {} bytes",
+                            value.len()
+                        );
+                        continue;
+                    };
+                    if matches!(cell_type, CellType::Input) {
+                        let Some((_, _, tx)) = self.get_transaction(&tx_hash) else {
+                            log::warn!("stored transaction is missing: {:#x}", tx_hash);
+                            continue;
+                        };
+                        let Some(input) = tx.raw().inputs().get(cell_index as usize) else {
+                            log::warn!("input is missing from stored transaction: {:#x}", tx_hash);
+                            continue;
+                        };
                         if let Some((
                             generated_by_block_number,
                             generated_by_tx_index,
