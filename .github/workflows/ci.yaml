@@ -71,6 +71,8 @@ jobs:
         env:
           CHROME: ${{ steps.chrome.outputs.chrome-path }}
           CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
+          # Chrome for Testing cannot use the Ubuntu runner's restricted user namespaces.
+          CHROME_NO_SANDBOX: '1'
         run: |
           node -e 'require("node:fs").writeFileSync("wasm/light-client-db-worker/webdriver.json", JSON.stringify({"goog:chromeOptions":{binary:process.env.CHROME}}))'
           make test-wasm-browser

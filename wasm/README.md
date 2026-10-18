@@ -39,6 +39,10 @@ set `goog:chromeOptions.binary` in a `webdriver.json` file in
 or execution/cleanup error and saves `result.json` in a new `ckb-repro-*`
 directory. Its disposable profile is removed automatically.
 
+On Linux hosts without a usable Chrome sandbox, `CHROME_NO_SANDBOX=1` opts the
+Node runner into `--no-sandbox`. CI enables this for the offline, locally served
+test fixture; leave it unset when a sandbox is available.
+
 The batch correction applies to future writes; it does not automatically repair
 entries left by older runtimes. Existing affected stores require reindexing.
 

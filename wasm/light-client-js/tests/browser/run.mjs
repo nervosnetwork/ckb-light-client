@@ -61,6 +61,7 @@ try {
   await new Promise((resolve,reject) => {server.once('error',reject);server.listen(0,'127.0.0.1',resolve);});
   const origin=`http://127.0.0.1:${server.address().port}`;
   browser=spawn(executable,['--headless=new','--remote-debugging-port=0',`--user-data-dir=${profile}`,
+    ...(process.env.CHROME_NO_SANDBOX === '1' ? ['--no-sandbox'] : []),
     '--no-first-run','--no-default-browser-check','--disable-background-networking','--disable-component-update',
     '--disable-sync','--disable-extensions','--disable-features=MediaRouter,OptimizationHints','about:blank'],
     {windowsHide:true,stdio:['ignore','ignore','pipe']});
