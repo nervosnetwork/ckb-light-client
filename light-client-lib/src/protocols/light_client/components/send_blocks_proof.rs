@@ -1,5 +1,4 @@
 use ckb_network::{BoxedCKBProtocolContext, PeerIndex, SupportProtocols};
-use ckb_systemtime::unix_time_as_millis;
 use ckb_types::{
     core::{ExtraHashView, HeaderView},
     packed,
@@ -244,24 +243,26 @@ impl<'a> SendBlocksProofProcess<'a> {
                 }
             }
 
-            let proof_anchor = original_request.last_hash();
             for (header, extension) in headers.into_iter().zip(extensions) {
                 let block_hash = header.hash();
                 let normal_fetch = original_request.normal_fetch_hashes().contains(&block_hash)
                     && self.protocol.peers().remove_fetching_header(&block_hash);
-                let historical_targets: Vec<_> = original_request
-                    .historical_targets()
+                let revalidations: Vec<_> = original_request
+                    .revalidations()
                     .iter()
-                    .filter(|target| {
-                        target.candidate_hash == block_hash && target.anchor_hash == proof_anchor
-                    })
+                    .filter_map(|request| request.upgrade())
+                    .filter(|request| request.block_hash == block_hash)
                     .collect();
-                let matching_historical_targets: Vec<_> = historical_targets
-                    .iter()
-                    .filter(|target| target.block_number == header.number())
-                    .collect();
-
-                if normal_fetch || !matching_historical_targets.is_empty() {
+                let current_anchor = self.protocol.storage().get_tip_header().calc_header_hash();
+                let chain = self
+                    .protocol
+                    .peers()
+                    .header_revalidation_chain(&current_anchor);
+                if normal_fetch
+                    || revalidations
+                        .iter()
+                        .any(|request| request.is_fetching(self.peer_index, &chain))
+                {
                     self.protocol
                         .storage()
                         .add_fetched_header(&HeaderWithExtension {
@@ -269,45 +270,34 @@ impl<'a> SendBlocksProofProcess<'a> {
                             extension,
                         });
                 }
-
-                for target in historical_targets {
-                    if target.block_number == header.number() {
-                        self.protocol.peers().complete_historical_header_proof(
-                            target,
-                            self.peer_index,
-                            unix_time_as_millis(),
-                        );
-                    } else {
-                        self.protocol
-                            .peers()
-                            .mark_historical_header_proof_unavailable(
-                                target,
-                                self.peer_index,
-                                unix_time_as_millis(),
-                            );
-                    }
+                let current_anchor = self.protocol.storage().get_tip_header().calc_header_hash();
+                let chain = self
+                    .protocol
+                    .peers()
+                    .header_revalidation_chain(&current_anchor);
+                for request in revalidations {
+                    request.complete(self.peer_index, &chain, Some(&header));
                 }
             }
         }
-        let normal_missing_block_hashes = original_request
-            .normal_fetch_hashes()
+        let normal_missing: Vec<_> = missing_block_hashes
             .iter()
-            .filter(|hash| missing_block_hashes.contains(hash))
+            .filter(|hash| original_request.normal_fetch_hashes().contains(hash))
             .cloned()
-            .collect::<Vec<_>>();
+            .collect();
         self.protocol
             .peers()
-            .mark_fetching_headers_missing(&normal_missing_block_hashes);
-
-        for target in original_request.historical_targets() {
-            if missing_block_hashes.contains(&target.candidate_hash) {
-                self.protocol
-                    .peers()
-                    .mark_historical_header_proof_unavailable(
-                        target,
-                        self.peer_index,
-                        unix_time_as_millis(),
-                    );
+            .mark_fetching_headers_missing(&normal_missing);
+        let current_anchor = self.protocol.storage().get_tip_header().calc_header_hash();
+        let chain = self
+            .protocol
+            .peers()
+            .header_revalidation_chain(&current_anchor);
+        for request in original_request.revalidations() {
+            if let Some(request) = request.upgrade() {
+                if missing_block_hashes.contains(&request.block_hash) {
+                    request.complete(self.peer_index, &chain, None);
+                }
             }
         }
 

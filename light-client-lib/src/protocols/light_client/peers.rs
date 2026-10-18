@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt, mem,
     num::NonZeroU32,
-    sync::atomic::{AtomicUsize, Ordering},
+    sync::{Arc, Mutex as StateMutex, Weak},
 };
 
 use ckb_network::PeerIndex;
@@ -19,29 +19,24 @@ use dashmap::DashMap;
 use governor::{clock::DefaultClock, state::keyed::DefaultKeyedStateStore, Quota, RateLimiter};
 
 use crate::{
+    error::Error,
     mutex_lock,
     protocols::{Status, StatusCode, BAD_MESSAGE_ALLOWED_EACH_HOUR, MESSAGE_TIMEOUT},
     read_lock,
+    service::FetchStatus,
     types::{Mutex, RwLock},
     write_lock,
 };
 
 pub type BadMessageRateLimiter<T> = RateLimiter<T, DefaultKeyedStateStore<T>, DefaultClock>;
 
-// Match the existing one-hour retention used for missing fetched headers.
-pub(crate) const HISTORICAL_HEADER_PROOF_TTL_MS: u64 = 3_600_000;
-// Keep terminal results briefly available for callers polling after completion.
-const HISTORICAL_HEADER_PROOF_RESULT_RETENTION_MS: u64 = 300_000;
-static NEXT_HISTORICAL_HEADER_PROOF_ID: AtomicUsize = AtomicUsize::new(1);
-
 pub struct Peers {
     inner: DashMap<PeerIndex, Peer>,
     // The headers are fetching, the value is:
     fetching_headers: DashMap<Byte32, FetchInfo>,
+    header_revalidation_chain: StateMutex<HeaderRevalidationChain>,
     // The transactions are fetching, the value is:
     fetching_txs: DashMap<Byte32, FetchInfo>,
-    // Historical lookup provenance is transient and separate from generic fetch state.
-    historical_header_proofs: DashMap<usize, HistoricalHeaderProofInfo>,
 
     // The matched block filters to download, the key is the block hash, the value is:
     //   * if the block is proved
@@ -90,39 +85,131 @@ pub struct FetchInfo {
     timeout: bool,
     // whether the data to fetch is not on chain
     missing: bool,
+    ordinary: bool,
+    revalidations: Vec<Weak<HeaderRevalidation>>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HistoricalHeaderProofTarget {
-    pub(crate) id: usize,
-    pub(crate) block_number: BlockNumber,
-    pub(crate) candidate_hash: Byte32,
-    pub(crate) anchor_hash: Byte32,
+#[derive(Debug)]
+pub(crate) struct HeaderRevalidation {
+    pub(crate) block_hash: Byte32,
+    chain: Arc<()>,
+    owner: Weak<Peers>,
+    added_ts: u64,
+    state: StateMutex<HeaderRevalidationState>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) enum HistoricalHeaderProofState {
+#[derive(Default)]
+struct HeaderRevalidationChain {
+    tip_hash: Byte32,
+    identity: Arc<()>,
+}
+
+#[derive(Debug)]
+enum HeaderRevalidationState {
     Pending,
-    InFlight {
-        peer_index: PeerIndex,
-        first_sent: u64,
-    },
-    ProofComplete {
-        completed_ts: u64,
-    },
-    Unavailable {
-        completed_ts: u64,
-    },
-    StaleAnchor {
-        completed_ts: u64,
-    },
+    Fetching { peer: PeerIndex, first_sent: u64 },
+    Fetched(HeaderView),
+    NotFound,
+    Stale,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct HistoricalHeaderProofInfo {
-    pub(crate) target: HistoricalHeaderProofTarget,
-    pub(crate) created_ts: u64,
-    pub(crate) state: HistoricalHeaderProofState,
+impl HeaderRevalidation {
+    pub(crate) fn status(
+        &self,
+        peers: &Arc<Peers>,
+        block_hash: &Byte32,
+        current_anchor: &Byte32,
+    ) -> crate::error::Result<FetchStatus<ckb_jsonrpc_types::HeaderView>> {
+        if self.block_hash != *block_hash
+            || !self
+                .owner
+                .upgrade()
+                .is_some_and(|owner| Arc::ptr_eq(&owner, peers))
+        {
+            return Err(Error::runtime(
+                "fetch options belong to another header or client",
+            ));
+        }
+        let chain = peers.header_revalidation_chain(current_anchor);
+        let mut state = self.state.lock().expect("header revalidation lock");
+        if !Arc::ptr_eq(&self.chain, &chain) {
+            *state = HeaderRevalidationState::Stale;
+        }
+        match &*state {
+            HeaderRevalidationState::Pending => Ok(FetchStatus::Added {
+                timestamp: self.added_ts.into(),
+            }),
+            HeaderRevalidationState::Fetching { first_sent, .. } => Ok(FetchStatus::Fetching {
+                first_sent: (*first_sent).into(),
+            }),
+            HeaderRevalidationState::Fetched(header) => Ok(FetchStatus::Fetched {
+                data: header.clone().into(),
+            }),
+            HeaderRevalidationState::NotFound => Ok(FetchStatus::NotFound),
+            HeaderRevalidationState::Stale => Err(Error::runtime(
+                "accepted chain changed or continuity is unknown; use new fetch options to revalidate",
+            )),
+        }
+    }
+
+    fn is_active(&self, chain: &Arc<()>) -> bool {
+        let mut state = self.state.lock().expect("header revalidation lock");
+        if !Arc::ptr_eq(&self.chain, chain) {
+            *state = HeaderRevalidationState::Stale;
+        }
+        matches!(
+            *state,
+            HeaderRevalidationState::Pending | HeaderRevalidationState::Fetching { .. }
+        )
+    }
+
+    fn is_pending(&self) -> bool {
+        matches!(
+            *self.state.lock().expect("header revalidation lock"),
+            HeaderRevalidationState::Pending
+        )
+    }
+
+    fn start(&self, chain: &Arc<()>, peer: PeerIndex, now: u64) -> bool {
+        let mut state = self.state.lock().expect("header revalidation lock");
+        if Arc::ptr_eq(&self.chain, chain) && matches!(*state, HeaderRevalidationState::Pending) {
+            *state = HeaderRevalidationState::Fetching {
+                peer,
+                first_sent: now,
+            };
+            true
+        } else {
+            false
+        }
+    }
+
+    fn retry(&self, peer: PeerIndex) {
+        let mut state = self.state.lock().expect("header revalidation lock");
+        if matches!(*state, HeaderRevalidationState::Fetching { peer: active, .. } if active == peer)
+        {
+            *state = HeaderRevalidationState::Pending;
+        }
+    }
+
+    pub(crate) fn is_fetching(&self, peer: PeerIndex, chain: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.chain, chain)
+            && matches!(*self.state.lock().expect("header revalidation lock"),
+                HeaderRevalidationState::Fetching { peer: active, .. } if active == peer)
+    }
+
+    pub(crate) fn complete(&self, peer: PeerIndex, chain: &Arc<()>, header: Option<&HeaderView>) {
+        let mut state = self.state.lock().expect("header revalidation lock");
+        if matches!(*state, HeaderRevalidationState::Fetching { peer: active, .. } if active == peer)
+        {
+            *state = if !Arc::ptr_eq(&self.chain, chain) {
+                HeaderRevalidationState::Stale
+            } else if let Some(header) = header {
+                HeaderRevalidationState::Fetched(header.clone())
+            } else {
+                HeaderRevalidationState::NotFound
+            };
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -208,7 +295,7 @@ pub(crate) struct BlocksProofRequest {
     when_sent: u64,
     should_get_blocks: bool,
     normal_fetch_hashes: Vec<Byte32>,
-    historical_targets: Vec<HistoricalHeaderProofTarget>,
+    revalidations: Vec<Weak<HeaderRevalidation>>,
 }
 
 #[derive(Clone)]
@@ -248,6 +335,8 @@ impl FetchInfo {
             first_sent,
             timeout,
             missing,
+            ordinary: true,
+            revalidations: Vec::new(),
         }
     }
     #[cfg(test)]
@@ -264,6 +353,8 @@ impl FetchInfo {
             first_sent: 0,
             timeout: false,
             missing: false,
+            ordinary: true,
+            revalidations: Vec::new(),
         }
     }
 }
@@ -440,14 +531,14 @@ impl BlocksProofRequest {
         when_sent: u64,
         should_get_blocks: bool,
         normal_fetch_hashes: Vec<Byte32>,
-        historical_targets: Vec<HistoricalHeaderProofTarget>,
+        revalidations: Vec<Weak<HeaderRevalidation>>,
     ) -> Self {
         Self {
             content,
             when_sent,
             should_get_blocks,
             normal_fetch_hashes,
-            historical_targets,
+            revalidations,
         }
     }
 
@@ -463,12 +554,12 @@ impl BlocksProofRequest {
             .collect()
     }
 
-    pub(crate) fn historical_targets(&self) -> &[HistoricalHeaderProofTarget] {
-        &self.historical_targets
-    }
-
     pub(crate) fn normal_fetch_hashes(&self) -> &[Byte32] {
         &self.normal_fetch_hashes
+    }
+
+    pub(crate) fn revalidations(&self) -> &[Weak<HeaderRevalidation>] {
+        &self.revalidations
     }
 
     pub(crate) fn check_block_hashes(
@@ -1191,8 +1282,8 @@ impl Peers {
         Self {
             inner: Default::default(),
             fetching_headers: DashMap::new(),
+            header_revalidation_chain: Default::default(),
             fetching_txs: DashMap::new(),
-            historical_header_proofs: DashMap::new(),
             matched_blocks: Default::default(),
             cached_block_filter_hashes: Default::default(),
             max_outbound_peers,
@@ -1238,17 +1329,28 @@ impl Peers {
     }
     pub(crate) fn add_fetch_header(&self, block_hash: Byte32, timestamp: u64) {
         self.fetching_headers
-            .insert(block_hash, FetchInfo::new_add(timestamp));
+            .entry(block_hash)
+            .and_modify(|info| {
+                info.ordinary = true;
+                info.added_ts = timestamp;
+                info.first_sent = 0;
+                info.timeout = false;
+                info.missing = false;
+            })
+            .or_insert_with(|| FetchInfo::new_add(timestamp));
     }
     pub(crate) fn add_fetch_tx(&self, tx_hash: Byte32, timestamp: u64) {
         self.fetching_txs
             .insert(tx_hash, FetchInfo::new_add(timestamp));
     }
     pub(crate) fn get_header_fetch_info(&self, block_hash: &Byte32) -> Option<(u64, u64, bool)> {
-        self.fetching_headers.get(block_hash).map(|item| {
-            let info = item.value();
-            (info.added_ts, info.first_sent, info.missing)
-        })
+        self.fetching_headers
+            .get(block_hash)
+            .filter(|info| info.ordinary)
+            .map(|item| {
+                let info = item.value();
+                (info.added_ts, info.first_sent, info.missing)
+            })
     }
     pub(crate) fn get_tx_fetch_info(&self, tx_hash: &Byte32) -> Option<(u64, u64, bool)> {
         self.fetching_txs.get(tx_hash).map(|item| {
@@ -1262,6 +1364,7 @@ impl Peers {
                 .entry(block_hash.clone())
                 .and_modify(|info| {
                     // Block was already in fetching_headers, mark as missing
+                    info.ordinary = true;
                     info.missing = true;
                 })
                 .or_insert_with(|| {
@@ -1273,6 +1376,8 @@ impl Peers {
                         first_sent: 0,
                         timeout: false,
                         missing: true,
+                        ordinary: true,
+                        revalidations: Vec::new(),
                     }
                 });
         }
@@ -1285,190 +1390,70 @@ impl Peers {
         }
     }
 
-    pub(crate) fn add_historical_header_proof(
-        &self,
-        block_number: BlockNumber,
-        candidate_hash: Byte32,
+    pub(crate) fn revalidate_header(
+        self: &Arc<Self>,
+        block_hash: Byte32,
         anchor_hash: Byte32,
-        created_ts: u64,
-    ) -> usize {
-        let id = NEXT_HISTORICAL_HEADER_PROOF_ID.fetch_add(1, Ordering::Relaxed);
-        let target = HistoricalHeaderProofTarget {
-            id,
-            block_number,
-            candidate_hash,
-            anchor_hash,
-        };
-        self.historical_header_proofs.insert(
-            id,
-            HistoricalHeaderProofInfo {
-                target,
-                created_ts,
-                state: HistoricalHeaderProofState::Pending,
-            },
-        );
-        id
-    }
-
-    pub(crate) fn historical_header_proof(&self, id: usize) -> Option<HistoricalHeaderProofInfo> {
-        self.historical_header_proofs
-            .get(&id)
-            .map(|info| info.clone())
-    }
-
-    pub(crate) fn pending_historical_header_proofs(
-        &self,
-        anchor_hash: &Byte32,
-    ) -> Vec<HistoricalHeaderProofTarget> {
-        self.historical_header_proofs
-            .iter()
-            .filter_map(|entry| {
-                let info = entry.value();
-                (info.target.anchor_hash == *anchor_hash
-                    && matches!(&info.state, HistoricalHeaderProofState::Pending))
-                .then(|| info.target.clone())
+        now: u64,
+    ) -> Arc<HeaderRevalidation> {
+        let request = Arc::new(HeaderRevalidation {
+            block_hash: block_hash.clone(),
+            chain: self.header_revalidation_chain(&anchor_hash),
+            owner: Arc::downgrade(self),
+            added_ts: now,
+            state: StateMutex::new(HeaderRevalidationState::Pending),
+        });
+        self.fetching_headers
+            .entry(block_hash)
+            .or_insert_with(|| {
+                let mut info = FetchInfo::new_add(now);
+                info.ordinary = false;
+                info
             })
-            .collect()
+            .revalidations
+            .push(Arc::downgrade(&request));
+        request
     }
 
-    fn start_historical_header_proofs(
-        &self,
-        ids: &[usize],
-        block_hashes: &[H256],
-        anchor_hash: &Byte32,
-        peer_index: PeerIndex,
-        first_sent: u64,
-    ) -> Vec<HistoricalHeaderProofTarget> {
-        let requested_hashes: HashSet<Byte32> = block_hashes
-            .iter()
-            .map(|block_hash| block_hash.pack())
-            .collect();
-        let mut targets = Vec::new();
-        for id in ids {
-            if let Some(mut info) = self.historical_header_proofs.get_mut(id) {
-                if info.target.anchor_hash == *anchor_hash
-                    && requested_hashes.contains(&info.target.candidate_hash)
-                    && matches!(&info.state, HistoricalHeaderProofState::Pending)
-                {
-                    info.state = HistoricalHeaderProofState::InFlight {
-                        peer_index,
-                        first_sent,
-                    };
-                    targets.push(info.target.clone());
-                }
-            }
+    pub(crate) fn header_revalidation_chain(&self, current_anchor: &Byte32) -> Arc<()> {
+        let mut chain = self
+            .header_revalidation_chain
+            .lock()
+            .expect("header revalidation chain lock");
+        if chain.tip_hash != *current_anchor {
+            chain.tip_hash = current_anchor.clone();
+            chain.identity = Arc::new(());
         }
-        targets
+        Arc::clone(&chain.identity)
     }
 
-    fn reset_historical_header_proofs(
+    pub(crate) fn advance_header_revalidation_tip(
         &self,
-        targets: &[HistoricalHeaderProofTarget],
-        peer_index: PeerIndex,
+        previous: &Byte32,
+        tip: &HeaderView,
+        last_headers: &[HeaderView],
     ) {
-        for target in targets {
-            if let Some(mut info) = self.historical_header_proofs.get_mut(&target.id) {
-                if matches!(
-                    &info.state,
-                    HistoricalHeaderProofState::InFlight {
-                        peer_index: active_peer,
-                        ..
-                    } if *active_peer == peer_index
-                ) {
-                    info.state = HistoricalHeaderProofState::Pending;
-                }
-            }
+        let extends_previous = tip.parent_hash() == *previous
+            || last_headers.iter().any(|header| header.hash() == *previous);
+        let mut chain = self
+            .header_revalidation_chain
+            .lock()
+            .expect("header revalidation chain lock");
+        if chain.tip_hash != *previous || !extends_previous {
+            chain.identity = Arc::new(());
         }
+        chain.tip_hash = tip.hash();
     }
 
-    pub(crate) fn complete_historical_header_proof(
-        &self,
-        target: &HistoricalHeaderProofTarget,
-        peer_index: PeerIndex,
-        now: u64,
-    ) -> bool {
-        if let Some(mut info) = self.historical_header_proofs.get_mut(&target.id) {
-            if info.target == *target
-                && matches!(
-                    &info.state,
-                    HistoricalHeaderProofState::InFlight {
-                        peer_index: active_peer,
-                        ..
-                    } if *active_peer == peer_index
-                )
-            {
-                info.state = HistoricalHeaderProofState::ProofComplete { completed_ts: now };
-                return true;
-            }
-        }
-        false
-    }
-
-    pub(crate) fn mark_historical_header_proof_unavailable(
-        &self,
-        target: &HistoricalHeaderProofTarget,
-        peer_index: PeerIndex,
-        now: u64,
-    ) -> bool {
-        if let Some(mut info) = self.historical_header_proofs.get_mut(&target.id) {
-            if info.target == *target
-                && matches!(
-                    &info.state,
-                    HistoricalHeaderProofState::InFlight {
-                        peer_index: active_peer,
-                        ..
-                    } if *active_peer == peer_index
-                )
-            {
-                info.state = HistoricalHeaderProofState::Unavailable { completed_ts: now };
-                return true;
-            }
-        }
-        false
-    }
-
-    pub(crate) fn mark_historical_header_proof_stale(&self, id: usize, now: u64) {
-        if let Some(mut info) = self.historical_header_proofs.get_mut(&id) {
-            let completed_ts = match &info.state {
-                HistoricalHeaderProofState::StaleAnchor { completed_ts, .. } => *completed_ts,
-                _ => now,
-            };
-            info.state = HistoricalHeaderProofState::StaleAnchor { completed_ts };
-        }
-    }
-
-    pub(crate) fn cleanup_historical_header_proofs(&self, current_anchor: &Byte32, now: u64) {
-        self.historical_header_proofs.retain(|_, info| {
-            let stale_since = match &info.state {
-                HistoricalHeaderProofState::StaleAnchor { completed_ts, .. } => Some(*completed_ts),
-                _ if info.target.anchor_hash != *current_anchor => Some(now),
-                _ => None,
-            };
-            if let Some(completed_ts) = stale_since {
-                info.state = HistoricalHeaderProofState::StaleAnchor { completed_ts };
-            }
-
-            let active_expired = !matches!(
-                &info.state,
-                HistoricalHeaderProofState::ProofComplete { .. }
-                    | HistoricalHeaderProofState::Unavailable { .. }
-                    | HistoricalHeaderProofState::StaleAnchor { .. }
-            ) && now.saturating_sub(info.created_ts)
-                >= HISTORICAL_HEADER_PROOF_TTL_MS;
-            if active_expired {
-                return false;
-            }
-
-            let terminal_ts = match &info.state {
-                HistoricalHeaderProofState::ProofComplete { completed_ts }
-                | HistoricalHeaderProofState::Unavailable { completed_ts }
-                | HistoricalHeaderProofState::StaleAnchor { completed_ts } => Some(*completed_ts),
-                HistoricalHeaderProofState::Pending
-                | HistoricalHeaderProofState::InFlight { .. } => None,
-            };
-            terminal_ts.is_none_or(|ts| {
-                now.saturating_sub(ts) <= HISTORICAL_HEADER_PROOF_RESULT_RETENTION_MS
-            })
+    pub(crate) fn cleanup_header_revalidations(&self, current_anchor: &Byte32) {
+        let chain = self.header_revalidation_chain(current_anchor);
+        self.fetching_headers.retain(|_, info| {
+            info.revalidations.retain(|request| {
+                request
+                    .upgrade()
+                    .is_some_and(|request| request.is_active(&chain))
+            });
+            info.ordinary || !info.revalidations.is_empty()
         });
     }
 
@@ -1480,9 +1465,10 @@ impl Peers {
         let mut removed_count = 0;
 
         self.fetching_headers.retain(|_hash, info| {
-            if info.missing && now.saturating_sub(info.added_ts) > max_age_ms {
+            if info.ordinary && info.missing && now.saturating_sub(info.added_ts) > max_age_ms {
                 removed_count += 1;
-                false // Remove this entry
+                info.ordinary = false;
+                !info.revalidations.is_empty()
             } else {
                 true // Keep this entry
             }
@@ -1503,10 +1489,16 @@ impl Peers {
             if let Some(request) = peer.get_blocks_proof_request() {
                 for block_hash in request.normal_fetch_hashes() {
                     if let Some(mut pair) = self.fetching_headers.get_mut(block_hash) {
-                        pair.value_mut().timeout = true;
+                        if pair.ordinary {
+                            pair.timeout = true;
+                        }
                     }
                 }
-                self.reset_historical_header_proofs(request.historical_targets(), peer_index);
+                for revalidation in request.revalidations() {
+                    if let Some(revalidation) = revalidation.upgrade() {
+                        revalidation.retry(peer_index);
+                    }
+                }
             }
         }
     }
@@ -1524,6 +1516,9 @@ impl Peers {
     pub(crate) fn fetching_idle_headers(&self, block_hashes: &[Byte32], now: u64) {
         for block_hash in block_hashes {
             if let Some(mut value) = self.fetching_headers.get_mut(block_hash) {
+                if !value.ordinary {
+                    continue;
+                }
                 if value.first_sent == 0 {
                     value.first_sent = now;
                 }
@@ -1680,7 +1675,19 @@ impl Peers {
     }
 
     pub(crate) fn remove_fetching_header(&self, block_hash: &Byte32) -> bool {
-        self.fetching_headers.remove(block_hash).is_some()
+        if let dashmap::mapref::entry::Entry::Occupied(mut entry) =
+            self.fetching_headers.entry(block_hash.clone())
+        {
+            let info = entry.get_mut();
+            let ordinary = info.ordinary;
+            info.ordinary = false;
+            if info.revalidations.is_empty() {
+                entry.remove();
+            }
+            ordinary
+        } else {
+            false
+        }
     }
 
     pub(crate) fn remove_fetching_transaction(
@@ -1702,7 +1709,12 @@ impl Peers {
             .iter()
             .filter(|pair| {
                 let info = pair.value();
-                info.first_sent == 0 || info.timeout
+                (info.ordinary && (info.first_sent == 0 || info.timeout))
+                    || info.revalidations.iter().any(|request| {
+                        request
+                            .upgrade()
+                            .is_some_and(|request| request.is_pending())
+                    })
             })
             .map(|pair| pair.key().clone())
             .collect()
@@ -1842,58 +1854,45 @@ impl Peers {
         request: Option<packed::GetBlocksProof>,
         should_get_blocks: bool,
     ) {
-        let normal_fetch_hashes = request
-            .as_ref()
-            .map(|content| content.block_hashes().into_iter().collect())
-            .unwrap_or_default();
-        self.update_blocks_proof_request_with_historical_targets(
-            index,
-            request,
-            should_get_blocks,
-            normal_fetch_hashes,
-            Vec::new(),
-        );
-    }
-
-    pub(crate) fn update_blocks_proof_request_with_historical_targets(
-        &self,
-        index: PeerIndex,
-        request: Option<packed::GetBlocksProof>,
-        should_get_blocks: bool,
-        normal_fetch_hashes: Vec<Byte32>,
-        historical_request_ids: Vec<usize>,
-    ) {
-        let Some(mut peer) = self.inner.get_mut(&index) else {
-            return;
-        };
-        if let Some(old_request) = &peer.blocks_proof_request {
-            self.reset_historical_header_proofs(old_request.historical_targets(), index);
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            if let Some(previous) = &peer.blocks_proof_request {
+                for revalidation in previous.revalidations() {
+                    if let Some(revalidation) = revalidation.upgrade() {
+                        revalidation.retry(index);
+                    }
+                }
+            }
+            peer.blocks_proof_request = request.map(|content| {
+                let now = unix_time_as_millis();
+                let chain = self
+                    .header_revalidation_chain
+                    .lock()
+                    .expect("header revalidation chain lock");
+                let mut normal_fetch_hashes = Vec::new();
+                let mut revalidations = Vec::new();
+                for block_hash in content.block_hashes() {
+                    let info = self.fetching_headers.get(&block_hash);
+                    if should_get_blocks || info.as_ref().is_some_and(|info| info.ordinary) {
+                        normal_fetch_hashes.push(block_hash.clone());
+                    }
+                    if let Some(info) = info.filter(|_| chain.tip_hash == content.last_hash()) {
+                        revalidations.extend(info.revalidations.iter().filter_map(|request| {
+                            let request = request.upgrade()?;
+                            request
+                                .start(&chain.identity, index, now)
+                                .then(|| Arc::downgrade(&request))
+                        }));
+                    }
+                }
+                BlocksProofRequest::new(
+                    content,
+                    now,
+                    should_get_blocks,
+                    normal_fetch_hashes,
+                    revalidations,
+                )
+            });
         }
-
-        let now = unix_time_as_millis();
-        let new_request = request.map(|content| {
-            let anchor_hash = content.last_hash();
-            let block_hashes = content
-                .block_hashes()
-                .into_iter()
-                .map(|hash| hash.unpack())
-                .collect::<Vec<_>>();
-            let historical_targets = self.start_historical_header_proofs(
-                &historical_request_ids,
-                &block_hashes,
-                &anchor_hash,
-                index,
-                now,
-            );
-            BlocksProofRequest::new(
-                content,
-                now,
-                should_get_blocks,
-                normal_fetch_hashes,
-                historical_targets,
-            )
-        });
-        peer.blocks_proof_request = new_request;
     }
     pub(crate) fn update_blocks_request(&self, index: PeerIndex, hashes: Option<Vec<Byte32>>) {
         if let Some(mut peer) = self.inner.get_mut(&index) {

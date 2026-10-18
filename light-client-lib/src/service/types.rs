@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, Cycle, HeaderView, JsonBytes, NodeAddress, OutPoint,
     RemoteNodeProtocol, Script, TransactionView, Uint32, Uint64,
@@ -5,7 +7,7 @@ use ckb_jsonrpc_types::{
 use ckb_types::H256;
 use serde::{Deserialize, Serialize};
 
-use crate::storage;
+use crate::{protocols::light_client::HeaderRevalidation, storage};
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 #[derive(Deserialize, Serialize, Eq, PartialEq, Debug)]
@@ -39,54 +41,28 @@ pub enum FetchStatus<T> {
     NotFound,
 }
 
-/// Opaque handle for a historical header verification request.
+/// Options and process-local identity for fetching one header.
 ///
-/// This handle is valid only in the process that created it and becomes invalid after restart.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub struct HistoricalHeaderProofRequest {
-    id: usize,
+/// Defaults to ordinary cached fetching. Construct with `new(true)` to force fresh
+/// proof-backed verification, then reuse the same value for every poll of that operation.
+/// Successful and missing results remain available while this value is retained; polling
+/// never starts another request. Verified chain extensions preserve the operation; forks or
+/// unknown chain continuity invalidate it. See [`super::LightClientChainService::fetch_header_with_options`].
+/// Dropping it abandons any pending revalidation.
+#[derive(Debug, Default)]
+pub struct FetchHeaderOptions {
+    pub(crate) force: bool,
+    pub(crate) request: Option<Arc<HeaderRevalidation>>,
 }
 
-impl HistoricalHeaderProofRequest {
-    pub(crate) fn new(id: usize) -> Self {
-        Self { id }
+impl FetchHeaderOptions {
+    /// Selects ordinary fetching (`false`) or a new forced revalidation (`true`).
+    pub fn new(force: bool) -> Self {
+        Self {
+            force,
+            request: None,
+        }
     }
-
-    pub(crate) fn id(&self) -> usize {
-        self.id
-    }
-}
-
-/// Current status or result of a historical header verification request.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum HistoricalHeaderProofStatus {
-    /// Waiting to be sent to a peer.
-    Added { timestamp: Uint64 },
-    /// The proof request has been sent to a peer and is waiting for a response.
-    Fetching { first_sent: Uint64 },
-    /// The peer did not provide the requested header at the requested height.
-    ///
-    /// This does not prove that the header does not exist.
-    Unavailable,
-    /// The accepted chain tip changed after this request started. Start a new request to verify
-    /// against the new tip.
-    StaleAnchor {
-        /// The tip used when this request started.
-        requested_anchor: H256,
-        /// The currently accepted tip.
-        current_anchor: H256,
-    },
-    /// The requested block number and header hash were successfully verified.
-    Verified {
-        /// Verified block number.
-        block_number: BlockNumber,
-        /// Verified block hash.
-        block_hash: H256,
-        /// Tip against which the proof was verified.
-        anchor_hash: H256,
-    },
-    /// The request expired or its process-local handle is no longer known.
-    Expired,
 }
 
 #[derive(Deserialize, Serialize, Debug)]

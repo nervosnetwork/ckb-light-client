@@ -35,10 +35,10 @@ mod sampling;
 mod tests;
 
 pub use self::peers::FetchInfo;
+pub(crate) use self::peers::HeaderRevalidation;
 
 use prelude::*;
 
-pub(crate) use self::peers::HistoricalHeaderProofState;
 pub use self::peers::{LastState, Peer};
 pub use self::peers::{PeerState, Peers, ProveRequest, ProveState};
 use super::{
@@ -417,6 +417,11 @@ impl LightClientProtocol {
                 &new_prove_state.get_last_header().header().data(),
                 new_prove_state.get_last_headers(),
             );
+            self.peers.advance_header_revalidation_tip(
+                &prev_last_header.calc_header_hash(),
+                new_prove_state.get_last_header().header(),
+                new_prove_state.get_last_headers(),
+            );
         }
         self.peers()
             .update_prove_state(peer_index, new_prove_state)?;
@@ -705,10 +710,8 @@ impl LightClientProtocol {
         self.peers.cleanup_old_missing_headers(MAX_MISSING_AGE_MS);
 
         let tip_header = self.storage.get_tip_header();
-        self.peers.cleanup_historical_header_proofs(
-            &tip_header.calc_header_hash(),
-            unix_time_as_millis(),
-        );
+        self.peers
+            .cleanup_header_revalidations(&tip_header.calc_header_hash());
         let matched_blocks = self.peers.matched_blocks().read().await;
 
         prove_or_download_matched_blocks(
@@ -721,14 +724,14 @@ impl LightClientProtocol {
     }
 
     async fn fetch_headers_txs(&mut self, nc: &BoxedCKBProtocolContext) {
-        let tip_header = self.storage.get_tip_header();
-        let last_hash = tip_header.calc_header_hash();
-        let historical_targets = self.peers.pending_historical_header_proofs(&last_hash);
-        if !self.peers.has_fetching_info() && historical_targets.is_empty() {
+        self.peers
+            .cleanup_header_revalidations(&self.storage.get_tip_header().calc_header_hash());
+        if !self.peers.has_fetching_info() {
             trace!("no fetching headers/transactions needed");
             return;
         }
 
+        let tip_header = self.storage.get_tip_header();
         let best_peers: Vec<PeerIndex> = self.peers.get_best_proved_peers(&tip_header);
         if best_peers.is_empty() {
             debug!("no peers found for fetch headers and transactions");
@@ -736,20 +739,12 @@ impl LightClientProtocol {
         }
 
         let now = unix_time_as_millis();
-        let normal_fetch_hashes = self.peers.get_headers_to_fetch();
-        let mut block_hashes = normal_fetch_hashes.clone();
-        let mut historical_ids_by_hash = HashMap::<packed::Byte32, Vec<usize>>::new();
-        for target in historical_targets {
-            if !block_hashes.contains(&target.candidate_hash) {
-                block_hashes.push(target.candidate_hash.clone());
-            }
-            historical_ids_by_hash
-                .entry(target.candidate_hash)
-                .or_default()
-                .push(target.id);
-        }
-
-        for block_hash_chunk in block_hashes.chunks(GET_BLOCKS_PROOF_LIMIT) {
+        let last_hash = tip_header.calc_header_hash();
+        for block_hashes in self
+            .peers
+            .get_headers_to_fetch()
+            .chunks(GET_BLOCKS_PROOF_LIMIT)
+        {
             if let Some(peer_index) = best_peers.iter().find(|peer_index| {
                 self.peers
                     .get_peer(peer_index)
@@ -757,20 +752,9 @@ impl LightClientProtocol {
                     .unwrap_or(false)
             }) {
                 debug!("send block proof request to peer: {}", peer_index);
-                if !block_hash_chunk.is_empty() {
-                    let request_normal_fetch_hashes: Vec<packed::Byte32> = block_hash_chunk
-                        .iter()
-                        .filter(|hash| normal_fetch_hashes.contains(hash))
-                        .cloned()
-                        .collect();
-                    let historical_request_ids = block_hash_chunk
-                        .iter()
-                        .filter_map(|hash| historical_ids_by_hash.get(hash))
-                        .flatten()
-                        .copied()
-                        .collect();
+                if !block_hashes.is_empty() {
                     let content = packed::GetBlocksProof::new_builder()
-                        .block_hashes(block_hash_chunk.to_vec().pack())
+                        .block_hashes(block_hashes.to_vec().pack())
                         .last_hash(last_hash.clone())
                         .build();
                     let message = packed::LightClientMessage::new_builder()
@@ -779,13 +763,7 @@ impl LightClientProtocol {
                         .as_bytes();
 
                     self.peers
-                        .update_blocks_proof_request_with_historical_targets(
-                            *peer_index,
-                            Some(content),
-                            false,
-                            request_normal_fetch_hashes.clone(),
-                            historical_request_ids,
-                        );
+                        .update_blocks_proof_request(*peer_index, Some(content), false);
                     if let Err(err) = nc.send_message(
                         SupportProtocols::LightClient.protocol_id(),
                         *peer_index,
@@ -795,8 +773,7 @@ impl LightClientProtocol {
                             format!("nc.send_message LightClientMessage, error: {:?}", err);
                         info!("{}", error_message);
                     }
-                    self.peers
-                        .fetching_idle_headers(&request_normal_fetch_hashes, now);
+                    self.peers.fetching_idle_headers(block_hashes, now);
                 }
             } else {
                 debug!("all valid peers are busy for fetching blocks proof (headers)");

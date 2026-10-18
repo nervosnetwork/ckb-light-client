@@ -7,12 +7,11 @@
 /// allowing it to work with RocksDB, SQLite, or IndexedDB without code duplication.
 use crate::{
     error::{Error, Result},
-    protocols::light_client::HistoricalHeaderProofState,
     service::{
         helpers::{build_filter_options, build_query_options},
-        Cell, CellType, CellsCapacity, FetchStatus, HistoricalHeaderProofRequest,
-        HistoricalHeaderProofStatus, Order, Pagination, ScriptType, SearchKey, Status,
-        TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
+        Cell, CellType, CellsCapacity, FetchHeaderOptions, FetchStatus, Order, Pagination,
+        ScriptType, SearchKey, Status, TransactionWithStatus, Tx, TxStatus, TxWithCell,
+        TxWithCells,
     },
     storage::{
         extract_raw_data, Key, KeyPrefix, LightClientStorage, StorageWithChainData, LAST_STATE_KEY,
@@ -643,100 +642,54 @@ impl LightClientChainService {
         }
     }
 
-    /// Starts verification of a historical block header.
+    /// Fetches a header, optionally requiring a fresh peer proof.
     ///
-    /// The caller provides a block number and an untrusted candidate header hash. The light client
-    /// verifies that candidate using its existing block-proof verification path.
+    /// With `FetchHeaderOptions::new(false)` this has the same behavior as
+    /// [`Self::fetch_header`]. With `true`, the first call bypasses every header cache and
+    /// queues verification against the currently accepted chain. Reuse the same mutable options
+    /// to poll that operation; creating new options starts an independent operation.
     ///
-    /// The returned handle is valid only for the current process and becomes invalid after
-    /// restart.
+    /// `Fetched` for a forced operation contains the header returned by that operation's
+    /// successful GetBlocksProof verification, including its actual block number. It is never
+    /// inferred from cache presence. Callers must compare that number with any expected height.
+    /// Verified extensions of the accepted tip preserve pending operations and completed results.
+    /// A fork, or a tip update whose continuity cannot be established from the verified recent
+    /// headers, returns an error, including when polling a completed operation. Each proof is
+    /// still checked against its dispatch-time accepted tip; earlier responses cannot complete
+    /// operations created after their dispatch.
     ///
-    /// A cached header does not automatically satisfy this request. Verification must complete
-    /// for this specific request against the chain tip that was accepted when the request started.
-    pub fn request_historical_header_proof(
+    /// `NotFound` means a peer reported the header missing, not proven nonexistence. It remains
+    /// terminal for these options. Timeouts and disconnects retry through the existing scheduler.
+    /// There is no overall deadline; callers can impose one by dropping the options.
+    /// Drop the options to abandon the operation, or use new options to retry a missing or stale
+    /// result. Options are bound to this client and hash; there is no persistent request state.
+    pub fn fetch_header_with_options(
         &self,
-        block_number: ckb_jsonrpc_types::BlockNumber,
-        candidate_hash: H256,
-    ) -> Result<HistoricalHeaderProofRequest> {
-        let block_number: u64 = block_number.into();
-        if block_number == 0 {
-            return Err(Error::runtime(
-                "genesis header is authenticated by the configured genesis identity",
-            ));
+        block_hash: &H256,
+        options: &mut FetchHeaderOptions,
+    ) -> Result<FetchStatus<ckb_jsonrpc_types::HeaderView>> {
+        if !options.force {
+            return Ok(self.fetch_header(block_hash));
         }
-
-        let tip_header = self.swc.storage().get_tip_header();
-        let tip_number: u64 = tip_header.raw().number().unpack();
-        if tip_number == 0 {
-            return Err(Error::runtime(
-                "historical header proof requires an accepted non-genesis tip",
-            ));
-        }
-        if block_number >= tip_number {
-            return Err(Error::runtime(
-                "historical header proof height must be below the accepted tip",
-            ));
-        }
-
-        let anchor_hash = tip_header.calc_header_hash();
-        let id = self.swc.peers().add_historical_header_proof(
-            block_number,
-            candidate_hash.pack(),
-            anchor_hash,
-            unix_time_as_millis(),
-        );
-        Ok(HistoricalHeaderProofRequest::new(id))
-    }
-
-    /// Returns the current status of a historical header verification request.
-    ///
-    /// If the accepted chain tip changes before verification completes, the request becomes stale
-    /// and the caller should start a new request.
-    pub fn poll_historical_header_proof(
-        &self,
-        request: &HistoricalHeaderProofRequest,
-    ) -> Result<HistoricalHeaderProofStatus> {
         let peers = self.swc.peers();
-        let current_anchor = self.swc.storage().get_tip_header().calc_header_hash();
-        peers.cleanup_historical_header_proofs(&current_anchor, unix_time_as_millis());
-        let Some(info) = peers.historical_header_proof(request.id()) else {
-            return Ok(HistoricalHeaderProofStatus::Expired);
-        };
-
-        match info.state {
-            HistoricalHeaderProofState::Pending => Ok(HistoricalHeaderProofStatus::Added {
-                timestamp: info.created_ts.into(),
-            }),
-            HistoricalHeaderProofState::InFlight { first_sent, .. } => {
-                Ok(HistoricalHeaderProofStatus::Fetching {
-                    first_sent: first_sent.into(),
-                })
+        let tip = self.swc.storage().get_tip_header();
+        let anchor = tip.calc_header_hash();
+        let hash = block_hash.pack();
+        if options.request.is_none() {
+            let tip_number: u64 = tip.raw().number().unpack();
+            if tip_number == 0 {
+                return Err(Error::runtime(
+                    "header revalidation requires an accepted non-genesis tip",
+                ));
             }
-            HistoricalHeaderProofState::ProofComplete { .. } => {
-                let final_anchor = self.swc.storage().get_tip_header().calc_header_hash();
-                if final_anchor != info.target.anchor_hash {
-                    peers.mark_historical_header_proof_stale(request.id(), unix_time_as_millis());
-                    return Ok(HistoricalHeaderProofStatus::StaleAnchor {
-                        requested_anchor: info.target.anchor_hash.unpack(),
-                        current_anchor: final_anchor.unpack(),
-                    });
-                }
-                Ok(HistoricalHeaderProofStatus::Verified {
-                    block_number: info.target.block_number.into(),
-                    block_hash: info.target.candidate_hash.unpack(),
-                    anchor_hash: info.target.anchor_hash.unpack(),
-                })
-            }
-            HistoricalHeaderProofState::Unavailable { .. } => {
-                Ok(HistoricalHeaderProofStatus::Unavailable)
-            }
-            HistoricalHeaderProofState::StaleAnchor { .. } => {
-                Ok(HistoricalHeaderProofStatus::StaleAnchor {
-                    requested_anchor: info.target.anchor_hash.unpack(),
-                    current_anchor: current_anchor.unpack(),
-                })
-            }
+            options.request =
+                Some(peers.revalidate_header(hash.clone(), anchor.clone(), unix_time_as_millis()));
         }
+        options
+            .request
+            .as_ref()
+            .expect("initialized fetch options")
+            .status(peers, &hash, &anchor)
     }
 
     /// Send transaction

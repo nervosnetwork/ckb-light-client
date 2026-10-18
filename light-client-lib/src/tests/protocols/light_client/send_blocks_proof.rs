@@ -1,14 +1,10 @@
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
-    core::BlockNumber, h256, packed, prelude::*,
-    utilities::merkle_mountain_range::VerifiableHeader, U256,
+    core::BlockNumber, h256, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
 };
-use std::sync::{Arc, RwLock};
 
 use crate::{
-    protocols::{LastState, PendingTxs, ProveRequest, ProveState, StatusCode},
-    service::{FetchStatus, HistoricalHeaderProofStatus, LightClientChainService},
-    storage::{BatchWriter, Key, LightClientStorage, StorageBackend, StorageWithChainData},
+    protocols::{LastState, ProveRequest, ProveState, StatusCode},
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -442,357 +438,6 @@ async fn valid_proof() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_proves_and_persists_old_cached_candidate() {
-    let block_number = 3;
-    let param = TestParameter {
-        last_block_number: 200,
-        block_numbers: vec![block_number],
-        proved_block_numbers: vec![block_number],
-        returned_headers: vec![block_number],
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number,
-            cache_candidate_without_height_mapping: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_does_not_verify_a_wrong_candidate_hash() {
-    let wrong_hash = h256!("0xdead");
-    let param = TestParameter {
-        last_block_number: 200,
-        block_numbers: vec![3],
-        proved_block_numbers: vec![3],
-        returned_headers: vec![3],
-        expected_status: Some(StatusCode::UnexpectedResponse),
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number: 3,
-            candidate_hash: Some(wrong_hash),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_does_not_verify_a_candidate_at_another_height() {
-    let requested_height = 3;
-    let candidate_height = 4;
-    let param = TestParameter {
-        last_block_number: 200,
-        block_numbers: vec![candidate_height],
-        proved_block_numbers: vec![candidate_height],
-        returned_headers: vec![candidate_height],
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number: requested_height,
-            candidate_height: Some(candidate_height),
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_remains_unverified_when_proof_is_invalid() {
-    let block_number = 3;
-    let param = TestParameter {
-        last_block_number: 200,
-        block_numbers: vec![block_number],
-        returned_headers: vec![block_number],
-        expected_status: Some(StatusCode::InvalidProof),
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_rejects_a_fork_header_with_invalid_mmr_membership() {
-    let block_number = 3;
-    let fork_header = packed::Header::new_builder()
-        .raw(
-            packed::RawHeader::new_builder()
-                .number(block_number)
-                .parent_hash(h256!("0xf0").pack())
-                .build(),
-        )
-        .build();
-    let param = TestParameter {
-        last_block_number: 200,
-        block_numbers: vec![block_number],
-        proved_block_numbers: vec![block_number],
-        returned_headers: vec![block_number],
-        expected_status: Some(StatusCode::InvalidProof),
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number,
-            ..Default::default()
-        }),
-        replacement_header: Some(fork_header),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_reports_a_missing_candidate() {
-    let param = TestParameter {
-        last_block_number: 200,
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number: 3,
-            peer_reports_missing: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_reports_when_its_anchor_changes() {
-    let block_number = 3;
-    let param = TestParameter {
-        last_block_number: 200,
-        block_numbers: vec![block_number],
-        proved_block_numbers: vec![block_number],
-        returned_headers: vec![block_number],
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number,
-            change_tip_before_response: true,
-            dispatch_with_scheduler: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_public_api_schedules_and_verifies() {
-    let block_number = 3;
-    let param = TestParameter {
-        last_block_number: 200,
-        block_numbers: vec![block_number],
-        proved_block_numbers: vec![block_number],
-        returned_headers: vec![block_number],
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number,
-            dispatch_with_scheduler: true,
-            ordinary_fetch_candidate: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_only_missing_does_not_pollute_fetch_header() {
-    let param = TestParameter {
-        last_block_number: 200,
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number: 3,
-            dispatch_with_scheduler: true,
-            peer_reports_missing: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn mixed_ordinary_and_historical_missing_keeps_lifecycles_independent() {
-    let param = TestParameter {
-        last_block_number: 200,
-        historical_lookup: Some(HistoricalHeaderLookup {
-            block_number: 3,
-            dispatch_with_scheduler: true,
-            ordinary_fetch_candidate: true,
-            peer_reports_missing: true,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    test_send_blocks_proof(param).await;
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn historical_header_request_retries_expires_and_is_process_local() {
-    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
-    chain.mine_to(200);
-    let snapshot = chain.shared().snapshot();
-    let tip = snapshot.get_header_by_number(200).unwrap().data();
-    let tip_hash = tip.calc_header_hash();
-    chain
-        .client_storage()
-        .update_last_state(&U256::one(), &tip, &[]);
-
-    let peers = chain.create_peers();
-    let peer_index = PeerIndex::new(1);
-    peers.add_peer(peer_index);
-    let service = LightClientChainService::new(
-        StorageWithChainData::new(
-            chain.client_storage().clone(),
-            Arc::clone(&peers),
-            Arc::new(RwLock::new(PendingTxs::default())),
-        ),
-        Arc::new(chain.consensus().clone()),
-    );
-    let candidate_hash: ckb_types::H256 = snapshot.get_header_by_number(3).unwrap().hash().unpack();
-    let request = service
-        .request_historical_header_proof(3.into(), candidate_hash.clone())
-        .unwrap();
-    let content = packed::GetBlocksProof::new_builder()
-        .last_hash(tip_hash.clone())
-        .block_hashes(vec![candidate_hash.pack()].pack())
-        .build();
-    peers.update_blocks_proof_request_with_historical_targets(
-        peer_index,
-        Some(content),
-        false,
-        Vec::new(),
-        vec![request.id()],
-    );
-    assert!(matches!(
-        service.fetch_header(&candidate_hash),
-        FetchStatus::Added { .. }
-    ));
-    let generic_fetch_hash = candidate_hash.pack();
-    peers.fetching_idle_headers(
-        std::slice::from_ref(&generic_fetch_hash),
-        ckb_systemtime::unix_time_as_millis(),
-    );
-    assert!(!peers.get_headers_to_fetch().contains(&generic_fetch_hash));
-    assert!(matches!(
-        service.poll_historical_header_proof(&request),
-        Ok(HistoricalHeaderProofStatus::Fetching { .. })
-    ));
-
-    peers.remove_peer(peer_index).await;
-    assert!(!peers.get_headers_to_fetch().contains(&generic_fetch_hash));
-    assert!(matches!(
-        service.poll_historical_header_proof(&request),
-        Ok(HistoricalHeaderProofStatus::Added { .. })
-    ));
-
-    let abandoned = service
-        .request_historical_header_proof(3.into(), candidate_hash.clone())
-        .unwrap();
-    let expiry_time = ckb_systemtime::unix_time_as_millis() + 3_600_001;
-    peers.cleanup_historical_header_proofs(&tip_hash, expiry_time);
-    assert_eq!(
-        service.poll_historical_header_proof(&request).unwrap(),
-        HistoricalHeaderProofStatus::Expired
-    );
-    assert_eq!(
-        service.poll_historical_header_proof(&abandoned).unwrap(),
-        HistoricalHeaderProofStatus::Expired
-    );
-    peers.cleanup_historical_header_proofs(&tip_hash, expiry_time + 300_001);
-    assert_eq!(
-        service.poll_historical_header_proof(&request).unwrap(),
-        HistoricalHeaderProofStatus::Expired
-    );
-
-    let retry = service
-        .request_historical_header_proof(3.into(), candidate_hash.clone())
-        .unwrap();
-    assert_ne!(request.id(), retry.id());
-    assert!(matches!(
-        service.poll_historical_header_proof(&retry),
-        Ok(HistoricalHeaderProofStatus::Added { .. })
-    ));
-    let retry_peer = PeerIndex::new(2);
-    peers.add_peer(retry_peer);
-    let retry_content = packed::GetBlocksProof::new_builder()
-        .last_hash(tip_hash.clone())
-        .block_hashes(vec![candidate_hash.pack()].pack())
-        .build();
-    peers.update_blocks_proof_request_with_historical_targets(
-        retry_peer,
-        Some(retry_content),
-        false,
-        Vec::new(),
-        vec![retry.id()],
-    );
-    assert!(matches!(
-        service.poll_historical_header_proof(&retry),
-        Ok(HistoricalHeaderProofStatus::Fetching { .. })
-    ));
-
-    let no_response = service
-        .request_historical_header_proof(3.into(), candidate_hash.clone())
-        .unwrap();
-    peers.remove_fetching_header(&generic_fetch_hash);
-    let unresponsive_peer = PeerIndex::new(3);
-    peers.add_peer(unresponsive_peer);
-    let no_response_content = packed::GetBlocksProof::new_builder()
-        .last_hash(tip_hash.clone())
-        .block_hashes(vec![candidate_hash.pack()].pack())
-        .build();
-    peers.update_blocks_proof_request_with_historical_targets(
-        unresponsive_peer,
-        Some(no_response_content),
-        false,
-        Vec::new(),
-        vec![no_response.id()],
-    );
-    assert!(matches!(
-        service.fetch_header(&candidate_hash),
-        FetchStatus::Added { .. }
-    ));
-    peers.fetching_idle_headers(
-        std::slice::from_ref(&generic_fetch_hash),
-        ckb_systemtime::unix_time_as_millis(),
-    );
-    assert!(!peers.get_headers_to_fetch().contains(&generic_fetch_hash));
-    peers.mark_fetching_headers_timeout(unresponsive_peer);
-    assert!(!peers.get_headers_to_fetch().contains(&generic_fetch_hash));
-    assert!(matches!(
-        service.poll_historical_header_proof(&no_response),
-        Ok(HistoricalHeaderProofStatus::Added { .. })
-    ));
-    let no_response_expiry = ckb_systemtime::unix_time_as_millis() + 3_600_001;
-    peers.cleanup_historical_header_proofs(&tip_hash, no_response_expiry);
-    assert_eq!(
-        service.poll_historical_header_proof(&no_response).unwrap(),
-        HistoricalHeaderProofStatus::Expired
-    );
-
-    let restarted_peers = chain.create_peers();
-    let restarted_service = LightClientChainService::new(
-        StorageWithChainData::new(
-            chain.client_storage().clone(),
-            restarted_peers,
-            Arc::new(RwLock::new(PendingTxs::default())),
-        ),
-        Arc::new(chain.consensus().clone()),
-    );
-    let after_restart = restarted_service
-        .request_historical_header_proof(3.into(), candidate_hash)
-        .unwrap();
-    assert_ne!(retry.id(), after_restart.id());
-    assert_eq!(
-        restarted_service
-            .poll_historical_header_proof(&retry)
-            .unwrap(),
-        HistoricalHeaderProofStatus::Expired
-    );
-    assert!(matches!(
-        restarted_service.poll_historical_header_proof(&after_restart),
-        Ok(HistoricalHeaderProofStatus::Added { .. })
-    ));
-}
-
-#[tokio::test(flavor = "multi_thread")]
 async fn valid_proof_without_any_proof_items() {
     let last_block_number = 20;
     let block_numbers = (0..last_block_number).collect::<Vec<_>>();
@@ -1064,20 +709,6 @@ struct TestParameter {
     returned_extensions: Option<Vec<packed::BytesOpt>>,
     use_legacy_message: bool,
     expected_status: Option<StatusCode>,
-    historical_lookup: Option<HistoricalHeaderLookup>,
-    replacement_header: Option<packed::Header>,
-}
-
-#[derive(Default)]
-struct HistoricalHeaderLookup {
-    block_number: BlockNumber,
-    candidate_height: Option<BlockNumber>,
-    candidate_hash: Option<ckb_types::H256>,
-    cache_candidate_without_height_mapping: bool,
-    peer_reports_missing: bool,
-    change_tip_before_response: bool,
-    dispatch_with_scheduler: bool,
-    ordinary_fetch_candidate: bool,
 }
 
 async fn test_send_blocks_proof(param: TestParameter) {
@@ -1085,59 +716,18 @@ async fn test_send_blocks_proof(param: TestParameter) {
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
     let peer_index = PeerIndex::new(1);
-    let peers = chain.create_peers();
-    peers.add_peer(peer_index);
-    peers.request_last_state(peer_index).unwrap();
-    let mut protocol = chain.create_light_client_protocol(Arc::clone(&peers));
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(peer_index);
+        peers.request_last_state(peer_index).unwrap();
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
 
     let num = param.last_block_number;
     chain.mine_to(num);
 
     let snapshot = chain.shared().snapshot();
-    let mut missing_block_hashes = param.missing_block_hashes.clone();
-    let mut returned_missing_block_hashes = param.returned_missing_block_hashes.clone();
-    let mut historical_candidate_hash = None;
-    let mut historical_request = None;
-
-    if let Some(lookup) = &param.historical_lookup {
-        let candidate_height = lookup.candidate_height.unwrap_or(lookup.block_number);
-        let candidate_hash = lookup.candidate_hash.clone().unwrap_or_else(|| {
-            param
-                .replacement_header
-                .as_ref()
-                .map(|header| header.calc_header_hash().unpack())
-                .unwrap_or_else(|| {
-                    snapshot
-                        .get_header_by_number(candidate_height)
-                        .expect("candidate header exists")
-                        .hash()
-                        .unpack()
-                })
-        });
-
-        if lookup.cache_candidate_without_height_mapping {
-            let header = snapshot
-                .get_header_by_number(candidate_height)
-                .expect("cached candidate header exists")
-                .data();
-            let mut batch = chain.client_storage().batch();
-            batch.put(
-                &Key::BlockHash(&candidate_hash.pack()).into_vec(),
-                header.as_slice(),
-            );
-            batch.commit().unwrap();
-            assert!(chain
-                .client_storage()
-                .get_block_hash(lookup.block_number)
-                .is_none());
-        }
-
-        if lookup.peer_reports_missing {
-            missing_block_hashes = vec![candidate_hash.pack()];
-            returned_missing_block_hashes = missing_block_hashes.clone();
-        }
-        historical_candidate_hash = Some(candidate_hash);
-    }
 
     // Setup the test fixture.
     {
@@ -1168,32 +758,11 @@ async fn test_send_blocks_proof(param: TestParameter) {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
-        let proof_anchor_height = num;
-        let content = if let Some(candidate_hash) = param
-            .replacement_header
-            .as_ref()
-            .map(|header| header.calc_header_hash().unpack())
-            .or_else(|| {
-                param
-                    .historical_lookup
-                    .as_ref()
-                    .and_then(|lookup| lookup.candidate_hash.clone())
-            }) {
-            let anchor_hash = snapshot
-                .get_header_by_number(proof_anchor_height)
-                .expect("proof anchor header exists")
-                .hash();
-            packed::GetBlocksProof::new_builder()
-                .last_hash(anchor_hash)
-                .block_hashes(vec![candidate_hash.pack()].pack())
-                .build()
-        } else {
-            chain.build_blocks_proof_content(
-                proof_anchor_height,
-                &param.block_numbers,
-                &missing_block_hashes,
-            )
-        };
+        let content = chain.build_blocks_proof_content(
+            num,
+            &param.block_numbers,
+            &param.missing_block_hashes,
+        );
         protocol
             .peers()
             .update_last_state(peer_index, last_state)
@@ -1206,166 +775,21 @@ async fn test_send_blocks_proof(param: TestParameter) {
             .commit_prove_state(peer_index, prove_state)
             .await
             .unwrap();
-
-        if let (Some(lookup), Some(candidate_hash)) =
-            (&param.historical_lookup, historical_candidate_hash.as_ref())
-        {
-            let accepted_tip = snapshot
-                .get_header_by_number(num)
-                .expect("accepted test tip exists")
-                .data();
-            chain
-                .client_storage()
-                .update_last_state(&U256::one(), &accepted_tip, &[]);
-            let service = LightClientChainService::new(
-                StorageWithChainData::new(
-                    chain.client_storage().clone(),
-                    Arc::clone(&peers),
-                    Arc::new(RwLock::new(PendingTxs::default())),
-                ),
-                Arc::new(chain.consensus().clone()),
-            );
-            if lookup.ordinary_fetch_candidate {
-                assert!(matches!(
-                    service.fetch_header(candidate_hash),
-                    FetchStatus::Added { .. }
-                ));
-            }
-            let request = service
-                .request_historical_header_proof(lookup.block_number.into(), candidate_hash.clone())
-                .expect("request queues the candidate for proof verification");
-            if lookup.cache_candidate_without_height_mapping {
-                assert!(matches!(
-                    service.fetch_header(candidate_hash),
-                    FetchStatus::Fetched { .. }
-                ));
-            }
-            assert!(matches!(
-                service.poll_historical_header_proof(&request),
-                Ok(HistoricalHeaderProofStatus::Added { .. })
-            ));
-            historical_request = Some((service, request));
-        }
-
-        if let Some((_, request)) = &historical_request {
-            let lookup = param.historical_lookup.as_ref().unwrap();
-            if lookup.dispatch_with_scheduler {
-                protocol
-                    .notify(
-                        nc.context(),
-                        crate::protocols::light_client::constant::FETCH_HEADER_TX_TOKEN,
-                    )
-                    .await;
-            } else {
-                protocol
-                    .peers()
-                    .update_blocks_proof_request_with_historical_targets(
-                        peer_index,
-                        Some(content),
-                        true,
-                        Vec::new(),
-                        vec![request.id()],
-                    );
-            }
-            let peer = protocol.get_peer(&peer_index).unwrap();
-            let attached = peer.get_blocks_proof_request().unwrap();
-            assert!(attached
-                .block_hashes()
-                .contains(historical_candidate_hash.as_ref().unwrap()));
-            let expected_normal_fetch_hashes = if lookup.ordinary_fetch_candidate {
-                vec![historical_candidate_hash.as_ref().unwrap().pack()]
-            } else {
-                Vec::new()
-            };
-            assert_eq!(
-                attached.normal_fetch_hashes(),
-                expected_normal_fetch_hashes.as_slice()
-            );
-            assert_eq!(attached.historical_targets().len(), 1);
-            assert_eq!(attached.historical_targets()[0].id, request.id());
-            assert_eq!(
-                attached.historical_targets()[0].block_number,
-                param.historical_lookup.as_ref().unwrap().block_number
-            );
-            assert_eq!(
-                attached.historical_targets()[0].candidate_hash,
-                historical_candidate_hash.as_ref().unwrap().pack()
-            );
-            assert_eq!(
-                attached.historical_targets()[0].anchor_hash,
-                snapshot.get_header_by_number(num).unwrap().hash()
-            );
-            if lookup.dispatch_with_scheduler {
-                let sent_messages = nc.sent_messages().borrow();
-                assert_eq!(sent_messages.len(), 1);
-                assert_eq!(sent_messages[0].1, peer_index);
-                let wire_message =
-                    packed::LightClientMessageReader::new_unchecked(&sent_messages[0].2);
-                let wire_request = match wire_message.to_enum() {
-                    packed::LightClientMessageUnionReader::GetBlocksProof(request) => request,
-                    _ => panic!("scheduler sent an unexpected message"),
-                };
-                assert!(wire_request
-                    .block_hashes()
-                    .to_entity()
-                    .into_iter()
-                    .any(|hash| hash == historical_candidate_hash.as_ref().unwrap().pack()));
-                drop(sent_messages);
-                nc.sent_messages().borrow_mut().clear();
-
-                let fetch_info = protocol
-                    .peers()
-                    .get_header_fetch_info(&historical_candidate_hash.as_ref().unwrap().pack());
-                assert_eq!(fetch_info.is_some(), lookup.ordinary_fetch_candidate);
-            }
-        } else {
-            protocol
-                .peers()
-                .update_blocks_proof_request(peer_index, Some(content), true);
-        }
+        protocol
+            .peers()
+            .update_blocks_proof_request(peer_index, Some(content), true);
     }
-
-    let changed_tip = if param
-        .historical_lookup
-        .as_ref()
-        .is_some_and(|lookup| lookup.change_tip_before_response)
-    {
-        let changed_tip = snapshot
-            .get_header_by_number(num - 1)
-            .expect("changed test tip exists")
-            .data();
-        chain
-            .client_storage()
-            .update_last_state(&U256::from(1u8), &changed_tip, &[]);
-        Some(changed_tip)
-    } else {
-        None
-    };
 
     // Run the test.
     {
-        let proof_anchor_height = num;
         let last_header = snapshot
-            .get_verifiable_header_by_number(proof_anchor_height)
+            .get_verifiable_header_by_number(num)
             .expect("block stored");
-        let mut headers = param
+        let headers = param
             .returned_headers
             .iter()
             .map(|n| snapshot.get_header_by_number(*n).expect("block stored"))
             .collect::<Vec<_>>();
-        if let Some(replacement_header) = &param.replacement_header {
-            let lookup = param
-                .historical_lookup
-                .as_ref()
-                .expect("historical lookup parameters exist");
-            let candidate_height = lookup.candidate_height.unwrap_or(lookup.block_number);
-            let index = param
-                .returned_headers
-                .iter()
-                .position(|height| *height == candidate_height)
-                .expect("replacement header height is returned");
-            headers[index] = replacement_header.clone().into_view();
-        }
         let block_hashes = headers.iter().map(|h| h.hash()).collect::<Vec<_>>().pack();
         let data = {
             let headers = headers.iter().map(|h| h.data()).collect::<Vec<_>>();
@@ -1382,7 +806,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
                     .last_header(last_header)
                     .proof(proof)
                     .headers(headers.pack())
-                    .missing_block_hashes(returned_missing_block_hashes.clone().pack())
+                    .missing_block_hashes(param.returned_missing_block_hashes.clone().pack())
                     .build();
                 packed::LightClientMessage::new_builder()
                     .set(content)
@@ -1393,7 +817,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
                     .last_header(last_header)
                     .proof(proof)
                     .headers(headers.pack())
-                    .missing_block_hashes(returned_missing_block_hashes.clone().pack())
+                    .missing_block_hashes(param.returned_missing_block_hashes.clone().pack())
                     .blocks_uncles_hash(uncles_hashes.to_owned().pack());
                 if let Some(extensions) = &param.returned_extensions {
                     let extensions = packed::BytesOptVec::new_builder()
@@ -1434,7 +858,7 @@ async fn test_send_blocks_proof(param: TestParameter) {
                     .last_header(last_header)
                     .proof(proof)
                     .headers(headers.pack())
-                    .missing_block_hashes(returned_missing_block_hashes.clone().pack())
+                    .missing_block_hashes(param.returned_missing_block_hashes.clone().pack())
                     .blocks_uncles_hash(uncles_hashes.pack())
                     .blocks_extension(extensions)
                     .build();
@@ -1453,35 +877,13 @@ async fn test_send_blocks_proof(param: TestParameter) {
         if let Some(expected_status) = param.expected_status {
             assert!(nc.banned_since(peer_index, expected_status));
             assert!(nc.sent_messages().borrow().is_empty());
-            if let Some((service, request)) = &historical_request {
-                let candidate_hash = historical_candidate_hash.as_ref().unwrap();
-                assert!(!matches!(
-                    service.poll_historical_header_proof(request),
-                    Ok(HistoricalHeaderProofStatus::Verified { .. })
-                ));
-                let requested_height: u64 = param
-                    .historical_lookup
-                    .as_ref()
-                    .unwrap()
-                    .block_number
-                    .into();
-                assert_ne!(
-                    chain.client_storage().get_block_hash(requested_height),
-                    Some(candidate_hash.pack())
-                );
-            }
         } else if param.block_numbers == param.proved_block_numbers
             && param.block_numbers == param.returned_headers
-            && missing_block_hashes == returned_missing_block_hashes
+            && param.missing_block_hashes == param.returned_missing_block_hashes
         {
             assert!(nc.not_banned(peer_index));
 
-            if param.block_numbers.is_empty()
-                || param
-                    .historical_lookup
-                    .as_ref()
-                    .is_some_and(|lookup| lookup.dispatch_with_scheduler)
-            {
+            if param.block_numbers.is_empty() {
                 assert!(nc.sent_messages().borrow().is_empty());
             } else {
                 assert_eq!(nc.sent_messages().borrow().len(), 1);
@@ -1499,197 +901,8 @@ async fn test_send_blocks_proof(param: TestParameter) {
 
             let peer = protocol.get_peer(&peer_index).expect("has peer");
             assert!(peer.get_blocks_proof_request().is_none());
-
-            if let Some((service, request)) = historical_request {
-                let candidate_hash = historical_candidate_hash.as_ref().unwrap();
-                let requested_height: u64 = param
-                    .historical_lookup
-                    .as_ref()
-                    .expect("historical lookup parameters exist")
-                    .block_number
-                    .into();
-                if param
-                    .historical_lookup
-                    .as_ref()
-                    .expect("historical lookup parameters exist")
-                    .change_tip_before_response
-                {
-                    let changed_tip = changed_tip.expect("test changed its accepted tip");
-                    assert_eq!(
-                        service.poll_historical_header_proof(&request).unwrap(),
-                        HistoricalHeaderProofStatus::StaleAnchor {
-                            requested_anchor: snapshot
-                                .get_header_by_number(num)
-                                .unwrap()
-                                .hash()
-                                .unpack(),
-                            current_anchor: changed_tip.calc_header_hash().unpack(),
-                        }
-                    );
-                    assert_eq!(
-                        chain.client_storage().get_block_hash(requested_height),
-                        Some(candidate_hash.pack())
-                    );
-
-                    let second = service
-                        .request_historical_header_proof(
-                            requested_height.into(),
-                            candidate_hash.clone(),
-                        )
-                        .expect("a new anchor gets an independent operation");
-                    assert_ne!(request.id(), second.id());
-                    assert!(matches!(
-                        service.poll_historical_header_proof(&second),
-                        Ok(HistoricalHeaderProofStatus::Added { .. })
-                    ));
-
-                    let new_anchor = changed_tip.calc_header_hash();
-                    let content = packed::GetBlocksProof::new_builder()
-                        .last_hash(new_anchor.clone())
-                        .block_hashes(vec![candidate_hash.pack()].pack())
-                        .build();
-                    let _ = content;
-                    protocol
-                        .notify(
-                            nc.context(),
-                            crate::protocols::light_client::constant::FETCH_HEADER_TX_TOKEN,
-                        )
-                        .await;
-                    let second_peer = protocol.get_peer(&peer_index).unwrap();
-                    let second_proof_request = second_peer.get_blocks_proof_request().unwrap();
-                    assert_eq!(second_proof_request.last_hash(), new_anchor);
-                    assert_eq!(second_proof_request.historical_targets().len(), 1);
-                    assert_eq!(second_proof_request.historical_targets()[0].id, second.id());
-                    assert!(second_proof_request.normal_fetch_hashes().is_empty());
-                    assert_eq!(nc.sent_messages().borrow().len(), 1);
-                    nc.sent_messages().borrow_mut().clear();
-                    let last_header = snapshot
-                        .get_verifiable_header_by_number(num - 1)
-                        .expect("new accepted anchor exists");
-                    let candidate = snapshot
-                        .get_header_by_number(requested_height)
-                        .expect("candidate header exists");
-                    let candidate_block = snapshot
-                        .get_block_by_number(requested_height)
-                        .expect("candidate block exists");
-                    let proof = chain.build_proof_by_numbers(num - 1, &[requested_height]);
-                    let message = packed::SendBlocksProofV1::new_builder()
-                        .last_header(last_header)
-                        .proof(proof)
-                        .headers(vec![candidate.data()].pack())
-                        .missing_block_hashes(Vec::<packed::Byte32>::new().pack())
-                        .blocks_uncles_hash(vec![candidate_block.calc_uncles_hash()].pack())
-                        .blocks_extension(
-                            packed::BytesOptVec::new_builder()
-                                .set(vec![packed::BytesOpt::new_builder()
-                                    .set(candidate_block.extension())
-                                    .build()])
-                                .build(),
-                        )
-                        .build();
-                    let message = packed::LightClientMessage::new_builder()
-                        .set(message)
-                        .build()
-                        .as_bytes();
-                    protocol.received(nc.context(), peer_index, message).await;
-                    assert_eq!(
-                        service.poll_historical_header_proof(&second).unwrap(),
-                        HistoricalHeaderProofStatus::Verified {
-                            block_number: requested_height.into(),
-                            block_hash: candidate_hash.clone(),
-                            anchor_hash: new_anchor.unpack(),
-                        }
-                    );
-                } else if param
-                    .historical_lookup
-                    .as_ref()
-                    .expect("historical lookup parameters exist")
-                    .peer_reports_missing
-                {
-                    let status = service.poll_historical_header_proof(&request);
-                    assert_eq!(status.unwrap(), HistoricalHeaderProofStatus::Unavailable);
-                    assert_ne!(
-                        chain.client_storage().get_block_hash(requested_height),
-                        Some(candidate_hash.pack())
-                    );
-                    let lookup = param.historical_lookup.as_ref().unwrap();
-                    if lookup.dispatch_with_scheduler {
-                        let fetch_info = protocol
-                            .peers()
-                            .get_header_fetch_info(&candidate_hash.pack());
-                        if lookup.ordinary_fetch_candidate {
-                            assert!(matches!(fetch_info, Some((_, _, true))));
-                            assert!(matches!(
-                                service.fetch_header(candidate_hash),
-                                FetchStatus::NotFound
-                            ));
-                        } else {
-                            assert!(fetch_info.is_none());
-                            assert!(matches!(
-                                service.fetch_header(candidate_hash),
-                                FetchStatus::Added { .. }
-                            ));
-                            assert!(protocol
-                                .peers()
-                                .get_header_fetch_info(&candidate_hash.pack())
-                                .is_some());
-                        }
-                    }
-                } else if param
-                    .historical_lookup
-                    .as_ref()
-                    .and_then(|lookup| lookup.candidate_height)
-                    .is_some_and(|height| height != requested_height)
-                {
-                    let status = service.poll_historical_header_proof(&request);
-                    assert_eq!(status.unwrap(), HistoricalHeaderProofStatus::Unavailable);
-                    assert_ne!(
-                        chain.client_storage().get_block_hash(requested_height),
-                        Some(candidate_hash.pack())
-                    );
-                } else {
-                    let second = service
-                        .request_historical_header_proof(
-                            requested_height.into(),
-                            candidate_hash.clone(),
-                        )
-                        .expect("each caller receives an independent operation handle");
-                    assert_ne!(request.id(), second.id());
-                    assert!(matches!(
-                        service.poll_historical_header_proof(&second),
-                        Ok(HistoricalHeaderProofStatus::Added { .. })
-                    ));
-                    let status = service.poll_historical_header_proof(&request);
-                    assert_eq!(
-                        status.unwrap(),
-                        HistoricalHeaderProofStatus::Verified {
-                            block_number: requested_height.into(),
-                            block_hash: candidate_hash.clone(),
-                            anchor_hash: snapshot
-                                .get_header_by_number(num)
-                                .unwrap()
-                                .hash()
-                                .unpack(),
-                        }
-                    );
-                    assert_eq!(
-                        chain.client_storage().get_block_hash(requested_height),
-                        Some(candidate_hash.pack())
-                    );
-                    if param
-                        .historical_lookup
-                        .as_ref()
-                        .is_some_and(|lookup| lookup.dispatch_with_scheduler)
-                    {
-                        assert!(protocol
-                            .peers()
-                            .get_header_fetch_info(&candidate_hash.pack())
-                            .is_none());
-                    }
-                }
-            }
         } else {
-            if missing_block_hashes != returned_missing_block_hashes
+            if param.missing_block_hashes != param.returned_missing_block_hashes
                 || param.block_numbers != param.returned_headers
             {
                 assert!(nc.banned_since(peer_index, StatusCode::UnexpectedResponse));
