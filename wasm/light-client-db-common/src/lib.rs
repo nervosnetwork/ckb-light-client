@@ -13,6 +13,13 @@ pub struct KVPair {
     pub value: Vec<u8>,
 }
 
+/// One mutation in an ordered, atomic write batch.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum BatchOperation {
+    Put(KVPair),
+    Delete(Vec<u8>),
+}
+
 /// Direction for iteration (forward or backward)
 #[derive(Serialize, Deserialize, Default, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IteratorDirection {
@@ -53,6 +60,7 @@ pub enum DbCommandResponse {
     Delete,
     Iterator { kvs: Vec<KVPair> },
     IteratorKey { keys: Vec<Vec<u8>> },
+    Batch,
 }
 
 #[derive(Deserialize, Serialize, Debug)]
@@ -83,6 +91,8 @@ pub enum DbCommandRequest {
         direction: IteratorDirection,
         limit: usize,
     },
+    /// Apply mutations in order in a single read-write transaction.
+    Batch { operations: Vec<BatchOperation> },
 }
 #[repr(i32)]
 #[derive(Debug)]

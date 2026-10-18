@@ -15,8 +15,8 @@ use ckb_types::{
     prelude::*,
 };
 use light_client_db_common::{
-    read_command_payload, write_command_with_payload, DbCommandRequest, DbCommandResponse,
-    InputCommand, OutputCommand,
+    read_command_payload, write_command_with_payload, BatchOperation, DbCommandRequest,
+    DbCommandResponse, InputCommand, OutputCommand,
 };
 
 use log::debug;
@@ -34,6 +34,9 @@ enum CommandRequestWithTakeWhileAndFilterMap {
     },
     Delete {
         keys: Vec<Vec<u8>>,
+    },
+    Batch {
+        operations: Vec<BatchOperation>,
     },
     Iterator {
         start: IteratorStart,
@@ -146,6 +149,9 @@ impl CommunicationChannel {
             }
             CommandRequestWithTakeWhileAndFilterMap::Delete { keys } => {
                 (DbCommandRequest::Delete { keys }, None, None)
+            }
+            CommandRequestWithTakeWhileAndFilterMap::Batch { operations } => {
+                (DbCommandRequest::Batch { operations }, None, None)
             }
             CommandRequestWithTakeWhileAndFilterMap::Iterator {
                 start,
@@ -336,40 +342,28 @@ impl Storage {
 }
 
 pub struct Batch {
-    add: Vec<KVPair>,
-    delete: Vec<Vec<u8>>,
+    operations: Vec<BatchOperation>,
     comm_arrays: CommunicationChannel,
 }
 
 // Implement BatchWriter trait for Batch
 impl BatchWriter for Batch {
     fn put(&mut self, key: &[u8], value: &[u8]) {
-        self.add.push(KVPair {
+        self.operations.push(BatchOperation::Put(KVPair {
             key: key.to_vec(),
             value: value.to_vec(),
-        });
+        }));
     }
 
     fn delete(&mut self, key: &[u8]) {
-        self.delete.push(key.to_vec());
+        self.operations.push(BatchOperation::Delete(key.to_vec()));
     }
 
     fn commit(self) -> Result<()> {
-        // Delete first, then put - this ensures correct "replace" semantics
-        // when the same key appears in both delete and add lists
-        if !self.delete.is_empty() {
+        if !self.operations.is_empty() {
             self.comm_arrays
-                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Delete {
-                    keys: self.delete,
-                })
-                .map(|_| ())
-                .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
-        }
-
-        if !self.add.is_empty() {
-            self.comm_arrays
-                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Put {
-                    kvs: self.add,
+                .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Batch {
+                    operations: self.operations,
                 })
                 .map(|_| ())
                 .map_err(|e| Error::Indexdb(format!("{:?}", e)))?;
@@ -416,8 +410,7 @@ impl StorageBackend for Storage {
 
     fn batch(&self) -> Self::Batch {
         Batch {
-            add: vec![],
-            delete: vec![],
+            operations: vec![],
             comm_arrays: self.channel.clone(),
         }
     }
