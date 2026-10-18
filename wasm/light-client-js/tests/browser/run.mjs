@@ -44,6 +44,7 @@ const server = createServer((request,response) => {
   response.end(resource?.data);
 });
 let browser, socket;
+let chromeStderr = '';
 let result = { outcome:'EXECUTION_ERROR', node:process.version, platform:process.platform, runtimeSha256:digest };
 const pending = new Map();
 const browserErrors = [];
@@ -64,11 +65,14 @@ try {
     '--disable-sync','--disable-extensions','--disable-features=MediaRouter,OptimizationHints','about:blank'],
     {windowsHide:true,stdio:['ignore','ignore','pipe']});
   const endpoint=await new Promise((resolve,reject) => {
-    let tail='';
     const timer=setTimeout(() => reject(new Error('Chrome debugger startup timeout')),15000);
-    browser.stderr.on('data',chunk => {tail=(tail+chunk).slice(-16384);const match=tail.match(/DevTools listening on (ws:\/\/[^\s]+)/);if(match){clearTimeout(timer);resolve(match[1]);}});
+    browser.stderr.on('data',chunk => {chromeStderr=(chromeStderr+chunk).slice(-16384);const match=chromeStderr.match(/DevTools listening on (ws:\/\/[^\s]+)/);if(match){clearTimeout(timer);resolve(match[1]);}});
     browser.once('error',error=>{clearTimeout(timer);reject(error);});
-    browser.once('exit',()=>{clearTimeout(timer);reject(new Error('Chrome exited before debugger startup'));});
+    browser.once('exit',(code,signal)=>{
+      result.chromeExit={code,signal};
+      clearTimeout(timer);
+      reject(new Error(`Chrome exited before debugger startup (code=${code}, signal=${signal})`));
+    });
   });
   socket=new WebSocket(endpoint);
   socket.onmessage=event => {
@@ -116,6 +120,7 @@ finally {
   if(dirname(profile)!==output || !profile.startsWith(join(output,'profile-')))throw new Error('Cleanup path invariant failed');
   try { await rm(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200}); result.profileRemoved=true; }
   catch { result.profileRemoved=false; result.cleanupNote='Browser profile remains inside this new output directory; close diagnostic Chrome and remove that directory manually.'; }
+  result.chromeStderr=chromeStderr;
   await writeFile(join(output,'result.json'),JSON.stringify(result,null,2));
 }
 console.log(`Runtime: ${result.package ?? 'local source build'}; SHA-256 ${digest}`);
@@ -128,6 +133,7 @@ if(result.fixture){
   console.log(`Correctness assertions: ${result.assertions.filter(a=>a.passed).length} passed, ${result.assertions.filter(a=>!a.passed).length} failed`);
 }
 if(result.error)console.error(result.error);
+if(result.error && result.chromeStderr)console.error(`Chrome stderr:\n${result.chromeStderr}`);
 console.log(`Result saved in newly created directory: ${output}`);
 console.log(`Disposable profile removed: ${result.profileRemoved}`);
 process.exitCode = result.outcome === 'INVARIANTS_PASS' && result.profileRemoved ? 0 : 1;
