@@ -38,6 +38,10 @@ test-sqlite:
 test-wasm:
 	wasm-pack test --node ./wasm/light-client-db-common/
 
+test-wasm-browser:
+	wasm-pack test --headless --chrome ./wasm/light-client-db-worker/
+	node wasm/light-client-js/tests/browser/run.mjs --runtime wasm/light-client-js/dist/index.js
+
 coverage-clean:
 	rm -rf "${CARGO_TARGET_DIR}/*.profraw" "${GRCOV_OUTPUT}" "${GRCOV_OUTPUT:.info=}"
 

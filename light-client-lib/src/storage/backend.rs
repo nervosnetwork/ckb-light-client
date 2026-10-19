@@ -18,6 +18,8 @@ pub type FilterMapFn = Box<dyn Fn(&[u8], &[u8]) -> Option<Vec<u8>> + Send + 'sta
 ///
 /// Each storage backend provides its own implementation of this trait.
 /// The batch allows multiple put/delete operations to be committed atomically.
+/// Mutations are applied in insertion order, so the last mutation for a key
+/// determines its final state.
 pub trait BatchWriter {
     /// Add a key-value pair to the batch
     fn put(&mut self, key: &[u8], value: &[u8]);

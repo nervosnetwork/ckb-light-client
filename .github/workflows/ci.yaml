@@ -49,7 +49,13 @@ jobs:
       - name: Setup nodejs
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
+      - name: Setup Chrome
+        id: chrome
+        uses: browser-actions/setup-chrome@v2
+        with:
+          chrome-version: stable
+          install-chromedriver: true
       - name: Install cargo-binstall
         uses: cargo-bins/cargo-binstall@v1.16.3
       - name: Install dependencies
@@ -61,6 +67,15 @@ jobs:
       - name: Run unit-tests with wasm-pack
         run: |
           make test-wasm
+      - name: Run IndexedDB browser regressions
+        env:
+          CHROME: ${{ steps.chrome.outputs.chrome-path }}
+          CHROMEDRIVER: ${{ steps.chrome.outputs.chromedriver-path }}
+          # Chrome for Testing cannot use the Ubuntu runner's restricted user namespaces.
+          CHROME_NO_SANDBOX: '1'
+        run: |
+          node -e 'require("node:fs").writeFileSync("wasm/light-client-db-worker/webdriver.json", JSON.stringify({"goog:chromeOptions":{binary:process.env.CHROME}}))'
+          make test-wasm-browser
   test:
     name: Tests / Build & Test
     needs: [ rustfmt, clippy ]

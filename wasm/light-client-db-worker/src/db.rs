@@ -1,17 +1,73 @@
 use std::future::Future;
 
-use anyhow::{anyhow, Context};
+use anyhow::{anyhow, bail, Context};
 use idb::{
     Database, DatabaseEvent, Factory, IndexParams, KeyPath, KeyRange, ManagedCursor, ObjectStore,
     ObjectStoreParams, TransactionMode, TransactionResult,
 };
 use light_client_db_common::{
-    iterator_direction_to_idb, DbCommandRequest, DbCommandResponse, IteratorDirection,
-    IteratorStart, KVPair,
+    iterator_direction_to_idb, BatchOperation, DbCommandRequest, DbCommandResponse,
+    IteratorDirection, IteratorStart, KVPair,
 };
 use log::debug;
 
 use crate::STORE_NAME;
+
+async fn commit_batch(
+    db: &Database,
+    store_name: &str,
+    operations: Vec<BatchOperation>,
+) -> anyhow::Result<DbCommandResponse> {
+    let transaction = db
+        .transaction(&[store_name], TransactionMode::ReadWrite)
+        .map_err(|e| anyhow!("Failed to create batch transaction: {e:?}"))?;
+    let result: anyhow::Result<()> = async {
+        let store = transaction
+            .object_store(store_name)
+            .map_err(|e| anyhow!("Unable to find store {store_name}: {e:?}"))?;
+        for operation in operations {
+            match operation {
+                BatchOperation::Put(kv) => {
+                    let key = serde_wasm_bindgen::to_value(&kv.key)
+                        .map_err(|e| anyhow!("Failed to serialize batch key: {e:?}"))?;
+                    let value = serde_wasm_bindgen::to_value(&kv)
+                        .map_err(|e| anyhow!("Failed to serialize batch value: {e:?}"))?;
+                    store
+                        .put(&value, Some(&key))
+                        .map_err(|e| anyhow!("Failed to send batch put request: {e:?}"))?
+                        .await
+                        .map_err(|e| anyhow!("Failed to put in batch: {e:?}"))?;
+                }
+                BatchOperation::Delete(key) => {
+                    let key = serde_wasm_bindgen::to_value(&key)
+                        .map_err(|e| anyhow!("Failed to serialize batch key: {e:?}"))?;
+                    store
+                        .delete(key)
+                        .map_err(|e| anyhow!("Failed to send batch delete request: {e:?}"))?
+                        .await
+                        .map_err(|e| anyhow!("Failed to delete in batch: {e:?}"))?;
+                }
+            }
+        }
+        Ok(())
+    }
+    .await;
+
+    if let Err(error) = result {
+        // A synchronous request/serialization failure does not abort IndexedDB
+        // automatically. Roll back earlier writes before returning the error.
+        // An asynchronous request failure may already have aborted it.
+        if let Ok(transaction) = transaction.abort() {
+            let _ = transaction.await;
+        }
+        return Err(error);
+    }
+    match transaction.await {
+        Ok(TransactionResult::Committed) => Ok(DbCommandResponse::Batch),
+        Ok(TransactionResult::Aborted) => bail!("Batch transaction aborted"),
+        Err(error) => bail!("Batch transaction failed: {error:?}"),
+    }
+}
 
 async fn open_iterator(
     store: &ObjectStore,
@@ -203,6 +259,13 @@ where
 {
     debug!("Handle command: {:?}", cmd);
 
+    if let DbCommandRequest::Batch { operations } = cmd {
+        if custom_store.is_some() {
+            bail!("Cannot commit a batch inside an iterator transaction");
+        }
+        return commit_batch(db, store_name, operations).await;
+    }
+
     let (tran, store) = if let Some(store) = custom_store {
         (None, store)
     } else {
@@ -214,6 +277,7 @@ where
             DbCommandRequest::Put { .. } | DbCommandRequest::Delete { .. } => {
                 TransactionMode::ReadWrite
             }
+            DbCommandRequest::Batch { .. } => unreachable!(),
         };
         let tran = db
             .transaction(&[&store_name], tx_mode)
@@ -225,6 +289,7 @@ where
         (Some(tran), store)
     };
     let result = match cmd {
+        DbCommandRequest::Batch { .. } => unreachable!(),
         DbCommandRequest::Read { keys } => {
             let mut res = Vec::new();
             for key in keys {
@@ -323,6 +388,9 @@ where
     debug!("Command result={:?}", result);
     Ok(result)
 }
+
+#[cfg(test)]
+mod tests;
 
 pub(crate) async fn open_database(database_name: impl AsRef<str>) -> anyhow::Result<Database> {
     let factory = Factory::new().map_err(|e| anyhow!("Failed to create db factory: {:?}", e))?;
