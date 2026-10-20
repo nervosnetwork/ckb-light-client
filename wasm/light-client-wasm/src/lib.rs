@@ -486,3 +486,37 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
         .fetch_transaction(&tx_hash)
         .serialize(&SERIALIZER)?)
 }
+
+fn evidence_hash(value: &str) -> Result<H256, JsValue> {
+    let hex = value
+        .strip_prefix("0x")
+        .ok_or_else(|| JsValue::from_str("expected 0x-prefixed transaction hash"))?;
+    if hex.len() != 64 {
+        return Err(JsValue::from_str("expected 32-byte transaction hash"));
+    }
+    H256::from_str(hex).map_err(|error| JsValue::from_str(&error.to_string()))
+}
+
+#[wasm_bindgen]
+pub fn get_transaction_evidence(tx_hash: &str) -> Result<JsValue, JsValue> {
+    if !status(0b1) {
+        return Err(JsValue::from_str("light client not on start state"));
+    }
+    get_chain_service()
+        .get_transaction_evidence(&evidence_hash(tx_hash)?)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?
+        .serialize(&SERIALIZER)
+        .map_err(Into::into)
+}
+
+#[wasm_bindgen]
+pub fn fetch_transaction_evidence(tx_hash: &str) -> Result<JsValue, JsValue> {
+    if !status(0b1) {
+        return Err(JsValue::from_str("light client not on start state"));
+    }
+    get_chain_service()
+        .fetch_transaction_evidence(&evidence_hash(tx_hash)?)
+        .map_err(|error| JsValue::from_str(&error.to_string()))?
+        .serialize(&SERIALIZER)
+        .map_err(Into::into)
+}

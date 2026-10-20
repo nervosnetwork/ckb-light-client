@@ -7,6 +7,38 @@ use serde::{Deserialize, Serialize};
 
 use crate::storage;
 
+/// Observation of transaction availability and inclusion provenance.
+/// `verified_current` means inclusion was checked at this exact accepted anchor;
+/// it does not mean finality, unspentness, or independently verified witnesses.
+#[derive(Debug, Serialize)]
+pub struct TransactionEvidence {
+    pub state: TransactionEvidenceState,
+    pub transaction: Option<TransactionView>,
+    pub accepted_anchor: HeaderView,
+    pub proof_anchor_hash: Option<H256>,
+    pub proof_anchor_number: Option<BlockNumber>,
+    pub block_hash: Option<H256>,
+    pub block_number: Option<BlockNumber>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum TransactionEvidenceState {
+    /// Absent from the database snapshot and subsequently observed pending pool.
+    Unknown,
+    /// Available only from the separately observed local pending pool.
+    LocalPending,
+    /// Stored transaction bytes have no usable matching inclusion receipt/header.
+    StoredWithoutEvidence,
+    /// Verified inclusion at the exact accepted hash and height in the snapshot.
+    VerifiedCurrent,
+    /// Verified inclusion at another anchor, without current-chain membership.
+    VerifiedOtherAnchor,
+    /// Receipt changed during key selection; retry without using transaction data.
+    ObservationChanged,
+}
+
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 #[derive(Deserialize, Serialize, Eq, PartialEq, Debug)]
 #[serde(rename_all = "snake_case")]

@@ -10,6 +10,24 @@ import { ScriptLike } from "@ckb-ccc/core";
 import { JsonRpcBlockHeader, JsonRpcCellOutput, JsonRpcOutPoint, JsonRpcScript, JsonRpcTransaction, JsonRpcTransformers } from "@ckb-ccc/core/advancedBarrel";
 import { Num, Transaction } from "@ckb-ccc/core/barrel";
 
+/** Proposed local inclusion observation; currentness is relative to accepted_anchor. */
+export interface TransactionEvidence {
+    state: "unknown" | "local_pending" | "stored_without_evidence" | "verified_current" | "verified_other_anchor" | "observation_changed";
+    transaction: JsonRpcTransaction | null;
+    accepted_anchor: JsonRpcBlockHeader;
+    proof_anchor_hash: Hex | null;
+    proof_anchor_number: Hex | null;
+    block_hash: Hex | null;
+    block_number: Hex | null;
+}
+
+/** Raw JSON-RPC integer fields are hexadecimal strings, including progress. */
+export type TransactionEvidenceFetchResponse =
+    { status: "fetched"; data: TransactionEvidence } |
+    { status: "fetching"; first_sent: Hex } |
+    { status: "added"; timestamp: Hex } |
+    { status: "not_found" };
+
 interface WorkerInitializeOptions {
     inputBuffer: SharedArrayBuffer;
     outputBuffer: SharedArrayBuffer;
