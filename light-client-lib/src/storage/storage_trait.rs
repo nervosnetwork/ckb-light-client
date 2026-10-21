@@ -22,6 +22,15 @@ use ckb_types::{
     U256,
 };
 
+fn encode_last_n_headers(headers: &[HeaderView]) -> Vec<u8> {
+    let mut value = Vec::with_capacity(headers.len() * 40);
+    for header in headers {
+        value.extend(header.number().to_le_bytes());
+        value.extend(header.hash().as_slice());
+    }
+    value
+}
+
 /// High-level storage trait that provides business logic
 ///
 /// This trait extends `StorageBackend` with higher-level operations.
@@ -866,7 +875,7 @@ pub trait LightClientStorage: StorageBackend {
 
     // ========== Chain state management ==========
 
-    /// Update last state (tip header and total difficulty)
+    /// Atomically update accepted state and the recent headers used for fork detection.
     fn update_last_state(
         &self,
         total_difficulty: &U256,
@@ -876,8 +885,15 @@ pub trait LightClientStorage: StorageBackend {
         let key = Key::Meta(LAST_STATE_KEY).into_vec();
         let mut value = total_difficulty.to_le_bytes().to_vec();
         value.extend(tip_header.as_slice());
-        StorageBackend::put(self, key, value).expect("db put last state should be ok");
-        self.update_last_n_headers(last_n_headers);
+        let mut batch = self.batch();
+        batch.put(&key, &value);
+        batch.put(
+            &Key::Meta(LAST_N_HEADERS_KEY).into_vec(),
+            &encode_last_n_headers(last_n_headers),
+        );
+        batch
+            .commit()
+            .expect("batch commit last state should be ok");
     }
 
     /// Get last state (total difficulty and tip header)
@@ -978,11 +994,7 @@ pub trait LightClientStorage: StorageBackend {
     /// Update last N headers
     fn update_last_n_headers(&self, headers: &[HeaderView]) {
         let key = Key::Meta(LAST_N_HEADERS_KEY).into_vec();
-        let mut value: Vec<u8> = Vec::with_capacity(headers.len() * 40);
-        for header in headers {
-            value.extend(header.number().to_le_bytes());
-            value.extend(header.hash().as_slice());
-        }
+        let value = encode_last_n_headers(headers);
         StorageBackend::put(self, key, value).expect("db put last n headers should be ok");
     }
 
