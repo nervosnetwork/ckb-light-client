@@ -760,7 +760,15 @@ impl LatestBlockFilterHashes {
         }
         // Update block filter hashes.
         let index = start_index_for_new + self.inner[start_index_for_old..].len();
-        self.inner.extend_from_slice(&block_filter_hashes[index..]);
+        let Some(remaining_hashes) = block_filter_hashes.get(index..) else {
+            let errmsg = format!(
+                "the new block filter hashes are too short: index {index} out of bounds, \
+                hashes len: {}",
+                block_filter_hashes.len()
+            );
+            return Err(StatusCode::Ignore.with_context(errmsg));
+        };
+        self.inner.extend_from_slice(remaining_hashes);
         if end_number < last_proved_number {
             Ok(Some(end_number + 1))
         } else {
@@ -2054,4 +2062,38 @@ fn if_verifiable_headers_are_same(lhs: &VerifiableHeader, rhs: &VerifiableHeader
                     .expect("checked: is not none")
                     .as_slice()))
         && lhs.total_difficulty() == rhs.total_difficulty()
+}
+
+#[cfg(test)]
+mod tests {
+    use ckb_types::{packed, prelude::*};
+
+    use super::LatestBlockFilterHashes;
+
+    fn hash(byte: u8) -> packed::Byte32 {
+        packed::Byte32::from_slice(&[byte; 32]).expect("valid byte32")
+    }
+
+    #[test]
+    fn test_update_latest_block_filter_hashes_with_short_batch() {
+        // A batch shorter than the cached overlap must be rejected instead of
+        // indexing past the end of the received hashes.
+        let check_point_number = 0;
+        let mut latest_block_filter_hashes =
+            LatestBlockFilterHashes::mock(check_point_number, vec![hash(1), hash(2), hash(3)]);
+        let last_proved_number = 10;
+        let start_number = 2;
+        let parent_block_filter_hash = hash(1);
+        let block_filter_hashes = vec![hash(2)];
+
+        let result = latest_block_filter_hashes.update_latest_block_filter_hashes(
+            last_proved_number,
+            check_point_number,
+            &hash(100),
+            start_number,
+            &parent_block_filter_hash,
+            &block_filter_hashes,
+        );
+        assert!(result.is_err(), "should be rejected, got {result:?}");
+    }
 }

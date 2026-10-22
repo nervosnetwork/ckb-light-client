@@ -45,3 +45,22 @@ fn test_command_read() {
     let decoded = read_command_payload::<Vec<i32>>(&i32arr, &u8arr).unwrap();
     assert_eq!(decoded, vec![1, 2, 3, 4]);
 }
+
+#[allow(unused)]
+#[wasm_bindgen_test]
+fn test_command_read_rejects_invalid_length() {
+    let arr_buf = SharedArrayBuffer::new(100);
+    let i32arr = Int32Array::new(&arr_buf);
+    let u8arr = Uint8Array::new(&arr_buf);
+    // A negative slot becomes a huge unsigned length.
+    i32arr.set_index(1, -1);
+    assert!(read_command_payload::<Vec<i32>>(&i32arr, &u8arr).is_err());
+    // A length larger than the buffer is rejected too.
+    i32arr.set_index(1, 1000);
+    assert!(read_command_payload::<Vec<i32>>(&i32arr, &u8arr).is_err());
+    // A buffer too small for the header is rejected before reading the slot.
+    let small_buf = SharedArrayBuffer::new(4);
+    let small_i32arr = Int32Array::new(&small_buf);
+    let small_u8arr = Uint8Array::new(&small_buf);
+    assert!(read_command_payload::<Vec<i32>>(&small_i32arr, &small_u8arr).is_err());
+}
