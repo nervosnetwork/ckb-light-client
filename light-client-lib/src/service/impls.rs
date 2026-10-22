@@ -23,6 +23,23 @@ use ckb_traits::HeaderProvider;
 use ckb_types::{core, packed, prelude::*, H256};
 use std::sync::Arc;
 
+fn parse_cell_key(key: &[u8]) -> Option<(u64, u32, u32)> {
+    let start = key.len().checked_sub(16)?;
+    let block_number = u64::from_be_bytes(key.get(start..start + 8)?.try_into().ok()?);
+    let tx_index = u32::from_be_bytes(key.get(start + 8..start + 12)?.try_into().ok()?);
+    let output_index = u32::from_be_bytes(key.get(start + 12..start + 16)?.try_into().ok()?);
+    Some((block_number, tx_index, output_index))
+}
+
+fn parse_transaction_history_key(key: &[u8]) -> Option<(u64, u32, u32, bool)> {
+    let start = key.len().checked_sub(17)?;
+    let block_number = u64::from_be_bytes(key.get(start..start + 8)?.try_into().ok()?);
+    let tx_index = u32::from_be_bytes(key.get(start + 8..start + 12)?.try_into().ok()?);
+    let cell_index = u32::from_be_bytes(key.get(start + 12..start + 16)?.try_into().ok()?);
+    let is_input = *key.last()? == 0;
+    Some((block_number, tx_index, cell_index, is_input))
+}
+
 /// Unified Service struct that works with any storage backend
 pub struct LightClientService<S: LightClientStorage> {
     storage: Arc<S>,
@@ -78,10 +95,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         let storage_clone = Arc::clone(&self.storage);
         let filter_map_fn = Box::new(move |key: &[u8], value: &[u8]| -> Option<Vec<u8>> {
             let tx_hash = packed::Byte32::from_slice(value).ok()?;
-            let output_index = u32::from_be_bytes(key[key.len() - 4..].try_into().ok()?);
-            let _tx_index = u32::from_be_bytes(key[key.len() - 8..key.len() - 4].try_into().ok()?);
-            let block_number =
-                u64::from_be_bytes(key[key.len() - 16..key.len() - 8].try_into().ok()?);
+            let (block_number, _tx_index, output_index) = parse_cell_key(key)?;
 
             // Get transaction from storage
             let tx_data = storage_clone.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
@@ -174,11 +188,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 let value = kv_pair.value;
 
                 let tx_hash = packed::Byte32::from_slice(&value).ok()?;
-                let output_index = u32::from_be_bytes(key[key.len() - 4..].try_into().ok()?);
-                let tx_index =
-                    u32::from_be_bytes(key[key.len() - 8..key.len() - 4].try_into().ok()?);
-                let block_number =
-                    u64::from_be_bytes(key[key.len() - 16..key.len() - 8].try_into().ok()?);
+                let (block_number, tx_index, output_index) = parse_cell_key(&key)?;
 
                 let tx_data = self.storage.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
                 let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
@@ -264,11 +274,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 
         let filter_map_fn = Box::new(move |key: &[u8], value: &[u8]| -> Option<Vec<u8>> {
             let _tx_hash = packed::Byte32::from_slice(value).ok()?;
-            let block_number =
-                u64::from_be_bytes(key[key.len() - 17..key.len() - 9].try_into().ok()?);
-            let tx_index = u32::from_be_bytes(key[key.len() - 9..key.len() - 5].try_into().ok()?);
-            let io_index = u32::from_be_bytes(key[key.len() - 5..key.len() - 1].try_into().ok()?);
-            let io_type = if *key.last()? == 0 {
+            let (block_number, tx_index, io_index, is_input) = parse_transaction_history_key(key)?;
+            let io_type = if is_input {
                 crate::storage::CellType::Input
             } else {
                 crate::storage::CellType::Output
@@ -367,13 +374,16 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                     continue;
                 };
 
-                let block_number =
-                    u64::from_be_bytes(key[key.len() - 17..key.len() - 9].try_into().unwrap());
-                let tx_index =
-                    u32::from_be_bytes(key[key.len() - 9..key.len() - 5].try_into().unwrap());
-                let io_index =
-                    u32::from_be_bytes(key[key.len() - 5..key.len() - 1].try_into().unwrap());
-                let io_type = if *key.last().unwrap() == 0 {
+                let Some((block_number, tx_index, io_index, is_input)) =
+                    parse_transaction_history_key(&key)
+                else {
+                    log::warn!(
+                        "skip malformed transaction history key: {} bytes",
+                        key.len()
+                    );
+                    continue;
+                };
+                let io_type = if is_input {
                     CellType::Input
                 } else {
                     CellType::Output
@@ -417,13 +427,9 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                     let tx_data = self.storage.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
                     let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
 
-                    let block_number =
-                        u64::from_be_bytes(key[key.len() - 17..key.len() - 9].try_into().ok()?);
-                    let tx_index =
-                        u32::from_be_bytes(key[key.len() - 9..key.len() - 5].try_into().ok()?);
-                    let io_index =
-                        u32::from_be_bytes(key[key.len() - 5..key.len() - 1].try_into().ok()?);
-                    let io_type = if *key.last()? == 0 {
+                    let (block_number, tx_index, io_index, is_input) =
+                        parse_transaction_history_key(&key)?;
+                    let io_type = if is_input {
                         CellType::Input
                     } else {
                         CellType::Output
@@ -479,9 +485,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         let storage_clone = Arc::clone(&self.storage);
         let filter_map_fn = Box::new(move |key: &[u8], value: &[u8]| -> Option<Vec<u8>> {
             let tx_hash = packed::Byte32::from_slice(value).ok()?;
-            let output_index = u32::from_be_bytes(key[key.len() - 4..].try_into().ok()?);
-            let block_number =
-                u64::from_be_bytes(key[key.len() - 16..key.len() - 8].try_into().ok()?);
+            let (block_number, _tx_index, output_index) = parse_cell_key(key)?;
 
             let tx_data = storage_clone.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
             let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
