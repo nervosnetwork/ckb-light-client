@@ -6,6 +6,7 @@ use idb::{Database, Transaction};
 use light_client_db_common::{read_command_payload, write_command_with_payload, DbCommandRequest};
 use light_client_db_common::{InputCommand, OutputCommand};
 use log::{debug, info};
+use serde::{de::DeserializeOwned, Serialize};
 use util::{wait_for_command, wait_for_command_sync};
 use wasm_bindgen::{prelude::wasm_bindgen, JsCast, JsValue};
 use web_sys::js_sys::{Int32Array, SharedArrayBuffer, Uint8Array};
@@ -36,6 +37,43 @@ pub fn set_shared_array(input: JsValue, output: JsValue) {
 
 const STORE_NAME: &str = "main-store";
 
+#[derive(Clone)]
+struct CommandChannel {
+    input_i32: Int32Array,
+    input_u8: Uint8Array,
+    output_i32: Int32Array,
+    output_u8: Uint8Array,
+}
+
+impl CommandChannel {
+    fn read<T: DeserializeOwned>(&self) -> anyhow::Result<T> {
+        read_command_payload(&self.input_i32, &self.input_u8)
+    }
+
+    fn write<T: Serialize>(&self, cmd: OutputCommand, data: T) -> bool {
+        let cmd_id = cmd as i32;
+        match write_command_with_payload(cmd_id, data, &self.output_i32, &self.output_u8) {
+            Ok(()) => true,
+            Err(err) => {
+                log::error!("failed to write response {cmd_id}: {err:?}");
+                false
+            }
+        }
+    }
+
+    fn reset_input(&self) {
+        self.input_i32.set_index(0, InputCommand::Waiting as i32);
+    }
+
+    fn wait_sync(&self, holding: InputCommand) -> anyhow::Result<InputCommand> {
+        wait_for_command_sync(&self.input_i32, holding)
+    }
+
+    async fn wait(&self, holding: InputCommand) -> anyhow::Result<InputCommand> {
+        wait_for_command(&self.input_i32, holding).await
+    }
+}
+
 #[wasm_bindgen]
 /// Enter the main loop of db worker. Once entered, db worker will read commands from input buffer (previously set by set_shared_array), handle it, and write response to output buffer.
 /// log_level - Level of logs, such as `debug`, `info`.
@@ -54,7 +92,7 @@ pub async fn main_loop(log_level: &str) {
             .as_ref()
             .map(|buf| (Int32Array::new(buf), Uint8Array::new(buf)))
     });
-    let Some((input_i32_arr, input_u8_arr)) = input_buffers else {
+    let Some((input_i32, input_u8)) = input_buffers else {
         log::error!("input shared array buffer is not set");
         return;
     };
@@ -63,15 +101,21 @@ pub async fn main_loop(log_level: &str) {
             .as_ref()
             .map(|buf| (Int32Array::new(buf), Uint8Array::new(buf)))
     });
-    let Some((output_i32_arr, output_u8_arr)) = output_buffers else {
+    let Some((output_i32, output_u8)) = output_buffers else {
         log::error!("output shared array buffer is not set");
         return;
+    };
+    let channel = CommandChannel {
+        input_i32,
+        input_u8,
+        output_i32,
+        output_u8,
     };
 
     let mut db: Option<Database> = None;
 
     loop {
-        let cmd = match wait_for_command(&input_i32_arr, InputCommand::Waiting).await {
+        let cmd = match channel.wait(InputCommand::Waiting).await {
             Ok(cmd) => cmd,
             Err(err) => {
                 log::error!("failed to wait for command: {err:?}");
@@ -79,80 +123,40 @@ pub async fn main_loop(log_level: &str) {
             }
         };
         // Clean it to avoid infinite loop
-        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+        channel.reset_input();
         log::trace!("Received input command: {:?}", cmd);
         match cmd {
             InputCommand::OpenDatabase => {
-                let database_name =
-                    match read_command_payload::<String>(&input_i32_arr, &input_u8_arr) {
-                        Ok(database_name) => database_name,
-                        Err(err) => {
-                            log::error!("failed to read open-database payload: {err:?}");
-                            if let Err(write_err) = write_command_with_payload(
-                                OutputCommand::Error as i32,
-                                format!("{err:?}"),
-                                &output_i32_arr,
-                                &output_u8_arr,
-                            ) {
-                                log::error!(
-                                    "failed to write open-database error response: {write_err:?}"
-                                );
-                            }
-                            continue;
-                        }
-                    };
+                let database_name = match channel.read::<String>() {
+                    Ok(database_name) => database_name,
+                    Err(err) => {
+                        log::error!("failed to read open-database payload: {err:?}");
+                        channel.write(OutputCommand::Error, format!("{err:?}"));
+                        continue;
+                    }
+                };
                 match open_database(&database_name).await {
                     Ok(o) => {
                         db = Some(o);
-                        if let Err(err) = write_command_with_payload(
-                            OutputCommand::OpenDatabaseResponse as i32,
-                            true,
-                            &output_i32_arr,
-                            &output_u8_arr,
-                        ) {
-                            log::error!("failed to write open-database response: {err:?}");
-                        }
+                        channel.write(OutputCommand::OpenDatabaseResponse, true);
                     }
                     Err(err) => {
-                        if let Err(write_err) = write_command_with_payload(
-                            OutputCommand::Error as i32,
-                            format!("{:?}", err),
-                            &output_i32_arr,
-                            &output_u8_arr,
-                        ) {
-                            log::error!(
-                                "failed to write open-database error response: {write_err:?}"
-                            );
-                        }
+                        channel.write(OutputCommand::Error, format!("{err:?}"));
                     }
                 }
             }
             InputCommand::DbRequest => {
-                let db_cmd = match read_command_payload(&input_i32_arr, &input_u8_arr) {
+                let db_cmd = match channel.read() {
                     Ok(db_cmd) => db_cmd,
                     Err(err) => {
                         log::error!("failed to read db-request payload: {err:?}");
-                        if let Err(write_err) = write_command_with_payload(
-                            OutputCommand::Error as i32,
-                            format!("{err:?}"),
-                            &output_i32_arr,
-                            &output_u8_arr,
-                        ) {
-                            log::error!("failed to write db-request error response: {write_err:?}");
-                        }
+                        channel.write(OutputCommand::Error, format!("{err:?}"));
                         continue;
                     }
                 };
                 let Some(db) = db.as_ref() else {
                     log::error!("database is not opened yet");
-                    if let Err(err) = write_command_with_payload(
-                        OutputCommand::Error as i32,
-                        "database is not opened yet",
-                        &output_i32_arr,
-                        &output_u8_arr,
-                    ) {
-                        log::error!("failed to write database-not-opened response: {err:?}");
-                    }
+                    channel.write(OutputCommand::Error, "database is not opened yet");
                     continue;
                 };
                 let result = handle_db_command(
@@ -160,28 +164,17 @@ pub async fn main_loop(log_level: &str) {
                     STORE_NAME,
                     db_cmd,
                     |buf| {
-                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                        channel.reset_input();
                         debug!("Invoking request take while with args {:?}", buf);
-                        if let Err(err) = write_command_with_payload(
-                            OutputCommand::RequestTakeWhile as i32,
-                            buf,
-                            &output_i32_arr,
-                            &output_u8_arr,
-                        ) {
-                            log::error!("failed to request take-while: {err:?}");
+                        if !channel.write(OutputCommand::RequestTakeWhile, buf) {
                             return false;
                         }
                         // Sync wait here, so transaction of IndexedDB won't be commited (it will be commited once control flow was returned from sync call stack)
-                        if let Err(err) =
-                            wait_for_command_sync(&input_i32_arr, InputCommand::Waiting)
-                        {
+                        if let Err(err) = channel.wait_sync(InputCommand::Waiting) {
                             log::error!("failed to wait for take-while response: {err:?}");
                             return false;
                         }
-                        let result = match read_command_payload::<bool>(
-                            &input_i32_arr,
-                            &input_u8_arr,
-                        ) {
+                        let result = match channel.read::<bool>() {
                             Ok(result) => result,
                             Err(err) => {
                                 log::error!("failed to read take-while response: {err:?}");
@@ -189,48 +182,38 @@ pub async fn main_loop(log_level: &str) {
                             }
                         };
                         debug!("Received take while result {}", result);
-                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                        channel.reset_input();
                         result
                     },
                     |buf, value, store| {
                         let buf = buf.to_vec();
                         let value = value.to_vec();
-                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                        channel.reset_input();
                         log::trace!(
                             "Invoking request filter_map with args key={:?}, value={:?}",
                             buf,
                             value
                         );
-                        let write_result = write_command_with_payload(
-                            OutputCommand::RequestFilterMap as i32,
-                            (buf.clone(), value.clone()),
-                            &output_i32_arr,
-                            &output_u8_arr,
-                        );
-                        let input_i32_arr = input_i32_arr.clone();
-                        let input_u8_arr = input_u8_arr.clone();
-                        let output_i32_arr = output_i32_arr.clone();
-                        let output_u8_arr = output_u8_arr.clone();
+                        let write_result =
+                            channel.write(OutputCommand::RequestFilterMap, (buf, value));
+                        let channel = channel.clone();
 
                         async move {
-                            if let Err(err) = write_result {
-                                log::error!("failed to request filter-map: {err:?}");
+                            if !write_result {
                                 return None;
                             }
                             let result = loop {
                                 let store = store.clone();
-                                let input_command = match wait_for_command_sync(
-                                    &input_i32_arr,
-                                    InputCommand::Waiting,
-                                ) {
-                                    Ok(input_command) => input_command,
-                                    Err(err) => {
-                                        log::error!(
-                                            "failed to wait for filter-map command: {err:?}"
-                                        );
-                                        break None;
-                                    }
-                                };
+                                let input_command =
+                                    match channel.wait_sync(InputCommand::Waiting) {
+                                        Ok(input_command) => input_command,
+                                        Err(err) => {
+                                            log::error!(
+                                                "failed to wait for filter-map command: {err:?}"
+                                            );
+                                            break None;
+                                        }
+                                    };
                                 match input_command {
                                     s @ (InputCommand::Waiting
                                     | InputCommand::OpenDatabase
@@ -244,27 +227,17 @@ pub async fn main_loop(log_level: &str) {
                                     }
                                     // Allow calling other db requests in filter map call
                                     InputCommand::DbRequest => {
-                                        let db_cmd: DbCommandRequest = match read_command_payload(
-                                            &input_i32_arr,
-                                            &input_u8_arr,
-                                        ) {
+                                        let db_cmd: DbCommandRequest = match channel.read() {
                                             Ok(db_cmd) => db_cmd,
                                             Err(err) => {
                                                 log::error!(
                                                     "failed to read nested db-request payload: {err:?}"
                                                 );
-                                                input_i32_arr
-                                                    .set_index(0, InputCommand::Waiting as i32);
-                                                if let Err(write_err) = write_command_with_payload(
-                                                    OutputCommand::Error as i32,
+                                                channel.reset_input();
+                                                channel.write(
+                                                    OutputCommand::Error,
                                                     format!("{err:?}"),
-                                                    &output_i32_arr,
-                                                    &output_u8_arr,
-                                                ) {
-                                                    log::error!(
-                                                        "failed to write nested db-request error response: {write_err:?}"
-                                                    );
-                                                }
+                                                );
                                                 continue;
                                             }
                                         };
@@ -296,39 +269,21 @@ pub async fn main_loop(log_level: &str) {
                                             "db command result at filter map: {:?}",
                                             db_result
                                         );
-                                        input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                                        channel.reset_input();
                                         match db_result {
                                             Ok(o) => {
-                                                if let Err(err) = write_command_with_payload(
-                                                    OutputCommand::DbResponse as i32,
-                                                    &o,
-                                                    &output_i32_arr,
-                                                    &output_u8_arr,
-                                                ) {
-                                                    log::error!(
-                                                        "failed to write nested db response: {err:?}"
-                                                    );
-                                                }
+                                                channel.write(OutputCommand::DbResponse, &o);
                                             }
                                             Err(e) => {
-                                                if let Err(err) = write_command_with_payload(
-                                                    OutputCommand::Error as i32,
+                                                channel.write(
+                                                    OutputCommand::Error,
                                                     format!("{:?}", e),
-                                                    &output_i32_arr,
-                                                    &output_u8_arr,
-                                                ) {
-                                                    log::error!(
-                                                        "failed to write nested db error response: {err:?}"
-                                                    );
-                                                }
+                                                );
                                             }
-                                        };
+                                        }
                                     }
                                     InputCommand::ResponseFilterMap => {
-                                        let result = match read_command_payload::<Option<Vec<u8>>>(
-                                            &input_i32_arr,
-                                            &input_u8_arr,
-                                        ) {
+                                        let result = match channel.read::<Option<Vec<u8>>>() {
                                             Ok(result) => result,
                                             Err(err) => {
                                                 log::error!(
@@ -343,7 +298,7 @@ pub async fn main_loop(log_level: &str) {
                                     }
                                 }
                             };
-                            input_i32_arr.set_index(0, InputCommand::Waiting as i32);
+                            channel.reset_input();
                             result
                         }
                     },
@@ -353,24 +308,10 @@ pub async fn main_loop(log_level: &str) {
                 debug!("db command result: {:?}", result);
                 match result {
                     Ok(o) => {
-                        if let Err(err) = write_command_with_payload(
-                            OutputCommand::DbResponse as i32,
-                            &o,
-                            &output_i32_arr,
-                            &output_u8_arr,
-                        ) {
-                            log::error!("failed to write db response: {err:?}");
-                        }
+                        channel.write(OutputCommand::DbResponse, &o);
                     }
                     Err(e) => {
-                        if let Err(err) = write_command_with_payload(
-                            OutputCommand::Error as i32,
-                            format!("{:?}", e),
-                            &output_i32_arr,
-                            &output_u8_arr,
-                        ) {
-                            log::error!("failed to write db error response: {err:?}");
-                        }
+                        channel.write(OutputCommand::Error, format!("{:?}", e));
                     }
                 };
             }
