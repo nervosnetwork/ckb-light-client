@@ -17,7 +17,7 @@ async fn open_iterator(
     store: &ObjectStore,
     start_key_bound: &[u8],
     direction: IteratorDirection,
-) -> anyhow::Result<ManagedCursor> {
+) -> anyhow::Result<Option<ManagedCursor>> {
     let index = store
         .index("key")
         .map_err(|e| anyhow!("Unable to open key index: {e:?}"))?;
@@ -34,9 +34,8 @@ async fn open_iterator(
         .open_cursor(Some(key_range.into()), Some(cursor_direction))
         .map_err(|e| anyhow!("Failed to open cursor: {e:?}"))?
         .await
-        .map_err(|e| anyhow!("Failed to open cursor: {e:?}"))?
-        .ok_or_else(|| anyhow!("cursor is closed"))?;
-    Ok(cursor.into_managed())
+        .map_err(|e| anyhow!("Failed to open cursor: {e:?}"))?;
+    Ok(cursor.map(|cursor| cursor.into_managed()))
 }
 
 pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
@@ -52,12 +51,14 @@ where
     FnFilterMap: Fn(&[u8], &[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start.key(), direction)
-        .await
-        .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
-
     let mut res = Vec::new();
     let skip_first = start.should_skip_first();
+    let Some(mut iter) = open_iterator(store, start.key(), direction)
+        .await
+        .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?
+    else {
+        return Ok(res);
+    };
 
     if iter
         .key()
@@ -132,17 +133,21 @@ where
     FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start.key(), direction)
-        .await
-        .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
-
     let mut res = Vec::new();
     let skip_first = start.should_skip_first();
+    let Some(mut iter) = open_iterator(store, start.key(), direction)
+        .await
+        .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?
+    else {
+        return Ok(res);
+    };
 
-    let raw_key = iter
+    let Some(raw_key) = iter
         .key()
         .map_err(|e| anyhow!("Failed to read key from cursor: {e:?}"))?
-        .ok_or_else(|| anyhow!("cursor key is missing"))?;
+    else {
+        return Ok(res);
+    };
     let raw_key: Vec<u8> = serde_wasm_bindgen::from_value(raw_key)
         .map_err(|e| anyhow!("Failed to deserialize key: {e:?}"))?;
 
