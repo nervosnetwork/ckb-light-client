@@ -87,7 +87,10 @@ where
     } else {
         return Ok(res);
     }
-    while iter.next(None).await.is_ok() {
+    loop {
+        iter.next(None)
+            .await
+            .map_err(|e| anyhow!("Failed to advance cursor: {e:?}"))?;
         if res.len() >= limit {
             return Ok(res);
         }
@@ -117,7 +120,6 @@ where
             return Ok(res);
         }
     }
-    Ok(res)
 }
 
 async fn collect_iterator_keys<F, FnFilterMap, FnFilterMapOutput>(
@@ -161,7 +163,10 @@ where
         return Ok(res);
     }
 
-    while iter.next(None).await.is_ok() {
+    loop {
+        iter.next(None)
+            .await
+            .map_err(|e| anyhow!("Failed to advance cursor: {e:?}"))?;
         if res.len() >= limit {
             return Ok(res);
         }
@@ -183,7 +188,6 @@ where
             return Ok(res);
         }
     }
-    Ok(res)
 }
 
 pub(crate) async fn handle_db_command<F, FnFilterMap, FnFilterMapOutput>(
