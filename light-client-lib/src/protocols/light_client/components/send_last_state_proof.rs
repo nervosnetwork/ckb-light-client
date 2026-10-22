@@ -1152,7 +1152,14 @@ pub(crate) fn verify_total_difficulty(
             );
             return Err(errmsg);
         };
-        let end_epoch_blocks_count = end_epoch.index() + 1;
+        let Some(end_epoch_blocks_count) = end_epoch.index().checked_add(1) else {
+            let errmsg = format!(
+                "failed since the epoch index ({}) of the end epoch overflows \
+                during epochs ([{start_epoch:#},{end_epoch:#}])",
+                end_epoch.index(),
+            );
+            return Err(errmsg);
+        };
         let Some(unaligned_difficulty_calculated) = start_block_difficulty
             .checked_mul(&U256::from(start_epoch_blocks_count))
             .and_then(|start_part| {
