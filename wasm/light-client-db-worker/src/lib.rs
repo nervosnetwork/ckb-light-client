@@ -73,7 +73,20 @@ pub async fn main_loop(log_level: &str) {
         match cmd {
             InputCommand::OpenDatabase => {
                 let database_name =
-                    read_command_payload::<String>(&input_i32_arr, &input_u8_arr).unwrap();
+                    match read_command_payload::<String>(&input_i32_arr, &input_u8_arr) {
+                        Ok(database_name) => database_name,
+                        Err(err) => {
+                            log::error!("failed to read open-database payload: {err:?}");
+                            write_command_with_payload(
+                                OutputCommand::Error as i32,
+                                format!("{err:?}"),
+                                &output_i32_arr,
+                                &output_u8_arr,
+                            )
+                            .unwrap();
+                            continue;
+                        }
+                    };
                 match open_database(&database_name).await {
                     Ok(o) => {
                         db = Some(o);
@@ -95,7 +108,20 @@ pub async fn main_loop(log_level: &str) {
                 }
             }
             InputCommand::DbRequest => {
-                let db_cmd = read_command_payload(&input_i32_arr, &input_u8_arr).unwrap();
+                let db_cmd = match read_command_payload(&input_i32_arr, &input_u8_arr) {
+                    Ok(db_cmd) => db_cmd,
+                    Err(err) => {
+                        log::error!("failed to read db-request payload: {err:?}");
+                        write_command_with_payload(
+                            OutputCommand::Error as i32,
+                            format!("{err:?}"),
+                            &output_i32_arr,
+                            &output_u8_arr,
+                        )
+                        .unwrap();
+                        continue;
+                    }
+                };
                 let db = db.as_ref().expect("Database not opened yet");
                 let result = handle_db_command(
                     db,
@@ -113,8 +139,16 @@ pub async fn main_loop(log_level: &str) {
                         .unwrap();
                         // Sync wait here, so transaction of IndexedDB won't be commited (it will be commited once control flow was returned from sync call stack)
                         wait_for_command_sync(&input_i32_arr, InputCommand::Waiting).unwrap();
-                        let result =
-                            read_command_payload::<bool>(&input_i32_arr, &input_u8_arr).unwrap();
+                        let result = match read_command_payload::<bool>(
+                            &input_i32_arr,
+                            &input_u8_arr,
+                        ) {
+                            Ok(result) => result,
+                            Err(err) => {
+                                log::error!("failed to read take-while response: {err:?}");
+                                false
+                            }
+                        };
                         debug!("Received take while result {}", result);
                         input_i32_arr.set_index(0, InputCommand::Waiting as i32);
                         result
@@ -158,9 +192,27 @@ pub async fn main_loop(log_level: &str) {
                                     }
                                     // Allow calling other db requests in filter map call
                                     InputCommand::DbRequest => {
-                                        let db_cmd: DbCommandRequest =
-                                            read_command_payload(&input_i32_arr, &input_u8_arr)
+                                        let db_cmd: DbCommandRequest = match read_command_payload(
+                                            &input_i32_arr,
+                                            &input_u8_arr,
+                                        ) {
+                                            Ok(db_cmd) => db_cmd,
+                                            Err(err) => {
+                                                log::error!(
+                                                    "failed to read nested db-request payload: {err:?}"
+                                                );
+                                                input_i32_arr
+                                                    .set_index(0, InputCommand::Waiting as i32);
+                                                write_command_with_payload(
+                                                    OutputCommand::Error as i32,
+                                                    format!("{err:?}"),
+                                                    &output_i32_arr,
+                                                    &output_u8_arr,
+                                                )
                                                 .unwrap();
+                                                continue;
+                                            }
+                                        };
                                         debug!(
                                             "Received DbCommandRequest\
                                          when waiting for ResponseTakeWhile: {:?}",
@@ -200,11 +252,18 @@ pub async fn main_loop(log_level: &str) {
                                         };
                                     }
                                     InputCommand::ResponseFilterMap => {
-                                        let result = read_command_payload::<Option<Vec<u8>>>(
+                                        let result = match read_command_payload::<Option<Vec<u8>>>(
                                             &input_i32_arr,
                                             &input_u8_arr,
-                                        )
-                                        .unwrap();
+                                        ) {
+                                            Ok(result) => result,
+                                            Err(err) => {
+                                                log::error!(
+                                                    "failed to read filter-map response: {err:?}"
+                                                );
+                                                None
+                                            }
+                                        };
                                         log::trace!("Received filter map result {:?}", result);
 
                                         break result;
