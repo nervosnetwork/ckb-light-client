@@ -99,7 +99,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 
             // Get transaction from storage
             let tx_data = storage_clone.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-            let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
+            let tx = packed::Transaction::from_slice(tx_data.get(12..)?).ok()?;
 
             let output = tx.raw().outputs().get(output_index as usize)?;
             let output_data = tx.raw().outputs_data().get(output_index as usize)?;
@@ -191,7 +191,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 let (block_number, tx_index, output_index) = parse_cell_key(&key)?;
 
                 let tx_data = self.storage.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-                let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
+                let tx = packed::Transaction::from_slice(tx_data.get(12..)?).ok()?;
                 let output = tx.raw().outputs().get(output_index as usize)?;
                 let output_data = tx.raw().outputs_data().get(output_index as usize)?;
 
@@ -425,7 +425,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 
                     let tx_hash = packed::Byte32::from_slice(&value).ok()?;
                     let tx_data = self.storage.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-                    let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
+                    let tx = packed::Transaction::from_slice(tx_data.get(12..)?).ok()?;
 
                     let (block_number, tx_index, io_index, is_input) =
                         parse_transaction_history_key(&key)?;
@@ -488,7 +488,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             let (block_number, _tx_index, output_index) = parse_cell_key(key)?;
 
             let tx_data = storage_clone.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-            let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
+            let tx = packed::Transaction::from_slice(tx_data.get(12..)?).ok()?;
             let output = tx.raw().outputs().get(output_index as usize)?;
             let output_data = tx.raw().outputs_data().get(output_index as usize)?;
 
