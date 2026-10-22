@@ -1078,60 +1078,69 @@ pub trait LightClientStorage: StorageBackend {
     }
 
     /// Get matched blocks internal helper
+    ///
+    /// Malformed entries are removed so that they do not block the iteration.
     fn get_matched_blocks_internal(&self, direction: IteratorDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
-        let iter_from = match direction {
-            IteratorDirection::Forward => key_prefix.clone(),
-            IteratorDirection::Reverse => {
-                let mut key = key_prefix.clone();
-                key.extend(u64::MAX.to_be_bytes());
-                key
-            }
-        };
+        loop {
+            let iter_from = match direction {
+                IteratorDirection::Forward => key_prefix.clone(),
+                IteratorDirection::Reverse => {
+                    let mut key = key_prefix.clone();
+                    key.extend(u64::MAX.to_be_bytes());
+                    key
+                }
+            };
 
-        let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(iter_from),
-            direction,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            1,
-        );
+            let key_prefix_clone = key_prefix.clone();
+            let results = self.collect_iterator(
+                IteratorStart::From(iter_from),
+                direction,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                1,
+            );
 
-        results.into_iter().next().and_then(|kv| {
+            let kv = results.into_iter().next()?;
             let key = &kv.key;
             let value = &kv.value;
-            let Some(start_number_bytes) = key.get(key_prefix.len()..) else {
+            let start_number = key
+                .get(key_prefix.len()..)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_be_bytes);
+            let Some(start_number) = start_number else {
                 log::error!(
-                    "stored matched blocks key is too short: {} bytes",
+                    "stored matched blocks key is malformed: {} bytes, removing it",
                     key.len()
                 );
-                return None;
+                if let Err(err) = StorageBackend::delete(self, key) {
+                    log::error!("failed to remove malformed matched blocks key: {err:?}");
+                    return None;
+                }
+                continue;
             };
-            let Ok(start_number_bytes) = <[u8; 8]>::try_from(start_number_bytes) else {
-                log::error!(
-                    "stored matched blocks key has an invalid length: {} bytes",
-                    key.len()
-                );
-                return None;
-            };
-            let start_number = u64::from_be_bytes(start_number_bytes);
             let (blocks_count, raw_blocks) = match parse_matched_blocks(value) {
                 Ok(parsed) => parsed,
                 Err(errmsg) => {
-                    log::error!("failed to parse matched blocks: {errmsg}");
-                    return None;
+                    log::error!(
+                        "failed to parse matched blocks at {start_number}: {errmsg}, removing it"
+                    );
+                    if let Err(err) = StorageBackend::delete(self, key) {
+                        log::error!("failed to remove malformed matched blocks entry: {err:?}");
+                        return None;
+                    }
+                    continue;
                 }
             };
             let blocks = raw_blocks
                 .into_iter()
                 .map(|(hash, proved)| MatchedBlock { hash, proved })
                 .collect();
-            Some(MatchedBlocks {
+            return Some(MatchedBlocks {
                 start_number,
                 blocks_count,
                 blocks,
-            })
-        })
+            });
+        }
     }
 }
