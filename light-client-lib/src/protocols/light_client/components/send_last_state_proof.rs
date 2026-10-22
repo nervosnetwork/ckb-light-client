@@ -553,17 +553,22 @@ impl EpochDifficultyTrend {
         for group in &[details.start, details.end] {
             match group {
                 EpochCountGroupByTrend::Decreased(epochs_count) => {
-                    let state = "decreased";
                     for index in 0..*epochs_count {
                         curr /= tau;
-                        total = total.checked_add(&curr).unwrap_or_else(|| {
-                            panic!(
-                                "overflow when calculate the limit of total difficulty, \
-                                total: {}, current: {}, index: {}/{}, tau: {}, \
-                                state: {}, trend: {:?}, details: {:?}",
-                                total, curr, index, epochs_count, tau, state, self, details
+                        let Some(new_total) = total.checked_add(&curr) else {
+                            if check_max {
+                                debug!("check total difficulty: not greater than upper limit (exceeds U256)");
+                                return Ok(());
+                            }
+                            let errmsg = format!(
+                                "failed since the calculation of the total difficulty limit \
+                                overflows (decreased), total: {total:#x}, current: {curr:#x}, \
+                                index: {index}/{epochs_count}, tau: {tau}, \
+                                trend: {self:?}, details: {details:?}"
                             );
-                        });
+                            return Err(errmsg);
+                        };
+                        total = new_total;
                         if total >= *actual {
                             if check_max {
                                 debug!("check total difficulty: not greater than upper limit (short-circuit)");
@@ -580,17 +585,22 @@ impl EpochDifficultyTrend {
                     }
                 }
                 EpochCountGroupByTrend::Increased(epochs_count) => {
-                    let state = "increased";
                     for index in 0..*epochs_count {
                         curr = curr.saturating_mul(&tau_u256);
-                        total = total.checked_add(&curr).unwrap_or_else(|| {
-                            panic!(
-                                "overflow when calculate the limit of total difficulty, \
-                                total: {}, current: {}, index: {}/{}, tau: {}, \
-                                state: {}, trend: {:?}, details: {:?}",
-                                total, curr, index, epochs_count, tau, state, self, details
+                        let Some(new_total) = total.checked_add(&curr) else {
+                            if check_max {
+                                debug!("check total difficulty: not greater than upper limit (exceeds U256)");
+                                return Ok(());
+                            }
+                            let errmsg = format!(
+                                "failed since the calculation of the total difficulty limit \
+                                overflows (increased), total: {total:#x}, current: {curr:#x}, \
+                                index: {index}/{epochs_count}, tau: {tau}, \
+                                trend: {self:?}, details: {details:?}"
                             );
-                        });
+                            return Err(errmsg);
+                        };
+                        total = new_total;
                         if total >= *actual {
                             if check_max {
                                 debug!("check total difficulty: not greater than upper limit (short-circuit)");
@@ -608,8 +618,20 @@ impl EpochDifficultyTrend {
                 }
             }
         }
+        let Some(total_with_unaligned) = total.checked_add(unaligned) else {
+            if check_max {
+                debug!("check total difficulty: not greater than upper limit (fully-calculated, exceeds U256)");
+                return Ok(());
+            }
+            let errmsg = format!(
+                "failed since the calculation of the total difficulty limit overflows \
+                when adding the unaligned difficulty, total: {total:#x}, \
+                unaligned: {unaligned:#x}, start epoch difficulty {start:#x}, n: {n}, k: {k}"
+            );
+            return Err(errmsg);
+        };
         if check_max {
-            if &total + unaligned >= *actual {
+            if total_with_unaligned >= *actual {
                 debug!("check total difficulty: not greater than upper limit (fully-calculated)");
                 Ok(())
             } else {
@@ -619,7 +641,7 @@ impl EpochDifficultyTrend {
                 );
                 Err(errmsg)
             }
-        } else if &total + unaligned <= *actual {
+        } else if total_with_unaligned <= *actual {
             debug!("check total difficulty: not less than lower limit (fully-calculated)");
             Ok(())
         } else {
