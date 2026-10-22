@@ -38,6 +38,7 @@ pub use self::peers::FetchInfo;
 
 use prelude::*;
 
+pub(crate) use self::peers::MatchedBlockState;
 pub use self::peers::{LastState, Peer};
 pub use self::peers::{PeerState, Peers, ProveRequest, ProveState};
 use super::{
@@ -752,8 +753,14 @@ impl LightClientProtocol {
                         .build()
                         .as_bytes();
 
-                    self.peers
-                        .update_blocks_proof_request(*peer_index, Some(content), false);
+                    // Header fetches have no `BlockFilters`-matched height, so
+                    // there is nothing to bind here.
+                    self.peers.update_blocks_proof_request(
+                        *peer_index,
+                        Some(content),
+                        HashMap::new(),
+                        false,
+                    );
                     if let Err(err) = nc.send_message(
                         SupportProtocols::LightClient.protocol_id(),
                         *peer_index,
