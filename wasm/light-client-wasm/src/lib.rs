@@ -255,6 +255,9 @@ pub async fn light_client(
 
 #[wasm_bindgen]
 pub fn stop() {
+    if !status(0b1) {
+        return;
+    }
     broadcast_exit_signals();
     if let Some(storage_with_data) = STORAGE_WITH_DATA.get() {
         storage_with_data.storage().shutdown();
