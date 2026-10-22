@@ -87,6 +87,18 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        let snapshot = self.db.snapshot();
+        keys.iter()
+            .map(|key| {
+                snapshot
+                    .get(key.as_slice())
+                    .map(|value| value.map(|bytes| bytes.to_vec()))
+                    .map_err(Into::into)
+            })
+            .collect()
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         self.db
             .get(key.as_slice())
