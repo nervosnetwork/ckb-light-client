@@ -19,7 +19,7 @@ use ckb_light_client_lib::{
     protocols::{FetchInfo, LastState, ProveRequest, ProveState},
     service::{
         FetchStatus, Order, ScriptStatus, ScriptType, SearchKey, SearchKeyFilter,
-        SetScriptsCommand, Status, TransactionWithStatus, TxStatus,
+        SetScriptsCommand, Status, TransactionWithStatus,
     },
     storage::{self, HeaderWithExtension, LightClientStorage},
 };
@@ -31,6 +31,13 @@ use crate::{
         new_storage, MockChain,
     },
 };
+
+// Query/transaction-verification fixtures trust a checkpoint explicitly. They do
+// not test protocol proof acceptance; protocol suites use actual proofs separately.
+fn index_accepted_fixture(storage: &storage::Storage, block: Block) {
+    storage.update_last_state(&U256::one(), &block.header(), &[]);
+    storage.filter_block(block);
+}
 
 #[test]
 fn rpc() {
@@ -216,7 +223,7 @@ fn rpc() {
             )
             .build();
 
-        storage.filter_block(pre_block.data());
+        index_accepted_fixture(&storage, pre_block.data());
     }
 
     // test get_cells rpc
@@ -1009,32 +1016,26 @@ fn rpc() {
         cycles: _,
     } = rpc.get_transaction(pre_tx0.hash().unpack()).unwrap();
     assert_eq!(transaction.unwrap().hash, pre_tx0.hash().unpack());
-    assert_eq!(
-        tx_status.block_hash.unwrap(),
-        pre_block.header().hash().unpack()
-    );
+    // This transaction was removed by the earlier rollback, but its bytes remain.
+    assert_eq!(tx_status.status, Status::Unknown);
+    assert!(tx_status.block_hash.is_none());
+    let genesis_tx = storage
+        .get_genesis_block()
+        .transactions()
+        .get(0)
+        .unwrap()
+        .calc_tx_hash();
+    let accepted = rpc.get_transaction(genesis_tx.unpack()).unwrap();
+    assert_eq!(accepted.tx_status.status, Status::Committed);
     assert_eq!(peers.fetching_txs().len(), 3);
 
     // test fetch_transaction rpc
     let rv = rpc.fetch_transaction(fetched_txs[0].clone()).unwrap();
-    assert_eq!(
-        rv,
-        FetchStatus::Fetched {
-            data: TransactionWithStatus {
-                transaction: Some(
-                    TransactionBuilder::default()
-                        .header_dep(h256!("0xbb11").pack())
-                        .build()
-                        .into()
-                ),
-                cycles: None,
-                tx_status: TxStatus {
-                    block_hash: Some(Header::default().into_view().hash().unpack()),
-                    status: Status::Committed,
-                },
-            }
-        }
-    );
+    assert!(matches!(rv, FetchStatus::Added { .. }));
+    let cached = rpc.get_transaction(fetched_txs[0].clone()).unwrap();
+    assert!(cached.transaction.is_some());
+    assert_eq!(cached.tx_status.status, Status::Unknown);
+    assert!(cached.tx_status.block_hash.is_none());
     let rv = rpc.fetch_transaction(h256!("0xabcdef")).unwrap();
     assert!(matches!(rv, FetchStatus::Added { .. }));
     let rv = rpc.fetch_transaction(h256!("0xbb22")).unwrap();
@@ -1057,7 +1058,7 @@ fn rpc() {
     assert!(matches!(rv, FetchStatus::Added { .. }));
 
     assert_eq!(peers.fetching_headers().len(), 4);
-    assert_eq!(peers.fetching_txs().len(), 4);
+    assert_eq!(peers.fetching_txs().len(), 5);
 }
 
 #[test]
@@ -1137,10 +1138,11 @@ fn get_cells_capacity_bug() {
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
                 .number(1)
+                .parent_hash(block0.hash())
                 .build(),
         )
         .build();
-    storage.filter_block(block1.data());
+    index_accepted_fixture(&storage, block1.data());
 
     let tx20 = TransactionBuilder::default()
         .input(CellInput::new(OutPoint::new(tx00.hash(), 1), 0))
@@ -1167,10 +1169,11 @@ fn get_cells_capacity_bug() {
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 2, 1000).pack())
                 .number(2)
+                .parent_hash(block1.hash())
                 .build(),
         )
         .build();
-    storage.filter_block(block2.data());
+    index_accepted_fixture(&storage, block2.data());
     storage.update_last_state(&U256::one(), &block2.header().data(), &[]);
 
     let cc = rpc
@@ -1268,10 +1271,11 @@ fn get_cells_after_rollback_bug() {
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
                 .number(1)
+                .parent_hash(block0.hash())
                 .build(),
         )
         .build();
-    storage.filter_block(block1.data());
+    index_accepted_fixture(&storage, block1.data());
     storage.update_block_number(1);
 
     let tx20 = TransactionBuilder::default()
@@ -1299,10 +1303,11 @@ fn get_cells_after_rollback_bug() {
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 2, 1000).pack())
                 .number(2)
+                .parent_hash(block1.hash())
                 .build(),
         )
         .build();
-    storage.filter_block(block2.data());
+    index_accepted_fixture(&storage, block2.data());
     storage.update_block_number(2);
 
     storage.rollback_to_block(2);
@@ -1695,10 +1700,11 @@ fn test_chain_txs_in_same_block_bug() {
             HeaderBuilder::default()
                 .epoch(EpochNumberWithFraction::new(0, 1, 1000).pack())
                 .number(1)
+                .parent_hash(block0.hash())
                 .build(),
         )
         .build();
-    storage.filter_block(block1.data());
+    index_accepted_fixture(&storage, block1.data());
     storage.update_block_number(1);
 
     let cells_page_1 = rpc
@@ -1735,7 +1741,7 @@ fn test_send_chain_txs() {
 
     // https://pudge.explorer.nervos.org/block/261
     let block: Block = serde_json::from_str::<ckb_jsonrpc_types::Block>(r#"{"header":{"compact_target":"0x1e015555","dao":"0x18f067d6835aa12e81d52889fd862300aa4aa421700c0000003ef78768fcfe06","epoch":"0x3e80105000000","extra_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","nonce":"0x32daf82076f991d5b69674ed257385eb","number":"0x105","parent_hash":"0xe883cd26172309608574ab5e7fad5dbdb4c82d6dcbac407f3d81b4b50f46f513","proposals_hash":"0x0000000000000000000000000000000000000000000000000000000000000000","timestamp":"0x1723baeb815","transactions_root":"0xf7250b8db808b34d96276a5b146a93b14372ff58abe4eb8927c6955446bca748","version":"0x0"},"proposals":[],"transactions":[{"cell_deps":[],"header_deps":[],"inputs":[{"previous_output":{"index":"0xffffffff","tx_hash":"0x0000000000000000000000000000000000000000000000000000000000000000"},"since":"0x105"}],"outputs":[{"capacity":"0x2ecbd5b8aa","lock":{"args":"0xda648442dbb7347e467d1d09da13e5cd3a0ef0e1","code_hash":"0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8","hash_type":"type"},"type":null}],"outputs_data":["0x"],"version":"0x0","witnesses":["0x5d0000000c00000055000000490000001000000030000000310000009bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce80114000000da648442dbb7347e467d1d09da13e5cd3a0ef0e104000000deadbeef"]},{"cell_deps":[{"dep_type":"dep_group","out_point":{"index":"0x0","tx_hash":"0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37"}}],"header_deps":[],"inputs":[{"previous_output":{"index":"0x7","tx_hash":"0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f"},"since":"0x0"}],"outputs":[{"capacity":"0x470de4df820000","lock":{"args":"0xff5094c2c5f476fc38510018609a3fd921dd28ad","code_hash":"0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8","hash_type":"type"},"type":null},{"capacity":"0xb61134e5a35e800","lock":{"args":"0x64257f00b6b63e987609fa9be2d0c86d351020fb","code_hash":"0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8","hash_type":"type"},"type":null}],"outputs_data":["0x","0x"],"version":"0x0","witnesses":["0x5500000010000000550000005500000041000000af34b54bebf8c5971da6a880f2df5a186c3f8d0b5c9a1fe1a90c95b8a4fb89ef3bab1ccec13797dcb3fee80400f953227dd7741227e08032e3598e16ccdaa49c00"]}],"uncles":[]}"#).unwrap().into();
-    storage.filter_block(block);
+    index_accepted_fixture(storage, block);
 
     // https://pudge.explorer.nervos.org/transaction/0xf34f4eaac4a662927fb52d4cb608e603150b9e0678a0f5ed941e3cfd5b68fb30
     let transaction = serde_json::from_str::<ckb_jsonrpc_types::Transaction>(r#"{"cell_deps":[{"dep_type":"dep_group","out_point":{"index":"0x0","tx_hash":"0xf8de3bb47d055cdf460d93a2a6e1b05f7432f9777c8c474abf4eec1d4aee5d37"}}],"header_deps":[],"inputs":[{"previous_output":{"index":"0x7","tx_hash":"0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f"},"since":"0x0"}],"outputs":[{"capacity":"0x470de4df820000","lock":{"args":"0xff5094c2c5f476fc38510018609a3fd921dd28ad","code_hash":"0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8","hash_type":"type"},"type":null},{"capacity":"0xb61134e5a35e800","lock":{"args":"0x64257f00b6b63e987609fa9be2d0c86d351020fb","code_hash":"0x9bd7e06f3ecf4be0f2fcd2188b23f1b9fcc88e5d4b65a8637b17723bbda3cce8","hash_type":"type"},"type":null}],"outputs_data":["0x","0x"],"version":"0x0","witnesses":["0x5500000010000000550000005500000041000000af34b54bebf8c5971da6a880f2df5a186c3f8d0b5c9a1fe1a90c95b8a4fb89ef3bab1ccec13797dcb3fee80400f953227dd7741227e08032e3598e16ccdaa49c00"]}"#).unwrap();

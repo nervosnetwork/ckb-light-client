@@ -45,6 +45,15 @@ pub trait StorageBackend: Send + Sync {
     /// Get value by key
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>>;
 
+    /// Read all keys from one database snapshot, preserving order and missing entries.
+    /// The default keeps external backends source compatible but fails explicitly:
+    /// sequential reads are not a safe substitute for an evidence snapshot.
+    fn get_many(&self, _keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        Err(crate::error::Error::runtime(
+            "atomic multi-key reads are unsupported",
+        ))
+    }
+
     /// Put key-value pair
     fn put(&self, key: Vec<u8>, value: Vec<u8>) -> Result<()>;
 
@@ -57,6 +66,22 @@ pub trait StorageBackend: Send + Sync {
     fn batch(&self) -> Self::Batch;
 
     // ========== Iterator operations ==========
+
+    /// Collect rows without silently discarding backend read errors.
+    /// Existing backend implementations remain source compatible, but must opt in
+    /// to checked scans before supporting canonical transitions and watched queries.
+    fn try_collect_iterator(
+        &self,
+        _start: IteratorStart,
+        _direction: IteratorDirection,
+        _take_while_fn: TakeWhileFn,
+        _filter_map_fn: FilterMapFn,
+        _limit: usize,
+    ) -> Result<Vec<KVPair>> {
+        Err(crate::error::Error::runtime(
+            "checked iteration is unsupported",
+        ))
+    }
 
     /// Collect items using iterator with custom filter and map functions
     ///
