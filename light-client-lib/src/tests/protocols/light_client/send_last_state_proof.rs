@@ -1799,6 +1799,33 @@ async fn reorg_detect_long_fork_turn_2() {
     test_with_reorg_blocks(param).await;
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn committed_transfer_is_revoked_after_a_verified_fork() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 48,
+        prev_last_number_opt: Some(24),
+        rollback_blocks_count: 4,
+        last_n_blocks: 5,
+        observe_transfer: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn proved_replacement_header_cannot_relabel_a_detached_transfer() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 48,
+        prev_last_number_opt: Some(24),
+        rollback_blocks_count: 4,
+        last_n_blocks: 5,
+        observe_transfer: true,
+        prove_replacement_header: true,
+        ..Default::default()
+    })
+    .await;
+}
+
 #[derive(Default)]
 struct ReorgTestParameter {
     last_number: BlockNumber,
@@ -1808,6 +1835,8 @@ struct ReorgTestParameter {
     rollback_blocks_count: BlockNumber,
     last_n_blocks: BlockNumber,
     long_fork_detected: bool,
+    observe_transfer: bool,
+    prove_replacement_header: bool,
     expected_last_headers_count_opt: Option<BlockNumber>,
     result: StatusCode,
     // Mock "restart" state: after restart, the first received "last state" is on a forked chain.
@@ -1841,13 +1870,20 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
     let storage = chain.client_storage();
 
     let last_number = param.last_number;
+    let observed_tip = param.prev_last_number_opt.unwrap_or(last_number / 2);
+    let mut transfer = None;
     {
         chain.mine_to_with(last_number, |block| {
             let block_number: u64 = block.header().raw().number().unpack();
-            block
-                .as_advanced_builder()
-                .timestamp(100 + block_number)
-                .build()
+            let mut builder = block.as_advanced_builder().timestamp(100 + block_number);
+            if param.observe_transfer && block_number == observed_tip - 3 {
+                let tx = chain.get_cellbase_as_input(13);
+                builder = builder.proposal(tx.proposal_short_id());
+                transfer = Some(tx);
+            } else if param.observe_transfer && block_number == observed_tip - 1 {
+                builder = builder.transaction(transfer.as_ref().unwrap().clone());
+            }
+            builder.build()
         });
         assert_eq!(chain.shared().snapshot().tip_number(), last_number);
     }
@@ -1925,6 +1961,84 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             .unwrap();
     }
 
+    if let Some(tx) = &transfer {
+        use crate::{
+            service::{FetchStatus, LightClientChainService, Status},
+            storage::StorageWithChainData,
+        };
+        let snapshot = chain.shared().snapshot();
+        let included = snapshot.get_block_by_number(prev_last_number - 1).unwrap();
+        assert!(included
+            .transactions()
+            .iter()
+            .any(|candidate| candidate.hash() == tx.hash()));
+        assert_eq!(prev_last_number - included.number() + 1, 2);
+        let service = LightClientChainService::new(
+            StorageWithChainData::new(storage.clone(), peers.clone(), Default::default()),
+            Arc::new(chain.consensus().clone()),
+        );
+        let hash = tx.hash().unpack();
+        assert!(matches!(
+            service.fetch_transaction(&hash),
+            FetchStatus::Added { .. }
+        ));
+        protocol.notify(nc.context(), 1).await;
+        let hashes = included
+            .transactions()
+            .iter()
+            .map(|tx| tx.hash())
+            .collect::<Vec<_>>();
+        let index = included
+            .transactions()
+            .iter()
+            .position(|candidate| candidate.hash() == tx.hash())
+            .unwrap() as u32;
+        let tx_proof = ckb_types::utilities::CBMT::build_merkle_proof(&hashes, &[index]).unwrap();
+        let response = packed::SendTransactionsProofV1::new_builder()
+            .last_header(
+                snapshot
+                    .get_verifiable_header_by_number(prev_last_number)
+                    .unwrap(),
+            )
+            .proof(chain.build_proof_by_numbers(prev_last_number, &[included.number()]))
+            .filtered_blocks(vec![packed::FilteredBlock::new_builder()
+                .header(included.header().data())
+                .witnesses_root(included.calc_witnesses_root())
+                .transactions(vec![tx.data()].pack())
+                .proof(
+                    packed::MerkleProof::new_builder()
+                        .indices(tx_proof.indices().to_vec().pack())
+                        .lemmas(tx_proof.lemmas().to_vec().pack())
+                        .build(),
+                )
+                .build()])
+            .blocks_uncles_hash(vec![included.calc_uncles_hash()].pack())
+            .blocks_extension(vec![packed::BytesOpt::new_builder()
+                .set(included.extension())
+                .build()])
+            .build();
+        protocol
+            .received(
+                nc.context(),
+                peer_index,
+                packed::LightClientMessage::new_builder()
+                    .set(response)
+                    .build()
+                    .as_bytes(),
+            )
+            .await;
+        let observed = service.get_transaction(&hash);
+        assert_eq!(observed.tx_status.status, Status::Committed);
+        assert_eq!(
+            storage.get_block_hash(included.number()),
+            Some(included.hash())
+        );
+        assert_eq!(
+            observed.tx_status.block_hash,
+            Some(included.hash().unpack())
+        );
+    }
+
     // Setup the storage data.
     {
         storage.update_min_filtered_block_number(prev_last_number);
@@ -1953,13 +2067,43 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
         let rollback_to = prev_last_number - rollback_blocks_count;
         chain.rollback_to(rollback_to, Default::default());
         assert_eq!(chain.shared().snapshot().tip_number(), rollback_to);
+        if let Some(tx) = &transfer {
+            chain.tx_pool().remove_local_tx(tx.hash()).unwrap();
+        }
 
         chain.mine_to_with(last_number, |block| {
             let block_number: u64 = block.header().raw().number().unpack();
-            block
+            let mut builder = block
+                .clone()
                 .as_advanced_builder()
-                .timestamp(500 + block_number)
-                .build()
+                .timestamp(500 + block_number);
+            if let Some(tx) = &transfer {
+                // Same capacities, occupied sizes, inputs and fee; a different valid
+                // output script produces a distinct spend on the replacement branch.
+                let output = tx.outputs().get(0).unwrap();
+                let lock = output
+                    .lock()
+                    .as_builder()
+                    .hash_type(ckb_types::core::ScriptHashType::Data1)
+                    .build();
+                let alternate = tx
+                    .as_advanced_builder()
+                    .set_outputs(vec![output.as_builder().lock(lock).build()])
+                    .build();
+                assert_ne!(alternate.hash(), tx.hash());
+                builder = builder.set_transactions(vec![block
+                    .transactions()
+                    .get(0)
+                    .unwrap()
+                    .into_view()]);
+                if block_number == observed_tip - 3 {
+                    builder = builder.set_proposals(vec![alternate.proposal_short_id()]);
+                }
+                if block_number == observed_tip - 1 {
+                    builder = builder.transaction(alternate);
+                }
+            }
+            builder.build()
         });
         assert_eq!(chain.shared().snapshot().tip_number(), last_number);
     }
@@ -2093,6 +2237,76 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
         // If `last_number == prev_last_number`, the rollback will not be applied since total
         // difficulties are the same,
 
+        if let Some(tx) = &transfer {
+            use crate::{
+                service::{LightClientChainService, Status},
+                storage::StorageWithChainData,
+            };
+            let snapshot = chain.shared().snapshot();
+            for number in 0..=last_number {
+                assert!(
+                    snapshot
+                        .get_block_by_number(number)
+                        .unwrap()
+                        .transactions()
+                        .iter()
+                        .all(|candidate| candidate.hash() != tx.hash()),
+                    "transfer must be absent from the replacement branch"
+                );
+            }
+            let service = LightClientChainService::new(
+                StorageWithChainData::new(storage.clone(), peers.clone(), Default::default()),
+                Arc::new(chain.consensus().clone()),
+            );
+            if param.prove_replacement_header {
+                let replacement = snapshot.get_block_by_number(prev_last_number - 1).unwrap();
+                assert!(matches!(
+                    service.fetch_header(&replacement.hash().unpack()),
+                    crate::service::FetchStatus::Added { .. }
+                ));
+                protocol.notify(nc.context(), 1).await;
+                let response = packed::SendBlocksProofV1::new_builder()
+                    .last_header(
+                        snapshot
+                            .get_verifiable_header_by_number(last_number)
+                            .unwrap(),
+                    )
+                    .proof(chain.build_proof_by_numbers(last_number, &[replacement.number()]))
+                    .headers(vec![replacement.header().data()].pack())
+                    .blocks_uncles_hash(vec![replacement.calc_uncles_hash()].pack())
+                    .blocks_extension(vec![packed::BytesOpt::new_builder()
+                        .set(replacement.extension())
+                        .build()])
+                    .build();
+                protocol
+                    .received(
+                        nc.context(),
+                        peer_index,
+                        packed::LightClientMessage::new_builder()
+                            .set(response)
+                            .build()
+                            .as_bytes(),
+                    )
+                    .await;
+                assert!(service.get_header(&replacement.hash().unpack()).is_some());
+                assert_eq!(
+                    storage.get_block_hash(replacement.number()),
+                    Some(replacement.hash())
+                );
+                assert_ne!(service.get_transaction(&tx.hash().unpack()).tx_status.block_hash, Some(replacement.hash().unpack()), "a valid header proof cannot establish this transaction's inclusion in a different block");
+            }
+            let observed = service.get_transaction(&tx.hash().unpack());
+            assert!(
+                observed.transaction.is_some(),
+                "historical bytes remain available"
+            );
+            assert_eq!(
+                observed.tx_status.status,
+                Status::Unknown,
+                "detached transfer must not remain committed"
+            );
+            assert!(observed.tx_status.block_hash.is_none());
+        }
         let min_filtered_block_number = if rollback_blocks_count == 0 {
             if last_number == prev_last_number {
                 prev_last_number

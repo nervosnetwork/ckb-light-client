@@ -181,7 +181,19 @@ curl http://localhost:9000/ -X POST -H "Content-Type: application/json" -d '{"js
 
 ### `get_transaction`
 
-Returns the information about a transaction by hash, the block header is also returned.
+Returns transaction availability and its locally accepted-chain status by hash.
+
+`committed` requires an immutable transaction/block-hash/height association established
+by verified inclusion or by indexing a verified block body on the accepted chain.
+It does not imply network freshness, finality, or that any output is unspent.
+`pending` means the transaction is in this runtime's local pending pool.
+
+Historical and legacy transaction bytes can be returned with `unknown` and a null
+`block_hash`. Availability alone never establishes accepted-chain membership.
+Proof revalidation can recover legacy associations; a mutable height cache cannot.
+After restart these guarantees refer to the persisted accepted state, which may
+be older than the network. Header lookup by hash continues to return historical
+headers independently of transaction membership and resolver eligibility.
 
 #### Parameters
 
@@ -220,6 +232,11 @@ Fetch a header from remote node. If return status is `not_found` will re-sent fe
 ### `fetch_transaction`
 
 Fetch a transaction from remote node. If return status is `not_found` will re-sent fetching request immediately.
+
+Cached bytes with `unknown` do not complete a fetch: the existing proof scheduler
+is used to revalidate inclusion. A locally pending transaction still completes
+with `pending`. Callers must inspect the returned transaction status and bound
+retries; a peer's `not_found` response is not a cryptographic absence proof.
 
 #### Parameters
 
@@ -270,6 +287,79 @@ To facilitate code migration, the rpc is similar as ckb-indexer, the only differ
 ### `get_cells_capacity`
 
 To facilitate code migration, the rpc is same as ckb-indexer, please refer to ckb-indexer rpc [doc](https://github.com/nervosnetwork/ckb-indexer#get_cells_capacity)
+
+Watched queries fail explicitly when legacy associations, interrupted writes, or
+unproved chain continuity prevent a trustworthy indexed result. These errors
+must not be interpreted as an empty history or zero balance. They do not upgrade
+watched-script coverage into global live-cell verification.
+
+This proposal retains old records without an automatic destructive migration.
+Individual transaction proofs recover membership, but cannot reconstruct the
+completeness of old watched history or generally recover a transaction ordinal
+from compact Merkle tree indices. Normal script registration does not erase
+indexes or clear uncertainty. For now, rebuilding means synchronizing a separate
+new database with the desired scripts, retaining the old database until the
+replacement is usable. An in-place recovery command and legacy compatibility
+policy require upstream agreement. No silent database migration is performed.
+
+### Recovery errors and existing Rust interfaces
+
+`get_cells`, `get_transactions` (grouped and ungrouped), and
+`get_cells_capacity` retain their existing `Result` signatures. Unsupported legacy
+coverage and interrupted/uncertain indexes return `Error::Runtime` messages
+beginning with `canonical_state:rebuild_required:`. A context change during a query
+returns `canonical_state:retry:`; retry the entire query with bounded retries.
+Other storage failures remain errors. Native JSON-RPC retains its existing
+`-32602` error mapping and includes the message; WASM rejects with the error
+message. An error must never be converted into an empty result or zero balance.
+
+The infallible Rust transaction get/fetch and resolver interfaces retain their
+signatures. They cannot expose an additional storage-error result: failed reads
+conservatively yield `unknown`/unavailable, and fetch may queue proof work. This
+is an observability limit, not an assertion of absence. Changing those signatures,
+adding a new error-bearing API, or changing the status enum is deferred. No new
+public transaction height field is introduced here.
+
+External `StorageBackend` implementations still compile with the new default
+methods, but must implement atomic `get_many` and checked `try_collect_iterator`
+to support canonical observations, transitions and watched queries. The defaults
+return an explicit unsupported-operation error. Built-in checked SQLite scans
+propagate row-conversion/read errors instead of skipping rows. Infallible legacy
+storage helpers may still panic on errors; the pinned RocksDB iterator does not
+expose an iterator-status error through its Rust interface. This change does not
+claim to detect arbitrary storage corruption or certify database completeness
+against a malicious local writer.
+
+To rebuild safely:
+
+1. Stop relying on watched results from the uncertain database and retain it.
+   Ordinary script registration, including `All` with birthday zero, is not an
+   in-place recovery command and does not clear uncertainty.
+2. Create a separate empty database for the same configured network. Register
+   the required scripts with their intended birthdays, using genesis when the
+   full watched history is required, and synchronize normally.
+3. Monitor every registered script's filter cursor/coverage. The accepted tip
+   attached to a capacity result does not certify that every script has caught up.
+   Do not switch until the replacement has the coverage the application needs.
+4. Deliberately switch the application's database selection and retain the old
+   database until the replacement is checked. A small offline fixture is not a
+   migration utility or a full-wallet resynchronization benchmark.
+
+Both databases coexist during staging. Rebuilding can require substantial chain
+filter downloads, matching block/proof traffic, CPU, and temporary disk space.
+No in-place recovery, cancellation/progress API, automatic switch, or downgrade
+migration is provided. Do not open a corrected database with older code and assume
+that code maintains its new membership metadata; retain backups when upgrading.
+
+Proof acceptance assumes the existing single Light Client handler, with acceptance
+and watched indexing serialized by the matched-block lock. The anchor check and
+proof commit are synchronous, but are not database compare-and-swap operations;
+multiple independently accepting runtimes must not share one database. Unproved
+continuity can conservatively require rebuilding after legitimate long advancement.
+Membership invalidation materializes the affected sparse suffix in one batch;
+large/browser memory limits have not been established. A peer's negative response
+is retryable reported absence. Identical anchor/hash requests have no wire
+generation identifier and do not prove a new caller-requested verification occurred.
 
 ## License
 

@@ -8,7 +8,7 @@ use ckb_types::{
 use log::{debug, error, info};
 use rand::seq::SliceRandom;
 
-use crate::storage::{HeaderWithExtension, LightClientStorage};
+use crate::storage::HeaderWithExtension;
 
 use super::{
     super::{LightClientProtocol, Status, StatusCode},
@@ -38,22 +38,27 @@ impl<'a> SendBlocksProofProcess<'a> {
     }
 
     pub(crate) async fn execute(self) -> Status {
-        let status = self.execute_internally().await;
+        let mut retire_request = false;
+        let status = self.execute_internally(&mut retire_request).await;
         debug!("block proof status: {}", status);
-        self.protocol
-            .peers()
-            .update_blocks_proof_request(self.peer_index, None, false);
+        if retire_request {
+            self.protocol
+                .peers()
+                .update_blocks_proof_request(self.peer_index, None, false);
+        }
         status
     }
 
-    async fn execute_internally(&self) -> Status {
+    async fn execute_internally(&self, retire_request: &mut bool) -> Status {
         let peer = return_if_failed!(self.protocol.get_peer(&self.peer_index));
 
         let original_request = if let Some(original_request) = peer.get_blocks_proof_request() {
             original_request
         } else {
             error!("peer {} isn't waiting for a proof", self.peer_index);
-            return StatusCode::PeerIsNotOnProcess.into();
+            // A response can arrive after timeout/replacement/completion. Ignore it
+            // without attributing peer fault or changing any fetch bookkeeping.
+            return Status::ok();
         };
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
@@ -91,12 +96,12 @@ impl<'a> SendBlocksProofProcess<'a> {
                 && self.message.headers().is_empty()
                 && self.message.missing_block_hashes().is_empty()
             {
+                // No requested hashes are echoed, so this may announce an old
+                // operation. Update the peer hint without draining the active slot.
+                // Its matching reply or the existing timeout will retire it.
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                self.protocol
-                    .peers()
-                    .mark_fetching_headers_timeout(self.peer_index);
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.
@@ -104,7 +109,8 @@ impl<'a> SendBlocksProofProcess<'a> {
                     "peer {} send a proof with different last state",
                     self.peer_index
                 );
-                return StatusCode::UnexpectedResponse.into();
+                // A late response must not retire a different outstanding operation.
+                return Status::ok();
             }
         }
 
@@ -129,9 +135,45 @@ impl<'a> SendBlocksProofProcess<'a> {
 
         debug!("got block proof: missing {:?}", &missing_block_hashes);
 
-        if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
-            error!("peer {} send an unknown proof", self.peer_index);
+        // Duplicates/overlap are intrinsically invalid, independently of the request slot.
+        let mut distinct = std::collections::HashSet::new();
+        if received_block_hashes
+            .iter()
+            .chain(missing_block_hashes.iter())
+            .any(|hash| !distinct.insert(hash))
+        {
             return StatusCode::UnexpectedResponse.into();
+        }
+        if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
+            debug!(
+                "peer {} response does not match the outstanding hashes",
+                self.peer_index
+            );
+            return Status::ok();
+        }
+
+        // Retire only the operation identified by both anchor and requested hashes.
+        *retire_request = true;
+
+        // The original request slot is retained until this response is drained.
+        // A valid old-fork response must neither complete a fetch nor mark it missing.
+        match crate::storage::canonical::anchor_current(
+            self.protocol.storage(),
+            &last_header.header().data(),
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.protocol
+                    .peers()
+                    .mark_fetching_headers_timeout(self.peer_index);
+                return Status::ok();
+            }
+            Err(error) => {
+                self.protocol
+                    .peers()
+                    .mark_fetching_headers_timeout(self.peer_index);
+                return StatusCode::InternalError.with_context(error.to_string());
+            }
         }
 
         // If all blocks are missing.
@@ -179,6 +221,23 @@ impl<'a> SendBlocksProofProcess<'a> {
                 self.message.proof(),
                 headers.iter(),
             ));
+
+            // Record only headers which passed the existing PoW/extra-hash/MMR checks.
+            for (header, extension) in headers.iter().zip(extensions.iter()) {
+                if let Err(error) = crate::storage::canonical::store_proved_header(
+                    self.protocol.storage(),
+                    &HeaderWithExtension {
+                        header: header.data(),
+                        extension: extension.clone(),
+                    },
+                    &last_header.header().data(),
+                ) {
+                    self.protocol
+                        .peers()
+                        .mark_fetching_headers_timeout(self.peer_index);
+                    return StatusCode::InternalError.with_context(error.to_string());
+                }
+            }
 
             // Get blocks
             if original_request.should_get_blocks() {
@@ -243,65 +302,16 @@ impl<'a> SendBlocksProofProcess<'a> {
                 }
             }
 
-            for (header, extension) in headers.into_iter().zip(extensions) {
-                if self.protocol.peers().remove_fetching_header(&header.hash()) {
-                    self.protocol
-                        .storage()
-                        .add_fetched_header(&HeaderWithExtension {
-                            header: header.data(),
-                            extension,
-                        });
-                }
+            for header in headers {
+                self.protocol.peers().remove_fetching_header(&header.hash());
             }
         }
         self.protocol
             .peers()
             .mark_fetching_headers_missing(&missing_block_hashes);
 
-        // Remove missing blocks from matched_blocks to prevent batch stall
-        // This is safe because:
-        // 1. If these are uncle blocks from an old fork, they've already been re-filtered
-        // 2. If from a recent reorg, SendLastStateProof will detect it and trigger
-        //    rollback_to_block(), which resets min_filtered_block_number and re-runs filters
-        // 3. New main chain blocks at the same heights will be checked during re-filtering
-        if original_request.should_get_blocks() && !missing_block_hashes.is_empty() {
-            let mut matched_blocks = self.protocol.peers().matched_blocks().write().await;
-            let mut removed_count = 0;
-
-            for missing_hash in &missing_block_hashes {
-                if matched_blocks.remove(&missing_hash.unpack()).is_some() {
-                    removed_count += 1;
-                    debug!(
-                        "Removed missing block {:#x} from matched_blocks \
-                         (likely uncle block or peer doesn't have it)",
-                        missing_hash
-                    );
-                }
-            }
-
-            if removed_count > 0 {
-                info!(
-                    "Removed {} missing block(s) from matched_blocks. \
-                     If due to reorg, filters will re-run from fork point to check new blocks.",
-                    removed_count
-                );
-
-                // Check if batch is now complete (all remaining blocks have been downloaded)
-                let all_downloaded = self
-                    .protocol
-                    .peers()
-                    .all_matched_blocks_downloaded(&matched_blocks);
-
-                if all_downloaded && !matched_blocks.is_empty() {
-                    info!(
-                        "Batch complete after removing missing blocks, {} blocks ready",
-                        matched_blocks.len()
-                    );
-                } else if matched_blocks.is_empty() {
-                    debug!("matched_blocks now empty after removing missing blocks");
-                }
-            }
-        }
+        // Peer-reported absence is not proof that watched history may be skipped.
+        // Keep matched hashes queued for another proof/peer or a verified rollback.
 
         Status::ok()
     }

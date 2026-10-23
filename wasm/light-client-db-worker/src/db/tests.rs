@@ -193,3 +193,43 @@ async fn asynchronous_request_failure_rolls_back_after_reopen() {
     assert_eq!(read(&db, &[&[1], &[2], &[3]]).await, expected);
     remove(db, &name).await;
 }
+
+#[wasm_bindgen_test]
+async fn multikey_reads_preserve_one_batch_generation_and_missing_positions() {
+    let name = database_name();
+    let db = open_database(&name).await.unwrap();
+    batch(&db, vec![put(&[10], &[0]), put(&[11], &[0])])
+        .await
+        .unwrap();
+    let writer = open_database(&name).await.unwrap();
+    let (done, finished) = tokio::sync::oneshot::channel();
+    wasm_bindgen_futures::spawn_local(async move {
+        for generation in 1..=64u8 {
+            batch(
+                &writer,
+                vec![put(&[10], &[generation]), put(&[11], &[generation])],
+            )
+            .await
+            .unwrap();
+        }
+        writer.close();
+        done.send(()).unwrap();
+    });
+    for _ in 0..64 {
+        let rows = read(&db, &[&[10], &[11], &[12], &[10]]).await;
+        assert_eq!(
+            rows[0], rows[1],
+            "mixed batch generations in a Read command"
+        );
+        assert_eq!(rows[0], rows[3], "duplicate key lost its position");
+        assert_eq!(rows[2], None);
+    }
+    finished.await.unwrap();
+    db.close();
+    let db = open_database(&name).await.unwrap();
+    assert_eq!(
+        read(&db, &[&[10], &[11]]).await,
+        vec![Some(vec![64]), Some(vec![64])]
+    );
+    remove(db, &name).await;
+}

@@ -57,7 +57,8 @@ async fn no_matched_request() {
 
     protocol.received(nc.context(), peer_index, data).await;
 
-    assert!(nc.banned_since(peer_index, StatusCode::PeerIsNotOnProcess));
+    assert!(nc.not_banned(peer_index));
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -150,7 +151,8 @@ async fn last_state_is_changed() {
         assert!(nc.not_banned(peer_index));
 
         let peer = protocol.get_peer(&peer_index).expect("has peer");
-        assert!(peer.get_blocks_proof_request().is_none());
+        // An uncorrelated tip hint cannot identify which proof operation it answers.
+        assert!(peer.get_blocks_proof_request().is_some());
     }
 }
 
@@ -256,7 +258,12 @@ async fn unexpected_response() {
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        assert!(nc.banned_since(peer_index, StatusCode::UnexpectedResponse));
+        assert!(nc.not_banned(peer_index));
+        assert!(protocol
+            .get_peer(&peer_index)
+            .unwrap()
+            .get_blocks_proof_request()
+            .is_some());
         assert!(nc.sent_messages().borrow().is_empty());
     }
 }
@@ -905,7 +912,37 @@ async fn test_send_blocks_proof(param: TestParameter) {
             if param.missing_block_hashes != param.returned_missing_block_hashes
                 || param.block_numbers != param.returned_headers
             {
-                assert!(nc.banned_since(peer_index, StatusCode::UnexpectedResponse));
+                let mut distinct = std::collections::HashSet::new();
+                let duplicates = param
+                    .returned_headers
+                    .iter()
+                    .any(|number| !distinct.insert(*number));
+                let mut distinct_missing = std::collections::HashSet::new();
+                let duplicates = duplicates
+                    || param
+                        .returned_missing_block_hashes
+                        .iter()
+                        .any(|hash| !distinct_missing.insert(hash));
+                if duplicates {
+                    assert!(nc.banned_since(peer_index, StatusCode::UnexpectedResponse));
+                } else {
+                    // A different complete hash set may be a delayed older operation.
+                    // It must preserve the current slot and cannot create fetched data.
+                    assert!(nc.not_banned(peer_index));
+                    assert!(protocol
+                        .get_peer(&peer_index)
+                        .unwrap()
+                        .get_blocks_proof_request()
+                        .is_some());
+                    for number in &param.returned_headers {
+                        let hash = snapshot.get_header_by_number(*number).unwrap().hash();
+                        assert!(crate::storage::LightClientStorage::get_header(
+                            chain.client_storage(),
+                            &hash
+                        )
+                        .is_none());
+                    }
+                }
             } else if param.block_numbers != param.proved_block_numbers {
                 assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
             } else {

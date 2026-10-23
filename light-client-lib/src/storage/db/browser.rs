@@ -2,7 +2,7 @@ use std::{cell::RefCell, path::Path, sync::atomic::AtomicBool};
 
 use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::storage_trait::LightClientStorage;
-use super::super::{Byte32, Key};
+use super::super::Byte32;
 use super::iterator::{IteratorDirection, IteratorStart, KVPair};
 use anyhow::{anyhow, bail, Context};
 
@@ -11,7 +11,7 @@ use ckb_types::{
         cell::{CellMeta, CellStatus},
         HeaderView, TransactionInfo,
     },
-    packed::{CellOutput, Header, OutPoint},
+    packed::{CellOutput, OutPoint},
     prelude::*,
 };
 use light_client_db_common::{
@@ -292,23 +292,15 @@ impl Storage {
     }
 
     pub fn cell(&self, out_point: &OutPoint, _eager_load: bool) -> CellStatus {
-        if let Some((block_number, tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
-            let block_hash = Byte32::from_slice(
-                &StorageBackend::get(self, Key::BlockNumber(block_number).into_vec())
-                    .expect("db get should be ok")
-                    .expect("stored block number / hash mapping"),
-            )
-            .expect("stored block hash should be OK");
-
-            let header = Header::from_slice(
-                &StorageBackend::get(self, Key::BlockHash(&block_hash).into_vec())
-                    .expect("db get should be ok")
-                    .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
-            )
-            .expect("stored header should be OK")
-            .into_view();
-
+        if let Ok(Some(stored)) = crate::storage::canonical::transaction(self, &out_point.tx_hash())
+        {
+            let block_number = stored.number;
+            let tx_index = stored.index;
+            let tx = stored.transaction;
+            let header = stored.header.into_view();
+            let block_hash = header.hash();
             let output_index = out_point.index().unpack();
+            let tx_index = crate::storage::canonical::resolver_index(&tx, tx_index);
             let tx = tx.into_view();
             if let Some(cell_output) = tx.outputs().get(output_index) {
                 let output_data = tx
@@ -377,6 +369,19 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        let response = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Read {
+                keys: keys.to_vec(),
+            })
+            .map_err(|error| Error::Indexdb(format!("{error:?}")))?;
+        match response {
+            DbCommandResponse::Read { values } if values.len() == keys.len() => Ok(values),
+            _ => Err(Error::Indexdb("invalid multi-key read response".into())),
+        }
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         let values = self
             .channel
@@ -423,6 +428,18 @@ impl StorageBackend for Storage {
         filter_map_fn: FilterMapFn,
         limit: usize,
     ) -> Vec<KVPair> {
+        self.try_collect_iterator(start, direction, take_while_fn, filter_map_fn, limit)
+            .expect("database iteration")
+    }
+
+    fn try_collect_iterator(
+        &self,
+        start: IteratorStart,
+        direction: IteratorDirection,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
+        limit: usize,
+    ) -> Result<Vec<KVPair>> {
         let value = self
             .channel
             .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
@@ -432,11 +449,11 @@ impl StorageBackend for Storage {
                 filter_map: filter_map_fn,
                 limit,
             })
-            .unwrap();
+            .map_err(|error| Error::Indexdb(format!("{error:?}")))?;
         if let DbCommandResponse::Iterator { kvs } = value {
-            kvs
+            Ok(kvs)
         } else {
-            unreachable!()
+            Err(Error::Indexdb("invalid checked iterator response".into()))
         }
     }
 }
