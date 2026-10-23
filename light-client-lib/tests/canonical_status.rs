@@ -2122,3 +2122,39 @@ async fn registration_after_interrupted_rollback_preserves_data_and_returns_reco
         .unwrap()
         .is_some());
 }
+
+#[tokio::test]
+async fn matching_invalid_proof_requeues_fetch_before_retiring_request() {
+    for header in [false, true] {
+        let mut f = Fixture::new(true, false).await;
+        if header {
+            let p = payload(&f);
+            let block = inclusion(&f).header;
+            f.service.fetch_header(&block.calc_header_hash().unpack());
+            f.protocol.notify(f.context.context(), 1).await;
+            f.message = packed::LightClientMessage::new_builder()
+                .set(
+                    packed::SendBlocksProofV1::new_builder()
+                        .last_header(p.last_header())
+                        .proof(p.proof())
+                        .headers(vec![block].pack())
+                        .blocks_uncles_hash(p.blocks_uncles_hash())
+                        .blocks_extension(p.blocks_extension())
+                        .build(),
+                )
+                .build();
+        }
+        f.receive().await;
+        assert!(
+            f.context.not_banned(f.peer),
+            "first invalid proof uses the existing error allowance"
+        );
+        f.context.sent_messages().borrow_mut().clear();
+        f.protocol.notify(f.context.context(), 1).await;
+        assert!(
+            !f.context.sent_messages().borrow().is_empty(),
+            "identified invalid proof must leave its fetch schedulable: header={header}"
+        );
+        assert!(f.storage.get_transaction(&f.hash.pack()).is_none());
+    }
+}

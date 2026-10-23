@@ -42,6 +42,14 @@ impl<'a> SendBlocksProofProcess<'a> {
         let status = self.execute_internally(&mut retire_request).await;
         debug!("block proof status: {}", status);
         if retire_request {
+            // Preserve retry eligibility before removing the identified request's
+            // hash list. Peer discipline may allow an invalid response without
+            // immediately disconnecting the peer.
+            if !status.is_ok() {
+                self.protocol
+                    .peers()
+                    .mark_fetching_headers_timeout(self.peer_index);
+            }
             self.protocol
                 .peers()
                 .update_blocks_proof_request(self.peer_index, None, false);
