@@ -1,12 +1,15 @@
 import { LightClientFunctionCall, LightClientWorkerInitializeOptions } from "./types";
 import wasmModule from "ckb-light-client-wasm";
-onerror = err => {
-    console.error(err);
-}
+import { parentPort as self } from "worker_threads";
+// onerror = err => {
+//     console.error(err);
+// }
 let loaded = false;
-onmessage = async (evt) => {
+// onmessage = ;
+
+self.on("message", async (evt) => {
     if (!loaded) {
-        const data = evt.data as LightClientWorkerInitializeOptions;
+        const data = evt as LightClientWorkerInitializeOptions;
         wasmModule.set_shared_array(data.inputBuffer, data.outputBuffer);
         if (data.networkConfigIsJSObject) {
             data.networkFlag.config = JSON.stringify(data.networkFlag.config);
@@ -22,11 +25,11 @@ onmessage = async (evt) => {
         loaded = true;
         return;
     }
-    const data = evt.data as LightClientFunctionCall;
+    const data = evt as LightClientFunctionCall;
     try {
         self.postMessage({
             ok: true,
-            data: ((wasmModule as any)[data.name])(...evt.data.args)
+            data: ((wasmModule as any)[data.name])(...evt.args)
         })
     } catch (e) {
         self.postMessage({
@@ -35,6 +38,6 @@ onmessage = async (evt) => {
         })
         console.error(e);
     }
-};
+});
 
 export default {} as typeof Worker & { new(): Worker };
