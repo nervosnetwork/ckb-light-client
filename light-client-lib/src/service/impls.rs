@@ -9,8 +9,9 @@ use crate::{
     error::{Error, Result},
     service::{
         helpers::{build_filter_options, build_query_options},
-        Cell, CellType, CellsCapacity, FetchStatus, Order, Pagination, ScriptType, SearchKey,
-        Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
+        Cell, CellType, CellsCapacity, FetchStatus, HeaderRevalidationHandle, Order, Pagination,
+        ScriptType, SearchKey, Status, TransactionWithStatus, Tx, TxStatus, TxWithCell,
+        TxWithCells,
     },
     storage::{
         extract_raw_data, Key, KeyPrefix, LightClientStorage, StorageWithChainData, LAST_STATE_KEY,
@@ -587,14 +588,17 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 /// - Cycle estimation
 #[derive(Clone)]
 pub struct LightClientChainService {
-    swc: StorageWithChainData,
+    swc: Arc<StorageWithChainData>,
     consensus: Arc<Consensus>,
 }
 
 impl LightClientChainService {
     /// Create a new chain service instance
     pub fn new(swc: StorageWithChainData, consensus: Arc<Consensus>) -> Self {
-        Self { swc, consensus }
+        Self {
+            swc: Arc::new(swc),
+            consensus,
+        }
     }
 
     /// Get tip header
@@ -641,13 +645,41 @@ impl LightClientChainService {
         }
     }
 
+    /// Queue a fresh proof for this hash through the existing header scheduler.
+    ///
+    /// Every call creates an independent operation, even for the same hash.
+    /// Cached headers and responses dispatched before creation cannot complete
+    /// it. A successful result contains the verified header's actual number;
+    /// callers must compare it with any expected height. No overall deadline
+    /// is imposed. Keep the returned handle to poll or drop it to abandon work.
+    ///
+    /// Requires an accepted non-genesis tip and trustworthy publication state.
+    /// The handle weakly binds this service context; service clones share that
+    /// context. See [`HeaderRevalidationHandle::status`] for lifetime, retry and
+    /// chain-continuity behavior. Ordinary [`Self::fetch_header`] is unchanged.
+    pub fn revalidate_header(&self, block_hash: &H256) -> Result<HeaderRevalidationHandle> {
+        let peers = self.swc.peers();
+        let (tip, chain) = peers.try_header_revalidation_chain(self.swc.storage())?;
+        let tip_number: u64 = tip.raw().number().unpack();
+        if tip_number == 0 {
+            return Err(Error::runtime(
+                "header revalidation requires an accepted non-genesis tip",
+            ));
+        }
+        let request = peers.revalidate_header(block_hash.pack(), chain, unix_time_as_millis());
+        Ok(HeaderRevalidationHandle::new(
+            Arc::downgrade(&self.swc),
+            request,
+        ))
+    }
+
     /// Send transaction
     pub fn send_transaction(&self, tx: Transaction) -> Result<H256> {
         let tx: packed::Transaction = tx.into();
         let tx = tx.into_view();
         let cycles = crate::verify::verify_tx(
             tx.clone(),
-            &self.swc,
+            self.swc.as_ref(),
             Arc::clone(&self.consensus),
             &self.swc.storage().get_last_state().1.into_view(),
         )
@@ -756,7 +788,7 @@ impl LightClientChainService {
         let tx = tx.into_view();
         let cycles = crate::verify::verify_tx(
             tx.clone(),
-            &self.swc,
+            self.swc.as_ref(),
             Arc::clone(&self.consensus),
             &self.swc.storage().get_last_state().1.into_view(),
         )
