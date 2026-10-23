@@ -9,7 +9,7 @@ use crate::{
     error::{Error, Result},
     service::{
         helpers::{build_filter_options, build_query_options},
-        Cell, CellType, CellsCapacity, FetchHeaderOptions, FetchStatus, Order, Pagination,
+        Cell, CellType, CellsCapacity, FetchStatus, HeaderRevalidationHandle, Order, Pagination,
         ScriptType, SearchKey, Status, TransactionWithStatus, Tx, TxStatus, TxWithCell,
         TxWithCells,
     },
@@ -588,14 +588,17 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 /// - Cycle estimation
 #[derive(Clone)]
 pub struct LightClientChainService {
-    swc: StorageWithChainData,
+    swc: Arc<StorageWithChainData>,
     consensus: Arc<Consensus>,
 }
 
 impl LightClientChainService {
     /// Create a new chain service instance
     pub fn new(swc: StorageWithChainData, consensus: Arc<Consensus>) -> Self {
-        Self { swc, consensus }
+        Self {
+            swc: Arc::new(swc),
+            consensus,
+        }
     }
 
     /// Get tip header
@@ -642,54 +645,32 @@ impl LightClientChainService {
         }
     }
 
-    /// Fetches a header, optionally requiring a fresh peer proof.
+    /// Queue a fresh proof for this hash through the existing header scheduler.
     ///
-    /// With `FetchHeaderOptions::new(false)` this has the same behavior as
-    /// [`Self::fetch_header`]. With `true`, the first call bypasses every header cache and
-    /// queues verification against the currently accepted chain. Reuse the same mutable options
-    /// to poll that operation; creating new options starts an independent operation.
+    /// Every call creates an independent operation, even for the same hash.
+    /// Cached headers and responses dispatched before creation cannot complete
+    /// it. A successful result contains the verified header's actual number;
+    /// callers must compare it with any expected height. No overall deadline
+    /// is imposed. Keep the returned handle to poll or drop it to abandon work.
     ///
-    /// `Fetched` for a forced operation contains the header returned by that operation's
-    /// successful GetBlocksProof verification, including its actual block number. It is never
-    /// inferred from cache presence. Callers must compare that number with any expected height.
-    /// Verified extensions of the accepted tip preserve pending operations and completed results.
-    /// A fork, or a tip update whose continuity cannot be established from the verified recent
-    /// headers, returns an error, including when polling a completed operation. Each proof is
-    /// still checked against its dispatch-time accepted tip; earlier responses cannot complete
-    /// operations created after their dispatch.
-    ///
-    /// `NotFound` means a peer reported the header missing, not proven nonexistence. It remains
-    /// terminal for these options. Timeouts and disconnects retry through the existing scheduler.
-    /// There is no overall deadline; callers can impose one by dropping the options.
-    /// Drop the options to abandon the operation, or use new options to retry a missing or stale
-    /// result. Options are bound to this client and hash; there is no persistent request state.
-    pub fn fetch_header_with_options(
-        &self,
-        block_hash: &H256,
-        options: &mut FetchHeaderOptions,
-    ) -> Result<FetchStatus<ckb_jsonrpc_types::HeaderView>> {
-        if !options.force {
-            return Ok(self.fetch_header(block_hash));
-        }
+    /// Requires an accepted non-genesis tip and trustworthy publication state.
+    /// The handle weakly binds this service context; service clones share that
+    /// context. See [`HeaderRevalidationHandle::status`] for lifetime, retry and
+    /// chain-continuity behavior. Ordinary [`Self::fetch_header`] is unchanged.
+    pub fn revalidate_header(&self, block_hash: &H256) -> Result<HeaderRevalidationHandle> {
         let peers = self.swc.peers();
-        let tip = self.swc.storage().get_tip_header();
-        let anchor = tip.calc_header_hash();
-        let hash = block_hash.pack();
-        if options.request.is_none() {
-            let tip_number: u64 = tip.raw().number().unpack();
-            if tip_number == 0 {
-                return Err(Error::runtime(
-                    "header revalidation requires an accepted non-genesis tip",
-                ));
-            }
-            options.request =
-                Some(peers.revalidate_header(hash.clone(), anchor.clone(), unix_time_as_millis()));
+        let (tip, chain) = peers.try_header_revalidation_chain(self.swc.storage())?;
+        let tip_number: u64 = tip.raw().number().unpack();
+        if tip_number == 0 {
+            return Err(Error::runtime(
+                "header revalidation requires an accepted non-genesis tip",
+            ));
         }
-        options
-            .request
-            .as_ref()
-            .expect("initialized fetch options")
-            .status(peers, &hash, &anchor)
+        let request = peers.revalidate_header(block_hash.pack(), chain, unix_time_as_millis());
+        Ok(HeaderRevalidationHandle::new(
+            Arc::downgrade(&self.swc),
+            request,
+        ))
     }
 
     /// Send transaction
@@ -698,7 +679,7 @@ impl LightClientChainService {
         let tx = tx.into_view();
         let cycles = crate::verify::verify_tx(
             tx.clone(),
-            &self.swc,
+            self.swc.as_ref(),
             Arc::clone(&self.consensus),
             &self.swc.storage().get_last_state().1.into_view(),
         )
@@ -807,7 +788,7 @@ impl LightClientChainService {
         let tx = tx.into_view();
         let cycles = crate::verify::verify_tx(
             tx.clone(),
-            &self.swc,
+            self.swc.as_ref(),
             Arc::clone(&self.consensus),
             &self.swc.storage().get_last_state().1.into_view(),
         )

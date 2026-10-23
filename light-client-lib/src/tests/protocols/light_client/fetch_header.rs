@@ -10,7 +10,7 @@ use crate::{
         LastState, LightClientProtocol, Peers, PendingTxs, ProveRequest, StatusCode,
         MESSAGE_TIMEOUT,
     },
-    service::{FetchHeaderOptions, FetchStatus, LightClientChainService},
+    service::{FetchStatus, HeaderRevalidationHandle, LightClientChainService},
     storage::{HeaderWithExtension, LightClientStorage, StorageWithChainData},
     tests::{
         prelude::*,
@@ -161,16 +161,6 @@ impl<Chain: RunningChainExt> Fixture<Chain> {
             });
     }
 
-    fn poll(
-        &self,
-        hash: &H256,
-        options: &mut FetchHeaderOptions,
-    ) -> FetchStatus<ckb_jsonrpc_types::HeaderView> {
-        self.service
-            .fetch_header_with_options(hash, options)
-            .unwrap()
-    }
-
     async fn dispatch(&mut self) -> Vec<(PeerIndex, packed::GetBlocksProof)> {
         self.protocol
             .notify(self.network.context(), FETCH_HEADER_TX_TOKEN)
@@ -264,23 +254,15 @@ async fn cached_force_requires_fresh_proof_and_repeated_polling_retains_the_head
         fixture.service.fetch_header(&hash),
         FetchStatus::Fetched { .. }
     ));
-    assert!(matches!(
-        fixture.poll(&hash, &mut FetchHeaderOptions::new(false)),
-        FetchStatus::Fetched { .. }
-    ));
-    assert!(matches!(
-        fixture.poll(&hash, &mut FetchHeaderOptions::default()),
-        FetchStatus::Fetched { .. }
-    ));
     assert!(fixture.dispatch().await.is_empty());
 
-    let mut options = FetchHeaderOptions::new(true);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Added { .. }
     ));
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Added { .. }
     ));
     let requests = fixture.dispatch().await;
@@ -288,14 +270,14 @@ async fn cached_force_requires_fresh_proof_and_repeated_polling_retains_the_head
     assert_eq!(requests[0].1.last_hash(), fixture.header(20).hash());
     assert_eq!(requests[0].1.block_hashes().get(0), Some(hash.pack()));
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetching { .. }
     ));
     assert!(fixture.dispatch().await.is_empty());
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response).await;
     for _ in 0..3 {
-        let FetchStatus::Fetched { data } = fixture.poll(&hash, &mut options) else {
+        let FetchStatus::Fetched { data } = handle.status().unwrap() else {
             panic!("fresh verification did not finish");
         };
         assert_eq!(data.hash, hash);
@@ -311,37 +293,34 @@ async fn cached_force_requires_fresh_proof_and_repeated_polling_retains_the_head
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn earlier_forced_response_does_not_complete_later_options_at_the_same_anchor() {
+async fn earlier_forced_response_does_not_complete_later_handles_at_the_same_anchor() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut earlier = FetchHeaderOptions::new(true);
-    let mut later = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut earlier);
+    let earlier = fixture.service.revalidate_header(&hash).unwrap();
+    earlier.status().unwrap();
     let requests = fixture.dispatch().await;
-    fixture.poll(&hash, &mut later);
+    let later = fixture.service.revalidate_header(&hash).unwrap();
+    later.status().unwrap();
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response.clone()).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut earlier),
+        earlier.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
     assert!(matches!(
         fixture.service.fetch_header(&hash),
         FetchStatus::Fetched { .. }
     ));
-    assert!(matches!(
-        fixture.poll(&hash, &mut later),
-        FetchStatus::Added { .. }
-    ));
+    assert!(matches!(later.status().unwrap(), FetchStatus::Added { .. }));
     let requests = fixture.dispatch().await;
     assert_eq!(requests.len(), 1);
     assert!(matches!(
-        fixture.poll(&hash, &mut later),
+        later.status().unwrap(),
         FetchStatus::Fetching { .. }
     ));
     fixture.receive(requests[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut later),
+        later.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
 }
@@ -355,12 +334,12 @@ async fn older_ordinary_response_cannot_complete_a_forced_fetch() {
         FetchStatus::Added { .. }
     ));
     let requests = fixture.dispatch().await;
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response.clone()).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Added { .. }
     ));
     assert!(matches!(
@@ -371,7 +350,7 @@ async fn older_ordinary_response_cannot_complete_a_forced_fetch() {
     assert_eq!(requests.len(), 1);
     fixture.receive(requests[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
 }
@@ -381,8 +360,8 @@ async fn old_fork_response_and_cached_header_cannot_satisfy_new_anchor_verificat
     let mut fixture = fixture();
     let hash = fixture.hash(3);
     fixture.service.fetch_header(&hash);
-    let mut old = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut old);
+    let old = fixture.service.revalidate_header(&hash).unwrap();
+    old.status().unwrap();
     let requests = fixture.dispatch().await;
     let old_response = fixture.response(20, &[3], &[3], &[]);
 
@@ -393,36 +372,182 @@ async fn old_fork_response_and_cached_header_cannot_satisfy_new_anchor_verificat
     assert_ne!(fixture.hash(3), hash);
     fixture.accept_tip(21);
     fixture.add_peer(2);
-    let mut new = FetchHeaderOptions::new(true);
-    assert!(matches!(
-        fixture.poll(&hash, &mut new),
-        FetchStatus::Added { .. }
-    ));
+    let new = fixture.service.revalidate_header(&hash).unwrap();
+    assert!(matches!(new.status().unwrap(), FetchStatus::Added { .. }));
     fixture.receive(requests[0].0, old_response).await;
-    assert!(fixture
-        .service
-        .fetch_header_with_options(&hash, &mut old)
-        .is_err());
+    assert!(old.status().is_err());
     assert!(matches!(
         fixture.service.fetch_header(&hash),
         FetchStatus::Fetched { .. }
     ));
-    assert!(matches!(
-        fixture.poll(&hash, &mut new),
-        FetchStatus::Added { .. }
-    ));
+    assert!(matches!(new.status().unwrap(), FetchStatus::Added { .. }));
     let requests = fixture.dispatch().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1.last_hash(), fixture.header(21).hash());
     let missing = fixture.response(21, &[], &[], std::slice::from_ref(&hash));
     fixture.receive(requests[0].0, missing).await;
-    assert_eq!(fixture.poll(&hash, &mut new), FetchStatus::NotFound);
+    assert_eq!(new.status().unwrap(), FetchStatus::NotFound);
     assert!(matches!(
         fixture.service.fetch_header(&hash),
         FetchStatus::Fetched { .. }
     ));
-    assert_eq!(fixture.poll(&hash, &mut new), FetchStatus::NotFound);
+    assert_eq!(new.status().unwrap(), FetchStatus::NotFound);
     assert!(fixture.dispatch().await.is_empty());
+}
+
+// Verified extension: an unwinding caller must release the protocol thread before join/cleanup.
+struct PublicationSignalOnDrop(Option<std::sync::mpsc::Sender<()>>);
+
+impl Drop for PublicationSignalOnDrop {
+    fn drop(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn verified_extension_publication_preserves_all_handle_states() {
+    use std::{sync::mpsc, time::Duration};
+
+    const WAIT: Duration = Duration::from_secs(30);
+
+    // Record every outcome before asserting preservation for all operation states.
+    fn observe(handle: &HeaderRevalidationHandle) -> String {
+        match handle.status() {
+            Ok(FetchStatus::Added { .. }) => "Added".to_owned(),
+            Ok(FetchStatus::Fetching { .. }) => "Fetching".to_owned(),
+            Ok(FetchStatus::Fetched { data }) => {
+                format!(
+                    "Fetched(number={}, hash={})",
+                    u64::from(data.inner.number),
+                    data.hash
+                )
+            }
+            Ok(FetchStatus::NotFound) => "NotFound".to_owned(),
+            Err(error) => format!("Error({error})"),
+        }
+    }
+
+    let mut fixture = fixture();
+    let completed_hash = fixture.hash(3);
+    let inflight_hash = fixture.hash(4);
+    let pending_hash = fixture.hash(5);
+    let completed = fixture.service.revalidate_header(&completed_hash).unwrap();
+    completed.status().unwrap();
+    let requests = fixture.dispatch().await;
+    assert_eq!(requests.len(), 1);
+    let response = fixture.response(20, &[3], &[3], &[]);
+    fixture.receive(requests[0].0, response).await;
+    assert!(matches!(
+        completed.status().unwrap(),
+        FetchStatus::Fetched { .. }
+    ));
+
+    let inflight = fixture.service.revalidate_header(&inflight_hash).unwrap();
+    inflight.status().unwrap();
+    let requests = fixture.dispatch().await;
+    assert_eq!(requests.len(), 1);
+    assert!(matches!(
+        inflight.status().unwrap(),
+        FetchStatus::Fetching { .. }
+    ));
+    let pending = fixture.service.revalidate_header(&pending_hash).unwrap();
+    assert!(matches!(
+        pending.status().unwrap(),
+        FetchStatus::Added { .. }
+    ));
+
+    fixture.chain.mine_to(21);
+    let t1 = fixture.header(20).hash();
+    let t2 = fixture.header(21).hash();
+    assert_eq!(
+        fixture.header(21).parent_hash(),
+        t1,
+        "must be a direct extension"
+    );
+    let expected_completed = format!("Fetched(number=3, hash={completed_hash})");
+    let service = fixture.service.clone();
+    let (published_tx, published_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = std::sync::Mutex::new(release_rx);
+    fixture
+        .protocol
+        .set_after_tip_publication(Arc::new(move || {
+            eprintln!("Verified extension hook: storage T2 and identity published; protocol completion paused");
+            published_tx
+                .send(())
+                .expect("Verified extension caller must be listening");
+            release_rx
+                .lock()
+                .unwrap()
+                .recv_timeout(WAIT)
+                .expect("Verified extension caller must release publication pause");
+            eprintln!("Verified extension hook: caller released protocol thread");
+        }));
+    let (advanced_tx, advanced_rx) = mpsc::channel();
+    let advanced_guard = PublicationSignalOnDrop(Some(advanced_tx));
+    let caller_t2 = t2.clone();
+    let caller = std::thread::spawn(move || {
+        // This guard is installed before any assertion or blocking receive.
+        let release_guard = PublicationSignalOnDrop(Some(release_tx));
+        published_rx
+            .recv_timeout(WAIT)
+            .expect("verified-state path must reach publication hook");
+        assert_eq!(
+            service.get_tip_header().hash.pack(),
+            caller_t2,
+            "caller must read published T2"
+        );
+        let newly_created = service.revalidate_header(&pending_hash).unwrap();
+        let during = [
+            observe(&pending),
+            observe(&inflight),
+            observe(&completed),
+            observe(&newly_created),
+        ];
+        eprintln!("Verified extension during [pending, inflight, completed, new]: {during:?}");
+        drop(release_guard);
+        advanced_rx
+            .recv_timeout(WAIT)
+            .expect("verified-state path must finish after release");
+        let after = [
+            observe(&pending),
+            observe(&inflight),
+            observe(&completed),
+            observe(&newly_created),
+        ];
+        eprintln!("Verified extension after [pending, inflight, completed, new]: {after:?}");
+        (during, after)
+    });
+
+    // Use the existing SendLastStateProof receive/verification/commit path.
+    // No manual update_last_state/advance pair substitutes for that execution.
+    fixture.prove_tip(21).await;
+    assert_eq!(
+        fixture
+            .chain
+            .client_storage()
+            .get_tip_header()
+            .calc_header_hash(),
+        t2
+    );
+    drop(advanced_guard);
+    let (during, after) = caller
+        .join()
+        .expect("Verified extension caller must finish");
+    eprintln!("Verified extension verified T1 -> T2 extension finished and caller joined before assertions");
+    let expected = [
+        "Added".to_owned(),
+        "Fetching".to_owned(),
+        expected_completed,
+        "Added".to_owned(),
+    ];
+    assert_eq!(
+        (during, after),
+        (expected.clone(), expected),
+        "Verified extension verified extension must preserve operations during publication and after advancement"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -430,11 +555,11 @@ async fn verified_tip_extensions_preserve_pending_inflight_and_completed_revalid
     let mut fixture = fixture();
     let hash = fixture.hash(3);
     fixture.cache(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     fixture.prove_tip(21).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Added { .. }
     ));
     let requests = fixture.dispatch().await;
@@ -442,25 +567,22 @@ async fn verified_tip_extensions_preserve_pending_inflight_and_completed_revalid
     assert_eq!(requests[0].1.last_hash(), fixture.header(21).hash());
     fixture.prove_tip(22).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetching { .. }
     ));
-    let mut newer = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut newer);
+    let newer = fixture.service.revalidate_header(&hash).unwrap();
+    newer.status().unwrap();
     let response = fixture.response(21, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response).await;
     fixture.prove_tip(23).await;
     for _ in 0..3 {
-        let FetchStatus::Fetched { data } = fixture.poll(&hash, &mut options) else {
+        let FetchStatus::Fetched { data } = handle.status().unwrap() else {
             panic!("ordinary chain advancement discarded fresh verification");
         };
         assert_eq!(data.hash, hash);
         assert_eq!(u64::from(data.inner.number), 3);
     }
-    assert!(matches!(
-        fixture.poll(&hash, &mut newer),
-        FetchStatus::Added { .. }
-    ));
+    assert!(matches!(newer.status().unwrap(), FetchStatus::Added { .. }));
     let requests = fixture.dispatch().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1.last_hash(), fixture.header(23).hash());
@@ -468,7 +590,7 @@ async fn verified_tip_extensions_preserve_pending_inflight_and_completed_revalid
     fixture.receive(requests[0].0, response).await;
     fixture.prove_tip(24).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut newer),
+        newer.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
     fixture.prove_tip(123).await;
@@ -479,7 +601,7 @@ async fn verified_tip_extensions_preserve_pending_inflight_and_completed_revalid
         .iter()
         .any(|(_, hash)| *hash == fixture.header(21).hash()));
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
     assert!(fixture.dispatch().await.is_empty());
@@ -490,36 +612,30 @@ async fn verified_fork_invalidates_inflight_and_completed_revalidations() {
     let mut fixture = fixture();
     fixture.prove_tip(21).await;
     let hash = fixture.hash(3);
-    let mut completed = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut completed);
+    let completed = fixture.service.revalidate_header(&hash).unwrap();
+    completed.status().unwrap();
     let requests = fixture.dispatch().await;
     let response = fixture.response(21, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response.clone()).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut completed),
+        completed.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
-    let mut inflight = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut inflight);
+    let inflight = fixture.service.revalidate_header(&hash).unwrap();
+    inflight.status().unwrap();
     let requests = fixture.dispatch().await;
     fixture.chain.rollback_to(20, Default::default());
     fixture.chain.mine_to_with(22, |block| {
         block.as_advanced_builder().nonce(42u128).build()
     });
     fixture.prove_tip(22).await;
-    for options in [&mut completed, &mut inflight] {
-        assert!(fixture
-            .service
-            .fetch_header_with_options(&hash, options)
-            .is_err());
+    for handle in [&completed, &inflight] {
+        assert!(handle.status().is_err());
     }
-    let mut newer = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut newer);
+    let newer = fixture.service.revalidate_header(&hash).unwrap();
+    newer.status().unwrap();
     fixture.receive(requests[0].0, response).await;
-    assert!(matches!(
-        fixture.poll(&hash, &mut newer),
-        FetchStatus::Added { .. }
-    ));
+    assert!(matches!(newer.status().unwrap(), FetchStatus::Added { .. }));
     assert!(matches!(
         fixture.service.fetch_header(&hash),
         FetchStatus::Fetched { .. }
@@ -530,46 +646,37 @@ async fn verified_fork_invalidates_inflight_and_completed_revalidations() {
     let response = fixture.response(22, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut newer),
+        newer.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
-    assert!(fixture
-        .service
-        .fetch_header_with_options(&hash, &mut completed)
-        .is_err());
+    assert!(completed.status().is_err());
     assert!(fixture.dispatch().await.is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn untracked_tip_changes_before_dispatch_and_after_completion_require_new_options() {
+async fn untracked_tip_changes_before_dispatch_and_after_completion_require_new_handles() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     fixture.chain.mine_to(21);
     fixture.accept_tip(21);
-    assert!(fixture
-        .service
-        .fetch_header_with_options(&hash, &mut options)
-        .is_err());
+    assert!(handle.status().is_err());
     assert!(fixture.dispatch().await.is_empty());
     fixture.add_peer(2);
-    let mut fresh = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut fresh);
+    let fresh = fixture.service.revalidate_header(&hash).unwrap();
+    fresh.status().unwrap();
     let requests = fixture.dispatch().await;
     assert_eq!(requests.len(), 1);
     let response = fixture.response(21, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut fresh),
+        fresh.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
     fixture.chain.mine_to(22);
     fixture.accept_tip(22);
-    assert!(fixture
-        .service
-        .fetch_header_with_options(&hash, &mut fresh)
-        .is_err());
+    assert!(fresh.status().is_err());
     assert!(matches!(
         fixture.service.fetch_header(&hash),
         FetchStatus::Fetched { .. }
@@ -580,38 +687,38 @@ async fn untracked_tip_changes_before_dispatch_and_after_completion_require_new_
 async fn missing_forced_result_is_terminal_and_preserves_ordinary_retry_behavior() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     fixture.service.fetch_header(&hash);
     let requests = fixture.dispatch().await;
     let missing = fixture.response(20, &[], &[], std::slice::from_ref(&hash));
     fixture.receive(requests[0].0, missing).await;
-    assert_eq!(fixture.poll(&hash, &mut options), FetchStatus::NotFound);
+    assert_eq!(handle.status().unwrap(), FetchStatus::NotFound);
     assert_eq!(fixture.service.fetch_header(&hash), FetchStatus::NotFound);
     assert!(matches!(
         fixture.service.fetch_header(&hash),
         FetchStatus::Added { .. }
     ));
-    assert_eq!(fixture.poll(&hash, &mut options), FetchStatus::NotFound);
-    let mut retry = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut retry);
+    assert_eq!(handle.status().unwrap(), FetchStatus::NotFound);
+    let retry = fixture.service.revalidate_header(&hash).unwrap();
+    retry.status().unwrap();
     let requests = fixture.dispatch().await;
     assert_eq!(requests.len(), 1);
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut retry),
+        retry.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
-    assert_eq!(fixture.poll(&hash, &mut options), FetchStatus::NotFound);
+    assert_eq!(handle.status().unwrap(), FetchStatus::NotFound);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn timeout_retries_on_another_peer_and_ignores_the_old_attempt() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     let requests = fixture.dispatch().await;
     let response = fixture.response(20, &[3], &[3], &[]);
     let time = faketime();
@@ -622,7 +729,7 @@ async fn timeout_retries_on_another_peer_and_ignores_the_old_attempt() {
         .await;
     fixture.network.sent_messages().borrow_mut().clear();
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Added { .. }
     ));
     fixture.add_peer(2);
@@ -631,12 +738,12 @@ async fn timeout_retries_on_another_peer_and_ignores_the_old_attempt() {
     assert_ne!(requests[0].0, retried[0].0);
     fixture.receive(requests[0].0, response.clone()).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetching { .. }
     ));
     fixture.receive(retried[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
 }
@@ -645,8 +752,8 @@ async fn timeout_retries_on_another_peer_and_ignores_the_old_attempt() {
 async fn disconnect_retries_both_forced_and_ordinary_fetches() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     fixture.service.fetch_header(&hash);
     let requests = fixture.dispatch().await;
     fixture
@@ -654,7 +761,7 @@ async fn disconnect_retries_both_forced_and_ordinary_fetches() {
         .disconnected(fixture.network.context(), requests[0].0)
         .await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Added { .. }
     ));
     assert!(matches!(
@@ -667,7 +774,7 @@ async fn disconnect_retries_both_forced_and_ordinary_fetches() {
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.receive(retried[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
     assert!(matches!(
@@ -682,8 +789,8 @@ async fn invalid_mmr_proof_does_not_revalidate_a_cached_header() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
     fixture.cache(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     let requests = fixture.dispatch().await;
     let response = fixture.response(20, &[3], &[4], &[]);
     fixture.receive(requests[0].0, response).await;
@@ -691,7 +798,7 @@ async fn invalid_mmr_proof_does_not_revalidate_a_cached_header() {
         .network
         .banned_since(requests[0].0, StatusCode::InvalidProof));
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Added { .. }
     ));
     assert!(matches!(
@@ -704,41 +811,42 @@ async fn invalid_mmr_proof_does_not_revalidate_a_cached_header() {
 async fn ordinary_fetch_started_after_force_dispatch_keeps_its_own_state() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     let requests = fixture.dispatch().await;
     fixture.service.fetch_header(&hash);
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response.clone()).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
     assert!(matches!(
         fixture.peers.get_header_fetch_info(&hash.pack()),
         Some((_, 0, false))
     ));
+    // The forced result is cached and visible to ordinary callers, but does not
+    // clear ordinary work which was absent from its dispatch-time membership.
+    assert!(matches!(
+        fixture.service.fetch_header(&hash),
+        FetchStatus::Fetched { .. }
+    ));
     let ordinary = fixture.dispatch().await;
     assert_eq!(ordinary.len(), 1);
     fixture.receive(ordinary[0].0, response).await;
     assert!(fixture.peers.get_header_fetch_info(&hash.pack()).is_none());
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dropped_options_release_pending_tracking_and_options_are_bound_to_one_hash() {
+async fn dropping_a_handle_releases_pending_tracking() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
-    assert!(fixture
-        .service
-        .fetch_header_with_options(&fixture.hash(4), &mut options)
-        .is_err());
-    drop(options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    drop(handle);
     assert!(fixture.dispatch().await.is_empty());
     assert!(fixture.peers.fetching_headers().is_empty());
 }
@@ -748,29 +856,26 @@ async fn pending_forced_fetches_share_one_batch_and_keep_results_separate() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
     let missing_hash = fixture.hash(4);
-    let mut first = FetchHeaderOptions::new(true);
-    let mut second = FetchHeaderOptions::new(true);
-    let mut missing = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut first);
-    fixture.poll(&hash, &mut second);
-    fixture.poll(&missing_hash, &mut missing);
+    let first = fixture.service.revalidate_header(&hash).unwrap();
+    first.status().unwrap();
+    let second = fixture.service.revalidate_header(&hash).unwrap();
+    second.status().unwrap();
+    let missing = fixture.service.revalidate_header(&missing_hash).unwrap();
+    missing.status().unwrap();
     let requests = fixture.dispatch().await;
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].1.block_hashes().len(), 2);
     let response = fixture.response(20, &[3], &[3], &[missing_hash.clone()]);
     fixture.receive(requests[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut first),
+        first.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
     assert!(matches!(
-        fixture.poll(&hash, &mut second),
+        second.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
-    assert_eq!(
-        fixture.poll(&missing_hash, &mut missing),
-        FetchStatus::NotFound
-    );
+    assert_eq!(missing.status().unwrap(), FetchStatus::NotFound);
     assert!(fixture.dispatch().await.is_empty());
     assert!(fixture.peers.fetching_headers().is_empty());
 }
@@ -779,32 +884,29 @@ async fn pending_forced_fetches_share_one_batch_and_keep_results_separate() {
 async fn stale_forced_response_does_not_discard_a_later_ordinary_fetch() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut old = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut old);
+    let old = fixture.service.revalidate_header(&hash).unwrap();
+    old.status().unwrap();
     let requests = fixture.dispatch().await;
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.chain.mine_to(21);
     fixture.accept_tip(21);
     fixture.service.fetch_header(&hash);
     fixture.receive(requests[0].0, response).await;
-    assert!(fixture
-        .service
-        .fetch_header_with_options(&hash, &mut old)
-        .is_err());
+    assert!(old.status().is_err());
     assert!(fixture.service.get_header(&hash).is_none());
     assert!(matches!(
         fixture.service.fetch_header(&hash),
         FetchStatus::Added { .. }
     ));
     fixture.add_peer(2);
-    let mut fresh = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut fresh);
+    let fresh = fixture.service.revalidate_header(&hash).unwrap();
+    fresh.status().unwrap();
     let requests = fixture.dispatch().await;
     assert_eq!(requests.len(), 1);
     let response = fixture.response(21, &[3], &[3], &[]);
     fixture.receive(requests[0].0, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut fresh),
+        fresh.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
 }
@@ -816,8 +918,8 @@ async fn transaction_proof_cache_writes_and_cleanup_do_not_complete_header_reval
     let snapshot = fixture.chain.shared().snapshot();
     let block = snapshot.get_block_by_number(3).unwrap();
     let transaction = block.transactions()[0].clone();
-    let mut options = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut options);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    handle.status().unwrap();
     fixture.service.fetch_header(&hash);
     fixture
         .service
@@ -882,7 +984,7 @@ async fn transaction_proof_cache_writes_and_cleanup_do_not_complete_header_reval
         FetchStatus::Fetched { .. }
     ));
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetching { .. }
     ));
     assert!(fixture.peers.get_header_fetch_info(&hash.pack()).is_none());
@@ -890,17 +992,17 @@ async fn transaction_proof_cache_writes_and_cleanup_do_not_complete_header_reval
     let response = fixture.response(20, &[3], &[3], &[]);
     fixture.receive(peer, response).await;
     assert!(matches!(
-        fixture.poll(&hash, &mut options),
+        handle.status().unwrap(),
         FetchStatus::Fetched { .. }
     ));
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn dropping_inflight_options_releases_tracking_without_discarding_ordinary_work() {
+async fn dropping_inflight_handles_releases_tracking_without_discarding_ordinary_work() {
     let mut fixture = fixture();
     let hash = fixture.hash(3);
-    let mut abandoned = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut abandoned);
+    let abandoned = fixture.service.revalidate_header(&hash).unwrap();
+    abandoned.status().unwrap();
     fixture.service.fetch_header(&hash);
     let requests = fixture.dispatch().await;
     drop(abandoned);
@@ -913,8 +1015,8 @@ async fn dropping_inflight_options_releases_tracking_without_discarding_ordinary
     ));
     assert!(fixture.peers.fetching_headers().is_empty());
 
-    let mut abandoned = FetchHeaderOptions::new(true);
-    fixture.poll(&hash, &mut abandoned);
+    let abandoned = fixture.service.revalidate_header(&hash).unwrap();
+    abandoned.status().unwrap();
     let requests = fixture.dispatch().await;
     drop(abandoned);
     let time = faketime();
@@ -933,4 +1035,84 @@ async fn dropping_inflight_options_releases_tracking_without_discarding_ordinary
         .unwrap()
         .get_blocks_proof_request()
         .is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handle_creation_queues_its_bound_hash_without_a_status_call() {
+    let mut fixture = fixture();
+    let hash = fixture.hash(3);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    let requests = fixture.dispatch().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].1.block_hashes().get(0), Some(hash.pack()));
+    assert!(matches!(
+        handle.status().unwrap(),
+        FetchStatus::Fetching { .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handle_lifetime_follows_service_clones_not_unrelated_peers_owners() {
+    let fixture = fixture();
+    let hash = fixture.hash(3);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    let clone = fixture.service.clone();
+    drop(fixture.service);
+    assert!(matches!(
+        handle.status().unwrap(),
+        FetchStatus::Added { .. }
+    ));
+    drop(clone);
+    // The protocol and fixture still retain Peers, but not this service context.
+    assert!(!fixture.peers.fetching_headers().is_empty());
+    let error = handle.status().unwrap_err().to_string();
+    assert!(error.contains("client is no longer available"), "{error}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completed_handle_errors_after_its_originating_service_is_destroyed() {
+    let mut fixture = fixture();
+    let hash = fixture.hash(3);
+    let handle = fixture.service.revalidate_header(&hash).unwrap();
+    let requests = fixture.dispatch().await;
+    let response = fixture.response(20, &[3], &[3], &[]);
+    fixture.receive(requests[0].0, response).await;
+    assert!(matches!(
+        handle.status().unwrap(),
+        FetchStatus::Fetched { .. }
+    ));
+    drop(fixture.service);
+    assert!(handle.status().is_err());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handles_from_distinct_clients_never_poll_another_clients_request() {
+    let mut first = fixture();
+    let mut second = fixture();
+    let first_hash = first.hash(3);
+    let second_hash = second.hash(4);
+    let first_handle = first.service.revalidate_header(&first_hash).unwrap();
+    let second_handle = second.service.revalidate_header(&second_hash).unwrap();
+    let requests = first.dispatch().await;
+    assert_eq!(requests[0].1.block_hashes().get(0), Some(first_hash.pack()));
+    let requests = second.dispatch().await;
+    assert_eq!(
+        requests[0].1.block_hashes().get(0),
+        Some(second_hash.pack())
+    );
+    drop(first);
+    assert!(first_handle.status().is_err());
+    assert!(matches!(
+        second_handle.status().unwrap(),
+        FetchStatus::Fetching { .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn handle_creation_rejects_genesis_without_queueing_work() {
+    let mut fixture = fixture();
+    let hash = fixture.hash(3);
+    fixture.accept_tip(0);
+    assert!(fixture.service.revalidate_header(&hash).is_err());
+    assert!(fixture.peers.fetching_headers().is_empty());
 }

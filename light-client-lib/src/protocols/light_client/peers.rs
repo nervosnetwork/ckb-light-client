@@ -24,6 +24,7 @@ use crate::{
     protocols::{Status, StatusCode, BAD_MESSAGE_ALLOWED_EACH_HOUR, MESSAGE_TIMEOUT},
     read_lock,
     service::FetchStatus,
+    storage::{LightClientStorage, Storage},
     types::{Mutex, RwLock},
     write_lock,
 };
@@ -93,7 +94,6 @@ pub struct FetchInfo {
 pub(crate) struct HeaderRevalidation {
     pub(crate) block_hash: Byte32,
     chain: Arc<()>,
-    owner: Weak<Peers>,
     added_ts: u64,
     state: StateMutex<HeaderRevalidationState>,
 }
@@ -116,23 +116,13 @@ enum HeaderRevalidationState {
 impl HeaderRevalidation {
     pub(crate) fn status(
         &self,
-        peers: &Arc<Peers>,
-        block_hash: &Byte32,
-        current_anchor: &Byte32,
+        chain: &Arc<()>,
     ) -> crate::error::Result<FetchStatus<ckb_jsonrpc_types::HeaderView>> {
-        if self.block_hash != *block_hash
-            || !self
-                .owner
-                .upgrade()
-                .is_some_and(|owner| Arc::ptr_eq(&owner, peers))
-        {
-            return Err(Error::runtime(
-                "fetch options belong to another header or client",
-            ));
-        }
-        let chain = peers.header_revalidation_chain(current_anchor);
-        let mut state = self.state.lock().expect("header revalidation lock");
-        if !Arc::ptr_eq(&self.chain, &chain) {
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| Error::runtime("header revalidation operation state is poisoned"))?;
+        if !Arc::ptr_eq(&self.chain, chain) {
             *state = HeaderRevalidationState::Stale;
         }
         match &*state {
@@ -147,7 +137,7 @@ impl HeaderRevalidation {
             }),
             HeaderRevalidationState::NotFound => Ok(FetchStatus::NotFound),
             HeaderRevalidationState::Stale => Err(Error::runtime(
-                "accepted chain changed or continuity is unknown; use new fetch options to revalidate",
+                "accepted chain changed or continuity is unknown; create a new revalidation handle",
             )),
         }
     }
@@ -294,7 +284,7 @@ pub(crate) struct BlocksProofRequest {
     content: packed::GetBlocksProof,
     when_sent: u64,
     should_get_blocks: bool,
-    normal_fetch_hashes: Vec<Byte32>,
+    normal_fetch_hashes: HashSet<Byte32>,
     revalidations: Vec<Weak<HeaderRevalidation>>,
 }
 
@@ -537,7 +527,7 @@ impl BlocksProofRequest {
             content,
             when_sent,
             should_get_blocks,
-            normal_fetch_hashes,
+            normal_fetch_hashes: normal_fetch_hashes.into_iter().collect(),
             revalidations,
         }
     }
@@ -554,7 +544,7 @@ impl BlocksProofRequest {
             .collect()
     }
 
-    pub(crate) fn normal_fetch_hashes(&self) -> &[Byte32] {
+    pub(crate) fn normal_fetch_hashes(&self) -> &HashSet<Byte32> {
         &self.normal_fetch_hashes
     }
 
@@ -1393,13 +1383,12 @@ impl Peers {
     pub(crate) fn revalidate_header(
         self: &Arc<Self>,
         block_hash: Byte32,
-        anchor_hash: Byte32,
+        chain: Arc<()>,
         now: u64,
     ) -> Arc<HeaderRevalidation> {
         let request = Arc::new(HeaderRevalidation {
             block_hash: block_hash.clone(),
-            chain: self.header_revalidation_chain(&anchor_hash),
-            owner: Arc::downgrade(self),
+            chain,
             added_ts: now,
             state: StateMutex::new(HeaderRevalidationState::Pending),
         });
@@ -1415,23 +1404,47 @@ impl Peers {
         request
     }
 
-    pub(crate) fn header_revalidation_chain(&self, current_anchor: &Byte32) -> Arc<()> {
+    /// Read the accepted tip and its identity under the publication lock. Reading
+    /// the tip before taking this lock could roll the identity back to an old tip.
+    pub(crate) fn header_revalidation_chain(&self, storage: &Storage) -> (packed::Header, Arc<()>) {
+        self.try_header_revalidation_chain(storage)
+            .expect("header revalidation chain lock")
+    }
+
+    /// Public handle paths propagate poison without recovering partial state.
+    /// Existing infallible scheduler/protocol callers retain fail-stop behavior.
+    pub(crate) fn try_header_revalidation_chain(
+        &self,
+        storage: &Storage,
+    ) -> crate::error::Result<(packed::Header, Arc<()>)> {
         let mut chain = self
             .header_revalidation_chain
             .lock()
-            .expect("header revalidation chain lock");
-        if chain.tip_hash != *current_anchor {
-            chain.tip_hash = current_anchor.clone();
+            .map_err(|_| Error::runtime("accepted-chain publication state is poisoned"))?;
+        let tip = storage.get_tip_header();
+        #[cfg(test)]
+        revalidation_publication_tests::AFTER_TIP_READ.with(|hook| {
+            if let Some(hook) = hook.borrow().as_ref() {
+                hook();
+            }
+        });
+        let current_anchor = tip.calc_header_hash();
+        if chain.tip_hash != current_anchor {
+            chain.tip_hash = current_anchor;
             chain.identity = Arc::new(());
         }
-        Arc::clone(&chain.identity)
+        Ok((tip, Arc::clone(&chain.identity)))
     }
 
+    /// Publish storage and identity as one transition for revalidation readers.
+    /// `publish` must only write storage: no awaits, peer/map/operation locks, or
+    /// calls back into the revalidation methods while this lock is held.
     pub(crate) fn advance_header_revalidation_tip(
         &self,
         previous: &Byte32,
         tip: &HeaderView,
         last_headers: &[HeaderView],
+        publish: impl FnOnce(),
     ) {
         let extends_previous = tip.parent_hash() == *previous
             || last_headers.iter().any(|header| header.hash() == *previous);
@@ -1439,14 +1452,15 @@ impl Peers {
             .header_revalidation_chain
             .lock()
             .expect("header revalidation chain lock");
+        publish();
         if chain.tip_hash != *previous || !extends_previous {
             chain.identity = Arc::new(());
         }
         chain.tip_hash = tip.hash();
     }
 
-    pub(crate) fn cleanup_header_revalidations(&self, current_anchor: &Byte32) {
-        let chain = self.header_revalidation_chain(current_anchor);
+    pub(crate) fn cleanup_header_revalidations(&self, storage: &Storage) {
+        let (_, chain) = self.header_revalidation_chain(storage);
         self.fetching_headers.retain(|_, info| {
             info.revalidations.retain(|request| {
                 request
@@ -1460,15 +1474,18 @@ impl Peers {
     /// Clean up old missing entries from fetching_headers to prevent unbounded memory growth
     /// This is called periodically to remove uncle blocks that were marked as missing
     /// but are no longer needed (older than max_age_ms)
-    pub(crate) fn cleanup_old_missing_headers(&self, max_age_ms: u64) {
+    pub(crate) fn cleanup_old_missing_headers(&self, max_age_ms: u64) -> usize {
         let now = unix_time_as_millis();
         let mut removed_count = 0;
 
         self.fetching_headers.retain(|_hash, info| {
             if info.ordinary && info.missing && now.saturating_sub(info.added_ts) > max_age_ms {
-                removed_count += 1;
                 info.ordinary = false;
-                !info.revalidations.is_empty()
+                let retain = !info.revalidations.is_empty();
+                if !retain {
+                    removed_count += 1;
+                }
+                retain
             } else {
                 true // Keep this entry
             }
@@ -1481,6 +1498,7 @@ impl Peers {
                 max_age_ms
             );
         }
+        removed_count
     }
 
     // mark all fetching hashes (headers/txs) as timeout
@@ -2345,4 +2363,349 @@ fn if_verifiable_headers_are_same(lhs: &VerifiableHeader, rhs: &VerifiableHeader
                     .expect("checked: is not none")
                     .as_slice()))
         && lhs.total_difficulty() == rhs.total_difficulty()
+}
+
+#[cfg(test)]
+mod revalidation_publication_tests {
+    use super::*;
+    use ckb_types::{
+        core::{EpochNumberWithFraction, HeaderBuilder},
+        U256,
+    };
+    use std::{sync::mpsc, sync::TryLockError, thread, time::Duration};
+
+    thread_local! {
+        pub(super) static AFTER_TIP_READ: std::cell::RefCell<Option<Box<dyn Fn()>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    struct ReleaseOnDrop(mpsc::Sender<()>);
+
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    fn header(number: u64) -> HeaderView {
+        HeaderBuilder::default()
+            .number(number)
+            .epoch(EpochNumberWithFraction::new(0, number, 100))
+            .build()
+    }
+
+    #[test]
+    fn tip_publication_serializes_identity_snapshots() {
+        const WAIT: Duration = Duration::from_secs(30);
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        let t1 = header(20);
+        let t2 = header(21)
+            .as_advanced_builder()
+            .parent_hash(t1.hash())
+            .build();
+        storage.update_last_state(&U256::from(20u64), &t1.data(), &[]);
+        let peers = Arc::new(Peers::new(1, 1, (0, Default::default()), 0));
+        let (_, identity) = peers.header_revalidation_chain(&storage);
+
+        let (sampled_tx, sampled_rx) = mpsc::channel();
+        let (published_tx, published_rx) = mpsc::channel();
+        let (attempted_tx, attempted_rx) = mpsc::channel();
+        let (observed_tx, observed_rx) = mpsc::channel();
+        let reader_peers = Arc::clone(&peers);
+        let reader_storage = storage.clone();
+        let reader = thread::spawn(move || {
+            // A previously sampled T1 must never be supplied to the identity
+            // lookup after the publication. The accessor reads storage itself.
+            sampled_tx.send(reader_storage.get_tip_header()).unwrap();
+            published_rx.recv_timeout(WAIT).unwrap();
+            attempted_tx.send(()).unwrap();
+            let observed = reader_peers.header_revalidation_chain(&reader_storage);
+            observed_tx.send(observed).unwrap();
+        });
+        assert_eq!(
+            sampled_rx.recv_timeout(WAIT).unwrap().calc_header_hash(),
+            t1.hash()
+        );
+        peers.advance_header_revalidation_tip(&t1.hash(), &t2, &[], || {
+            storage.update_last_state(&U256::from(21u64), &t2.data(), &[]);
+            // This is the actual old Verified extension window: storage contains T2 while the
+            // identity's tip is still T1. Snapshot readers must be excluded.
+            assert!(matches!(
+                peers.header_revalidation_chain.try_lock(),
+                Err(TryLockError::WouldBlock)
+            ));
+            published_tx.send(()).unwrap();
+            attempted_rx.recv_timeout(WAIT).unwrap();
+            assert!(matches!(
+                observed_rx.try_recv(),
+                Err(mpsc::TryRecvError::Empty)
+            ));
+            eprintln!("Publication: reader excluded inside storage-T2/identity-T1 window");
+        });
+        let (observed_tip, observed_identity) = observed_rx.recv_timeout(WAIT).unwrap();
+        reader.join().unwrap();
+        assert_eq!(observed_tip.calc_header_hash(), t2.hash());
+        assert!(Arc::ptr_eq(&identity, &observed_identity));
+        eprintln!("Publication: reader obtained coherent T2 with the preserved extension identity");
+    }
+
+    #[test]
+    fn unknown_continuity_replaces_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        let t1 = header(20);
+        let t2 = header(22);
+        storage.update_last_state(&U256::from(20u64), &t1.data(), &[]);
+        let peers = Arc::new(Peers::new(1, 1, (0, Default::default()), 0));
+        let (_, identity) = peers.header_revalidation_chain(&storage);
+        let hash = header(3).hash();
+        let old = peers.revalidate_header(hash.clone(), Arc::clone(&identity), 1);
+        assert_ne!(t2.parent_hash(), t1.hash());
+        // No recent headers are available to establish the skipped continuity.
+        peers.advance_header_revalidation_tip(&t1.hash(), &t2, &[], || {
+            storage.update_last_state(&U256::from(22u64), &t2.data(), &[]);
+        });
+        let (_, current) = peers.header_revalidation_chain(&storage);
+        assert!(!Arc::ptr_eq(&identity, &current));
+        assert!(old.status(&current).is_err());
+        let new = peers.revalidate_header(hash.clone(), Arc::clone(&current), 2);
+        assert!(matches!(
+            new.status(&current),
+            Ok(FetchStatus::Added { .. })
+        ));
+        eprintln!(
+            "Publication: unknown continuity invalidated old options and retained a new operation"
+        );
+    }
+
+    #[test]
+    fn tip_read_excludes_a_concurrent_publication() {
+        const WAIT: Duration = Duration::from_secs(30);
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        let t1 = header(20);
+        let t2 = header(21)
+            .as_advanced_builder()
+            .parent_hash(t1.hash())
+            .build();
+        storage.update_last_state(&U256::from(20u64), &t1.data(), &[]);
+        let peers = Arc::new(Peers::new(1, 1, (0, Default::default()), 0));
+        let (_, original_identity) = peers.header_revalidation_chain(&storage);
+        let (read_tx, read_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let release_guard = ReleaseOnDrop(release_tx);
+        let (snapshot_tx, snapshot_rx) = mpsc::channel();
+        let reader_peers = Arc::clone(&peers);
+        let hook_peers = Arc::clone(&peers);
+        let reader_storage = storage.clone();
+        let reader = thread::spawn(move || {
+            AFTER_TIP_READ.with(|slot| {
+                *slot.borrow_mut() = Some(Box::new(move || {
+                    assert!(matches!(
+                        hook_peers.header_revalidation_chain.try_lock(),
+                        Err(TryLockError::WouldBlock)
+                    ));
+                    read_tx.send(()).unwrap();
+                    release_rx.recv_timeout(WAIT).unwrap();
+                }));
+            });
+            let snapshot = reader_peers.header_revalidation_chain(&reader_storage);
+            AFTER_TIP_READ.with(|slot| {
+                slot.borrow_mut().take();
+            });
+            snapshot_tx.send(snapshot).unwrap();
+        });
+        read_rx.recv_timeout(WAIT).unwrap();
+        let (attempted_tx, attempted_rx) = mpsc::channel();
+        let (finished_tx, finished_rx) = mpsc::channel();
+        let writer_peers = Arc::clone(&peers);
+        let writer_storage = storage.clone();
+        let previous = t1.hash();
+        let new_tip = t2.clone();
+        let writer = thread::spawn(move || {
+            assert!(matches!(
+                writer_peers.header_revalidation_chain.try_lock(),
+                Err(TryLockError::WouldBlock)
+            ));
+            attempted_tx.send(()).unwrap();
+            writer_peers.advance_header_revalidation_tip(&previous, &new_tip, &[], || {
+                writer_storage.update_last_state(&U256::from(21u64), &new_tip.data(), &[]);
+            });
+            finished_tx.send(()).unwrap();
+        });
+        attempted_rx.recv_timeout(WAIT).unwrap();
+        assert_eq!(storage.get_tip_header().calc_header_hash(), t1.hash());
+        drop(release_guard);
+        let (read_tip, read_identity) = snapshot_rx.recv_timeout(WAIT).unwrap();
+        finished_rx.recv_timeout(WAIT).unwrap();
+        reader.join().unwrap();
+        writer.join().unwrap();
+        assert_eq!(read_tip.calc_header_hash(), t1.hash());
+        assert!(Arc::ptr_eq(&read_identity, &original_identity));
+        let (published_tip, published_identity) = peers.header_revalidation_chain(&storage);
+        assert_eq!(published_tip.calc_header_hash(), t2.hash());
+        assert!(Arc::ptr_eq(&published_identity, &original_identity));
+        eprintln!("Snapshot: reader held a coherent T1 snapshot; writer published T2 only after reader release");
+    }
+
+    #[test]
+    fn dispatch_membership_matches_the_bounded_hash_batch() {
+        use crate::protocols::GET_BLOCKS_PROOF_LIMIT;
+
+        let hashes: Vec<_> = (0..GET_BLOCKS_PROOF_LIMIT)
+            .map(|number| {
+                let mut bytes = [0u8; 32];
+                bytes[..8].copy_from_slice(&(number as u64).to_le_bytes());
+                Byte32::from_slice(&bytes).unwrap()
+            })
+            .collect();
+        let mut ordinary = hashes.iter().step_by(2).cloned().collect::<Vec<_>>();
+        ordinary.push(hashes[0].clone());
+        let content = packed::GetBlocksProof::new_builder()
+            .block_hashes(hashes.clone().pack())
+            .build();
+        let request = super::BlocksProofRequest::new(content, 1, false, ordinary.clone(), vec![]);
+        assert_eq!(
+            request.normal_fetch_hashes().len(),
+            GET_BLOCKS_PROOF_LIMIT.div_ceil(2)
+        );
+        for hash in &hashes {
+            assert_eq!(
+                request.normal_fetch_hashes().contains(hash),
+                ordinary.contains(hash)
+            );
+        }
+        let mut unrelated = [0xff; 32];
+        unrelated[31] = 0xfe;
+        assert!(!request
+            .normal_fetch_hashes()
+            .contains(&Byte32::from_slice(&unrelated).unwrap()));
+        assert!(request.check_block_hashes(&hashes[..500], &hashes[500..]));
+        assert!(request.check_block_hashes(&[], &hashes));
+    }
+
+    #[test]
+    fn cleanup_counts_only_removed_entries_and_keeps_forced_work() {
+        let peers = Arc::new(Peers::new(1, 1, (0, Default::default()), 0));
+        let identity = Arc::new(());
+        let retained_hash = header(3).hash();
+        let removed_hash = header(4).hash();
+        let recent_hash = header(5).hash();
+        let forced_hash = header(6).hash();
+        let retained = peers.revalidate_header(retained_hash.clone(), Arc::clone(&identity), 1);
+        let forced = peers.revalidate_header(forced_hash.clone(), Arc::clone(&identity), 1);
+        peers.fetching_headers.insert(
+            removed_hash.clone(),
+            super::FetchInfo::new(1, 0, false, true),
+        );
+        {
+            let mut info = peers.fetching_headers.get_mut(&retained_hash).unwrap();
+            info.ordinary = true;
+            info.missing = true;
+        }
+        peers.fetching_headers.insert(
+            recent_hash.clone(),
+            super::FetchInfo::new(ckb_systemtime::unix_time_as_millis(), 0, false, true),
+        );
+        assert_eq!(peers.cleanup_old_missing_headers(60_000), 1);
+        assert!(!peers.fetching_headers.contains_key(&removed_hash));
+        assert!(!peers.fetching_headers.get(&retained_hash).unwrap().ordinary);
+        assert!(peers.fetching_headers.contains_key(&recent_hash));
+        assert!(peers.fetching_headers.contains_key(&forced_hash));
+        assert!(retained.is_pending());
+        assert!(forced.is_pending());
+        assert_eq!(peers.cleanup_old_missing_headers(60_000), 0);
+    }
+
+    fn handle_service(
+        storage: Storage,
+        peers: Arc<Peers>,
+    ) -> crate::service::LightClientChainService {
+        crate::service::LightClientChainService::new(
+            crate::storage::StorageWithChainData::new(
+                storage,
+                peers,
+                Arc::new(crate::types::RwLock::new(
+                    crate::protocols::PendingTxs::default(),
+                )),
+            ),
+            Arc::new(ckb_chain_spec::consensus::ConsensusBuilder::default().build()),
+        )
+    }
+
+    #[test]
+    fn poisoned_operation_returns_error_instead_of_retained_success() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        storage.update_last_state(&U256::from(20u64), &header(20).data(), &[]);
+        let peers = Arc::new(Peers::new(1, 1, (0, Default::default()), 0));
+        let service = handle_service(storage, Arc::clone(&peers));
+        let hash = header(3).hash();
+        let handle = service.revalidate_header(&hash.unpack()).unwrap();
+        let request = peers.fetching_headers.get(&hash).unwrap().revalidations[0]
+            .upgrade()
+            .unwrap();
+        // A helper-level retained-result fixture; proof attribution is exercised
+        // by the real proof-processing tests in fetch_header.
+        *request.state.lock().unwrap() = HeaderRevalidationState::Fetched(header(3));
+        assert!(matches!(
+            handle.status().unwrap(),
+            FetchStatus::Fetched { .. }
+        ));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _state = request.state.lock().unwrap();
+            panic!("injected operation-state interruption");
+        }));
+        assert!(failure.is_err());
+        assert!(request.state.is_poisoned());
+        let error = handle.status().unwrap_err().to_string();
+        assert!(error.contains("operation state is poisoned"), "{error}");
+        assert!(
+            request.state.is_poisoned(),
+            "polling must not recover the poisoned guard"
+        );
+    }
+
+    #[test]
+    fn interrupted_publication_rejects_completed_handles_and_new_operations() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        let t1 = header(20);
+        let t2 = header(21)
+            .as_advanced_builder()
+            .parent_hash(t1.hash())
+            .build();
+        storage.update_last_state(&U256::from(20u64), &t1.data(), &[]);
+        let peers = Arc::new(Peers::new(1, 1, (0, Default::default()), 0));
+        let service = handle_service(storage.clone(), Arc::clone(&peers));
+        let hash = header(3).hash();
+        let handle = service.revalidate_header(&hash.unpack()).unwrap();
+        let request = peers.fetching_headers.get(&hash).unwrap().revalidations[0]
+            .upgrade()
+            .unwrap();
+        *request.state.lock().unwrap() = HeaderRevalidationState::Fetched(header(3));
+        assert!(matches!(
+            handle.status().unwrap(),
+            FetchStatus::Fetched { .. }
+        ));
+        let failure = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            peers.advance_header_revalidation_tip(&t1.hash(), &t2, &[], || {
+                storage.update_last_state(&U256::from(21u64), &t2.data(), &[]);
+                panic!(
+                    "injected failure after storage publication and before identity advancement"
+                );
+            });
+        }));
+        assert!(failure.is_err());
+        assert_eq!(storage.get_tip_header().calc_header_hash(), t2.hash());
+        assert!(peers.header_revalidation_chain.is_poisoned());
+        let error = handle.status().unwrap_err().to_string();
+        assert!(error.contains("publication state is poisoned"), "{error}");
+        let error = service
+            .revalidate_header(&hash.unpack())
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("publication state is poisoned"), "{error}");
+        assert!(peers.header_revalidation_chain.is_poisoned());
+    }
 }

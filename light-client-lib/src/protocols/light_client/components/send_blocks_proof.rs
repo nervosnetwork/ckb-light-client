@@ -134,6 +134,14 @@ impl<'a> SendBlocksProofProcess<'a> {
             return StatusCode::UnexpectedResponse.into();
         }
 
+        // Protocol processing has one mutable owner, so accepted-tip publication
+        // cannot interleave with this response. Reuse one coherent identity for
+        // every returned and missing header; the snapshot guard is already released.
+        let (_, chain) = self
+            .protocol
+            .peers()
+            .header_revalidation_chain(self.protocol.storage());
+
         // If all blocks are missing.
         if headers.is_empty() {
             if !self.message.proof().is_empty() {
@@ -253,11 +261,6 @@ impl<'a> SendBlocksProofProcess<'a> {
                     .filter_map(|request| request.upgrade())
                     .filter(|request| request.block_hash == block_hash)
                     .collect();
-                let current_anchor = self.protocol.storage().get_tip_header().calc_header_hash();
-                let chain = self
-                    .protocol
-                    .peers()
-                    .header_revalidation_chain(&current_anchor);
                 if normal_fetch
                     || revalidations
                         .iter()
@@ -270,11 +273,6 @@ impl<'a> SendBlocksProofProcess<'a> {
                             extension,
                         });
                 }
-                let current_anchor = self.protocol.storage().get_tip_header().calc_header_hash();
-                let chain = self
-                    .protocol
-                    .peers()
-                    .header_revalidation_chain(&current_anchor);
                 for request in revalidations {
                     request.complete(self.peer_index, &chain, Some(&header));
                 }
@@ -288,11 +286,6 @@ impl<'a> SendBlocksProofProcess<'a> {
         self.protocol
             .peers()
             .mark_fetching_headers_missing(&normal_missing);
-        let current_anchor = self.protocol.storage().get_tip_header().calc_header_hash();
-        let chain = self
-            .protocol
-            .peers()
-            .header_revalidation_chain(&current_anchor);
         for request in original_request.revalidations() {
             if let Some(request) = request.upgrade() {
                 if missing_block_hashes.contains(&request.block_hash) {

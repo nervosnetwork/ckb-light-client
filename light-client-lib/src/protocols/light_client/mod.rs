@@ -57,6 +57,9 @@ pub struct LightClientProtocol {
     mmr_activated_epoch: EpochNumber,
     last_n_blocks: BlockNumber,
     init_blocks_in_transit_per_peer: usize,
+    // WO19 instrumentation: pause this instance at the real publication boundary.
+    #[cfg(test)]
+    after_tip_publication: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 #[async_trait]
@@ -412,16 +415,23 @@ impl LightClientProtocol {
                 }
             }
 
-            self.storage.update_last_state(
-                &new_total_difficulty,
-                &new_prove_state.get_last_header().header().data(),
-                new_prove_state.get_last_headers(),
-            );
             self.peers.advance_header_revalidation_tip(
                 &prev_last_header.calc_header_hash(),
                 new_prove_state.get_last_header().header(),
                 new_prove_state.get_last_headers(),
+                || {
+                    self.storage.update_last_state(
+                        &new_total_difficulty,
+                        &new_prove_state.get_last_header().header().data(),
+                        new_prove_state.get_last_headers(),
+                    );
+                },
             );
+            // The publication pause is outside the lock so test callers can poll.
+            #[cfg(test)]
+            if let Some(hook) = &self.after_tip_publication {
+                hook();
+            }
         }
         self.peers()
             .update_prove_state(peer_index, new_prove_state)?;
@@ -444,11 +454,18 @@ impl LightClientProtocol {
             mmr_activated_epoch,
             last_n_blocks: LAST_N_BLOCKS,
             init_blocks_in_transit_per_peer: INIT_BLOCKS_IN_TRANSIT_PER_PEER,
+            #[cfg(test)]
+            after_tip_publication: None,
         }
     }
 
     pub(crate) fn last_n_blocks(&self) -> BlockNumber {
         self.last_n_blocks
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_after_tip_publication(&mut self, hook: Arc<dyn Fn() + Send + Sync>) {
+        self.after_tip_publication = Some(hook);
     }
 
     #[cfg(test)]
@@ -710,8 +727,7 @@ impl LightClientProtocol {
         self.peers.cleanup_old_missing_headers(MAX_MISSING_AGE_MS);
 
         let tip_header = self.storage.get_tip_header();
-        self.peers
-            .cleanup_header_revalidations(&tip_header.calc_header_hash());
+        self.peers.cleanup_header_revalidations(&self.storage);
         let matched_blocks = self.peers.matched_blocks().read().await;
 
         prove_or_download_matched_blocks(
@@ -724,8 +740,7 @@ impl LightClientProtocol {
     }
 
     async fn fetch_headers_txs(&mut self, nc: &BoxedCKBProtocolContext) {
-        self.peers
-            .cleanup_header_revalidations(&self.storage.get_tip_header().calc_header_hash());
+        self.peers.cleanup_header_revalidations(&self.storage);
         if !self.peers.has_fetching_info() {
             trace!("no fetching headers/transactions needed");
             return;
