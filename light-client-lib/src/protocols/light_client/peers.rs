@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fmt, mem,
     num::NonZeroU32,
+    sync::Arc,
 };
 
 use ckb_network::PeerIndex;
@@ -162,6 +163,7 @@ pub struct ProveState {
 
 #[derive(Clone)]
 pub(crate) struct BlocksProofRequest {
+    owner: Arc<()>,
     content: packed::GetBlocksProof,
     when_sent: u64,
     should_get_blocks: bool,
@@ -176,6 +178,7 @@ pub(crate) struct BlocksRequest {
 
 #[derive(Clone)]
 pub(crate) struct TransactionsProofRequest {
+    owner: Arc<()>,
     content: packed::GetTransactionsProof,
     when_sent: u64,
 }
@@ -400,6 +403,7 @@ impl BlocksProofRequest {
             content,
             when_sent,
             should_get_blocks,
+            owner: Arc::new(()),
         }
     }
 
@@ -457,7 +461,11 @@ impl BlocksRequest {
 
 impl TransactionsProofRequest {
     fn new(content: packed::GetTransactionsProof, when_sent: u64) -> Self {
-        Self { content, when_sent }
+        Self {
+            content,
+            when_sent,
+            owner: Arc::new(()),
+        }
     }
 
     pub(crate) fn last_hash(&self) -> Byte32 {
@@ -1603,6 +1611,62 @@ impl Peers {
             });
         }
     }
+    /// Retire only the locally captured operation, including across handler awaits.
+    /// Retry eligibility is recorded before its hash list is removed.
+    pub(crate) fn finish_blocks_proof_request(
+        &self,
+        index: PeerIndex,
+        expected: &BlocksProofRequest,
+        retry: bool,
+    ) -> bool {
+        let Some(mut peer) = self.inner.get_mut(&index) else {
+            return false;
+        };
+        if !peer
+            .blocks_proof_request
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.owner, &expected.owner))
+        {
+            return false;
+        }
+        if retry {
+            for hash in expected.block_hashes() {
+                if let Some(mut info) = self.fetching_headers.get_mut(&hash.pack()) {
+                    info.timeout = true;
+                }
+            }
+        }
+        peer.blocks_proof_request = None;
+        true
+    }
+
+    pub(crate) fn finish_txs_proof_request(
+        &self,
+        index: PeerIndex,
+        expected: &TransactionsProofRequest,
+        retry: bool,
+    ) -> bool {
+        let Some(mut peer) = self.inner.get_mut(&index) else {
+            return false;
+        };
+        if !peer
+            .txs_proof_request
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(&current.owner, &expected.owner))
+        {
+            return false;
+        }
+        if retry {
+            for hash in expected.tx_hashes() {
+                if let Some(mut info) = self.fetching_txs.get_mut(&hash.pack()) {
+                    info.timeout = true;
+                }
+            }
+        }
+        peer.txs_proof_request = None;
+        true
+    }
+
     pub(crate) fn update_blocks_request(&self, index: PeerIndex, hashes: Option<Vec<Byte32>>) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.blocks_request =
@@ -2055,3 +2119,70 @@ fn if_verifiable_headers_are_same(lhs: &VerifiableHeader, rhs: &VerifiableHeader
                     .as_slice()))
         && lhs.total_difficulty() == rhs.total_difficulty()
 }
+
+#[cfg(test)]
+mod request_ownership_tests {
+    use super::*;
+
+    #[test]
+    fn identical_block_request_replacement_is_not_retired_or_requeued_by_old_owner() {
+        for retry in [false, true] {
+            let peers = Peers::new(2, 2000, (0, Byte32::zero()), 10);
+            let peer = PeerIndex::new(1);
+            peers.add_peer(peer);
+            let hash = Byte32::new([31; 32]);
+            peers
+                .fetching_headers
+                .insert(hash.clone(), FetchInfo::new(1, 77, false, false));
+            let wire = packed::GetBlocksProof::new_builder()
+                .block_hashes(vec![hash.clone()].pack())
+                .build();
+            let old = BlocksProofRequest::new(wire.clone(), 77, false);
+            let replacement = BlocksProofRequest::new(wire, 77, false);
+            peers.inner.get_mut(&peer).unwrap().blocks_proof_request = Some(replacement.clone());
+            assert!(!peers.finish_blocks_proof_request(peer, &old, true));
+            assert!(!peers.fetching_headers.get(&hash).unwrap().timeout);
+            assert!(peers.finish_blocks_proof_request(peer, &replacement, retry));
+            assert_eq!(peers.fetching_headers.get(&hash).unwrap().timeout, retry);
+            assert!(peers
+                .get_peer(&peer)
+                .unwrap()
+                .get_blocks_proof_request()
+                .is_none());
+            assert_eq!(peers.get_headers_to_fetch().contains(&hash), retry);
+        }
+    }
+
+    #[test]
+    fn identical_transaction_request_replacement_is_not_retired_or_requeued_by_old_owner() {
+        for retry in [false, true] {
+            let peers = Peers::new(2, 2000, (0, Byte32::zero()), 10);
+            let peer = PeerIndex::new(1);
+            peers.add_peer(peer);
+            let hash = Byte32::new([31; 32]);
+            peers
+                .fetching_txs
+                .insert(hash.clone(), FetchInfo::new(1, 77, false, false));
+            let wire = packed::GetTransactionsProof::new_builder()
+                .tx_hashes(vec![hash.clone()].pack())
+                .build();
+            let old = TransactionsProofRequest::new(wire.clone(), 77);
+            let replacement = TransactionsProofRequest::new(wire, 77);
+            peers.inner.get_mut(&peer).unwrap().txs_proof_request = Some(replacement.clone());
+            assert!(!peers.finish_txs_proof_request(peer, &old, true));
+            assert!(!peers.fetching_txs.get(&hash).unwrap().timeout);
+            assert!(peers.finish_txs_proof_request(peer, &replacement, retry));
+            assert_eq!(peers.fetching_txs.get(&hash).unwrap().timeout, retry);
+            assert!(peers
+                .get_peer(&peer)
+                .unwrap()
+                .get_txs_proof_request()
+                .is_none());
+            assert_eq!(peers.get_txs_to_fetch().contains(&hash), retry);
+        }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "peers/recovery_tests.rs"]
+mod recovery_tests;

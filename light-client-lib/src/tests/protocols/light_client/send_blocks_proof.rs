@@ -34,7 +34,7 @@ async fn peer_state_is_not_found() {
 }
 
 #[tokio::test]
-async fn no_matched_request() {
+async fn unsolicited_reply_without_a_request_is_ignored() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -57,11 +57,17 @@ async fn no_matched_request() {
 
     protocol.received(nc.context(), peer_index, data).await;
 
-    assert!(nc.banned_since(peer_index, StatusCode::PeerIsNotOnProcess));
+    assert!(nc.not_banned(peer_index));
+    assert!(protocol
+        .get_peer(&peer_index)
+        .unwrap()
+        .get_blocks_proof_request()
+        .is_none());
+    assert!(nc.sent_messages().borrow().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn last_state_is_changed() {
+async fn changed_last_state_hint_preserves_request() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -150,12 +156,25 @@ async fn last_state_is_changed() {
         assert!(nc.not_banned(peer_index));
 
         let peer = protocol.get_peer(&peer_index).expect("has peer");
-        assert!(peer.get_blocks_proof_request().is_none());
+        let request = peer
+            .get_blocks_proof_request()
+            .expect("hint preserves request");
+        assert_eq!(
+            request.last_hash(),
+            snapshot.get_header_by_number(num - 1).unwrap().hash()
+        );
+        assert_eq!(
+            request.block_hashes(),
+            block_numbers
+                .iter()
+                .map(|n| snapshot.get_header_by_number(*n).unwrap().hash().unpack())
+                .collect::<Vec<ckb_types::H256>>()
+        );
     }
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn unexpected_response() {
+async fn different_hash_set_preserves_request() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -256,8 +275,23 @@ async fn unexpected_response() {
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        assert!(nc.banned_since(peer_index, StatusCode::UnexpectedResponse));
+        assert!(nc.not_banned(peer_index));
         assert!(nc.sent_messages().borrow().is_empty());
+        let peer = protocol.get_peer(&peer_index).unwrap();
+        let request = peer
+            .get_blocks_proof_request()
+            .expect("unmatched reply preserves request");
+        assert_eq!(
+            request.last_hash(),
+            snapshot.get_header_by_number(num).unwrap().hash()
+        );
+        assert_eq!(
+            request.block_hashes(),
+            block_numbers
+                .iter()
+                .map(|n| snapshot.get_header_by_number(*n).unwrap().hash().unpack())
+                .collect::<Vec<ckb_types::H256>>()
+        );
     }
 }
 
@@ -534,7 +568,7 @@ async fn rejects_v1_fields_when_all_blocks_are_missing() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn nonempty_proof_since_all_blocks_are_missing() {
+async fn unrequested_header_when_all_blocks_are_missing_preserves_request() {
     let last_block_number = 20;
     let block_numbers = vec![];
     let returned_headers = vec![9];
@@ -546,6 +580,7 @@ async fn nonempty_proof_since_all_blocks_are_missing() {
         returned_headers,
         missing_block_hashes: missing_block_hashes.clone(),
         returned_missing_block_hashes: missing_block_hashes,
+        expect_ignored: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -569,7 +604,7 @@ async fn valid_proof_with_missing_block_hashes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn invalid_proof_with_insufficient_missing_block_hashes() {
+async fn insufficient_missing_block_hashes_preserve_request() {
     let last_block_number = 20;
     let block_numbers = vec![3, 5, 8, 11, 16, 18];
     let missing_block_hashes = vec![h256!("0x1").pack(), h256!("0x2").pack()];
@@ -581,13 +616,14 @@ async fn invalid_proof_with_insufficient_missing_block_hashes() {
         returned_headers: block_numbers,
         missing_block_hashes,
         returned_missing_block_hashes,
+        expect_ignored: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn invalid_proof_with_redundant_missing_block_hashes() {
+async fn redundant_missing_block_hashes_preserve_request() {
     let last_block_number = 20;
     let block_numbers = vec![3, 5, 8, 11, 16, 18];
     let missing_block_hashes = vec![h256!("0x1").pack()];
@@ -599,6 +635,7 @@ async fn invalid_proof_with_redundant_missing_block_hashes() {
         returned_headers: block_numbers,
         missing_block_hashes,
         returned_missing_block_hashes,
+        expect_ignored: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -653,7 +690,7 @@ async fn invalid_proof_with_redundant_proved_blocks() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn invalid_proof_with_insufficient_returned_headers() {
+async fn insufficient_returned_headers_preserve_request() {
     let last_block_number = 20;
     let block_numbers = vec![3, 5, 8, 11, 16, 18];
     let returned_headers = vec![3, 5, 11, 16, 18];
@@ -662,13 +699,14 @@ async fn invalid_proof_with_insufficient_returned_headers() {
         block_numbers: block_numbers.clone(),
         proved_block_numbers: block_numbers,
         returned_headers,
+        expect_ignored: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn invalid_proof_with_redundant_returned_headers() {
+async fn redundant_returned_headers_preserve_request() {
     let last_block_number = 20;
     let block_numbers = vec![3, 5, 8, 11, 16, 18];
     let returned_headers = vec![3, 5, 7, 8, 11, 16, 18];
@@ -677,6 +715,7 @@ async fn invalid_proof_with_redundant_returned_headers() {
         block_numbers: block_numbers.clone(),
         proved_block_numbers: block_numbers,
         returned_headers,
+        expect_ignored: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -709,6 +748,7 @@ struct TestParameter {
     returned_extensions: Option<Vec<packed::BytesOpt>>,
     use_legacy_message: bool,
     expected_status: Option<StatusCode>,
+    expect_ignored: bool,
 }
 
 async fn test_send_blocks_proof(param: TestParameter) {
@@ -872,9 +912,28 @@ async fn test_send_blocks_proof(param: TestParameter) {
 
         assert!(nc.sent_messages().borrow().is_empty());
 
+        let request_before = protocol
+            .get_peer(&peer_index)
+            .unwrap()
+            .get_blocks_proof_request()
+            .unwrap()
+            .clone();
         protocol.received(nc.context(), peer_index, data).await;
 
-        if let Some(expected_status) = param.expected_status {
+        if param.expect_ignored {
+            assert!(nc.not_banned(peer_index));
+            assert!(nc.sent_messages().borrow().is_empty());
+            let peer = protocol.get_peer(&peer_index).unwrap();
+            let request = peer
+                .get_blocks_proof_request()
+                .expect("unmatched reply preserves request");
+            assert_eq!(request.last_hash(), request_before.last_hash());
+            assert_eq!(request.block_hashes(), request_before.block_hashes());
+            assert_eq!(
+                request.should_get_blocks(),
+                request_before.should_get_blocks()
+            );
+        } else if let Some(expected_status) = param.expected_status {
             assert!(nc.banned_since(peer_index, expected_status));
             assert!(nc.sent_messages().borrow().is_empty());
         } else if param.block_numbers == param.proved_block_numbers
