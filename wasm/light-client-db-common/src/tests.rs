@@ -3,6 +3,51 @@ use web_sys::js_sys::{Int32Array, SharedArrayBuffer, Uint8Array};
 
 use crate::{read_command_payload, write_command_with_payload, InputCommand, OutputCommand};
 
+#[wasm_bindgen_test]
+fn checked_worker_capability_and_legacy_command_bytes() {
+    use crate::{
+        require_checked_scan_worker, DbCommandRequest, IteratorDirection, IteratorStart,
+        CHECKED_SCAN_WORKER_VERSION,
+    };
+    let old_payload = bincode::serialize(&true).unwrap();
+    assert_eq!(old_payload, vec![1]);
+    let old_version = bincode::deserialize::<u8>(&old_payload).unwrap();
+    assert!(require_checked_scan_worker(old_version).is_err());
+    assert!(require_checked_scan_worker(0).is_err());
+    assert!(require_checked_scan_worker(CHECKED_SCAN_WORKER_VERSION).is_ok());
+    let commands = [
+        DbCommandRequest::Read { keys: vec![] },
+        DbCommandRequest::Put { kvs: vec![] },
+        DbCommandRequest::Delete { keys: vec![] },
+        DbCommandRequest::Iterator {
+            start: IteratorStart::After(vec![10]),
+            direction: IteratorDirection::Forward,
+            limit: 2,
+        },
+        DbCommandRequest::IteratorKey {
+            start: IteratorStart::After(vec![10]),
+            direction: IteratorDirection::Forward,
+            limit: 2,
+        },
+        DbCommandRequest::Batch { operations: vec![] },
+        DbCommandRequest::CheckedIterator {
+            start: IteratorStart::After(vec![10]),
+            direction: IteratorDirection::Forward,
+            limit: 2,
+        },
+        DbCommandRequest::LegacyIterator {
+            start: IteratorStart::After(vec![10]),
+            direction: IteratorDirection::Forward,
+            limit: 2,
+        },
+    ];
+    for (tag, command) in commands.iter().enumerate() {
+        let bytes = bincode::serialize(command).unwrap();
+        assert_eq!(&bytes[..4], &(tag as u32).to_le_bytes());
+        assert!(bincode::deserialize::<DbCommandRequest>(&bytes).is_ok());
+    }
+}
+
 #[allow(unused)]
 #[wasm_bindgen_test]
 fn test_command_conversion() {

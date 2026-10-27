@@ -87,6 +87,68 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        let snapshot = self.snapshot();
+        keys.iter()
+            .map(|key| {
+                snapshot
+                    .get(key)
+                    .map(|value| value.map(|bytes| bytes.to_vec()))
+                    .map_err(Into::into)
+            })
+            .collect()
+    }
+
+    fn try_collect_iterator(
+        &self,
+        start: IteratorStart,
+        direction: IteratorDirection,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
+        limit: usize,
+    ) -> Result<Vec<KVPair>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let snapshot = self.snapshot();
+        // Construct through Snapshot so the iterator borrows the snapshot,
+        // rather than only the database referenced by its read options.
+        let mut iterator = snapshot.raw_iterator();
+        match direction {
+            IteratorDirection::Forward => iterator.seek(start.key()),
+            IteratorDirection::Reverse => iterator.seek_for_prev(start.key()),
+        }
+        let mut result = Vec::new();
+        while result.len() < limit {
+            if !iterator.valid() {
+                // Invalid means either exhaustion or a read failure, including
+                // a failure on the previous advance after collecting rows.
+                iterator.status()?;
+                break;
+            }
+            let key = iterator.key().expect("valid iterator has a key");
+            let value = iterator.value().expect("valid iterator has a value");
+            if !(start.should_skip_first() && key == start.key()) {
+                if !take_while_fn(key) {
+                    break;
+                }
+                if let Some(value) = filter_map_fn(key, value) {
+                    result.push(KVPair {
+                        key: key.to_vec(),
+                        value,
+                    });
+                }
+            }
+            if result.len() < limit {
+                match direction {
+                    IteratorDirection::Forward => iterator.next(),
+                    IteratorDirection::Reverse => iterator.prev(),
+                }
+            }
+        }
+        Ok(result)
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         self.db
             .get(key.as_slice())
@@ -118,11 +180,9 @@ impl StorageBackend for Storage {
         let mode = IteratorMode::From(start.key(), rocksdb_direction);
         let snapshot = self.snapshot();
 
-        let skip = if start.should_skip_first() { 1 } else { 0 };
-
         snapshot
             .iterator(mode)
-            .skip(skip)
+            .filter(|(key, _)| !(start.should_skip_first() && key.as_ref() == start.key()))
             .take_while(|(key, _)| take_while_fn(key))
             .filter_map(|(key, value)| {
                 filter_map_fn(&key, &value).map(|transformed_value| KVPair {
@@ -186,3 +246,6 @@ impl CellProvider for Storage {
         CellStatus::Unknown
     }
 }
+
+#[cfg(test)]
+mod tests;
