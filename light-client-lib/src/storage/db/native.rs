@@ -18,6 +18,8 @@ use rocksdb::{
 };
 use std::{path::Path, sync::Arc};
 
+mod checked_iterator;
+
 impl From<IteratorDirection> for Direction {
     fn from(dir: IteratorDirection) -> Self {
         match dir {
@@ -86,6 +88,52 @@ impl BatchWriter for Batch {
 // Implementation of StorageBackend trait for RocksDB
 impl StorageBackend for Storage {
     type Batch = Batch;
+
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        let snapshot = self.snapshot();
+        keys.iter()
+            .map(|key| {
+                snapshot
+                    .get(key)
+                    .map(|value| value.map(|bytes| bytes.to_vec()))
+                    .map_err(Into::into)
+            })
+            .collect()
+    }
+
+    fn try_collect_iterator(
+        &self,
+        start: IteratorStart,
+        direction: IteratorDirection,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
+        limit: usize,
+    ) -> Result<Vec<KVPair>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let snapshot = self.snapshot();
+        let mut iterator = checked_iterator::CheckedIterator::new(&self.db, &snapshot)?;
+        iterator.seek(start.key(), direction);
+        let mut result = Vec::new();
+        while result.len() < limit {
+            let Some((key, value)) = iterator.row()? else {
+                break;
+            };
+            if !(start.should_skip_first() && key == start.key()) {
+                if !take_while_fn(&key) {
+                    break;
+                }
+                if let Some(value) = filter_map_fn(&key, &value) {
+                    result.push(KVPair { key, value });
+                }
+            }
+            if result.len() < limit {
+                iterator.advance(direction);
+            }
+        }
+        Ok(result)
+    }
 
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         self.db

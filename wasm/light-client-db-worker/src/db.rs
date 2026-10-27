@@ -71,33 +71,29 @@ async fn commit_batch(
 
 async fn open_iterator(
     store: &ObjectStore,
-    start_key_bound: &[u8],
+    start: &IteratorStart,
     direction: IteratorDirection,
-) -> Result<ManagedCursor, idb::Error> {
-    let index = store.index("key").unwrap();
-    let cursor_direction = iterator_direction_to_idb(direction);
-
+) -> anyhow::Result<Option<ManagedCursor>> {
+    let index = store
+        .index("key")
+        .map_err(|error| anyhow!("Failed to open key index: {error:?}"))?;
+    let key = serde_wasm_bindgen::to_value(start.key())
+        .map_err(|error| anyhow!("Failed to serialize cursor key: {error:?}"))?;
+    let exclusive = Some(start.should_skip_first());
+    let range = match direction {
+        IteratorDirection::Forward => KeyRange::lower_bound(&key, exclusive),
+        IteratorDirection::Reverse => KeyRange::upper_bound(&key, exclusive),
+    }
+    .map_err(|error| anyhow!("Failed to create cursor range: {error:?}"))?;
     Ok(index
         .open_cursor(
-            Some(
-                match direction {
-                    IteratorDirection::Forward => KeyRange::lower_bound(
-                        &serde_wasm_bindgen::to_value(&start_key_bound).unwrap(),
-                        Some(false),
-                    ),
-                    IteratorDirection::Reverse => KeyRange::upper_bound(
-                        &serde_wasm_bindgen::to_value(&start_key_bound).unwrap(),
-                        Some(false),
-                    ),
-                }
-                .unwrap()
-                .into(),
-            ),
-            Some(cursor_direction),
-        )?
-        .await?
-        .unwrap()
-        .into_managed())
+            Some(range.into()),
+            Some(iterator_direction_to_idb(direction)),
+        )
+        .map_err(|error| anyhow!("Failed to send cursor request: {error:?}"))?
+        .await
+        .map_err(|error| anyhow!("Failed to open cursor: {error:?}"))?
+        .map(|cursor| cursor.into_managed()))
 }
 
 pub async fn collect_iterator<F, FnFilterMap, FnFilterMapOutput>(
@@ -113,68 +109,45 @@ where
     FnFilterMap: Fn(&[u8], &[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start.key(), direction)
-        .await
-        .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
-
-    let mut res = Vec::new();
-    let skip_first = start.should_skip_first();
-
-    if iter.key().is_err() {
-        return Ok(res);
+    let mut result = Vec::new();
+    if limit == 0 {
+        return Ok(result);
     }
-
-    let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
-        iter.value()
-            .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
-            .unwrap(),
-    )
-    .unwrap();
-
-    if take_while(&raw_kv.key) {
-        if !skip_first {
-            if let Some(transformed_value) = filter_map(&raw_kv.key, &raw_kv.value).await {
-                res.push(KVPair {
-                    key: raw_kv.key,
-                    value: transformed_value,
-                });
-            }
+    let Some(mut cursor) = open_iterator(store, start, direction).await? else {
+        return Ok(result);
+    };
+    loop {
+        if cursor
+            .key()
+            .map_err(|error| anyhow!("Failed to read cursor key: {error:?}"))?
+            .is_none()
+        {
+            break;
         }
-    } else {
-        return Ok(res);
+        let value = cursor
+            .value()
+            .map_err(|error| anyhow!("Failed to read cursor value: {error:?}"))?
+            .ok_or_else(|| anyhow!("Cursor key has no value"))?;
+        let row: KVPair = serde_wasm_bindgen::from_value(value)
+            .map_err(|error| anyhow!("Failed to decode cursor row: {error:?}"))?;
+        if !take_while(&row.key) {
+            break;
+        }
+        if let Some(value) = filter_map(&row.key, &row.value).await {
+            result.push(KVPair {
+                key: row.key,
+                value,
+            });
+        }
+        if result.len() == limit {
+            break;
+        }
+        cursor
+            .next(None)
+            .await
+            .map_err(|error| anyhow!("Failed to advance cursor: {error:?}"))?;
     }
-    while iter.next(None).await.is_ok() {
-        if iter.key().is_err() {
-            return Ok(res);
-        }
-
-        if res.len() >= limit {
-            return Ok(res);
-        }
-
-        let key = iter.key().unwrap();
-        if key.is_none() {
-            return Ok(res);
-        }
-
-        let raw_kv = serde_wasm_bindgen::from_value::<KVPair>(
-            iter.value()
-                .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
-                .unwrap(),
-        )
-        .unwrap();
-        if take_while(&raw_kv.key) {
-            if let Some(transformed_value) = filter_map(&raw_kv.key, &raw_kv.value).await {
-                res.push(KVPair {
-                    key: raw_kv.key,
-                    value: transformed_value,
-                });
-            }
-        } else {
-            return Ok(res);
-        }
-    }
-    Ok(res)
+    Ok(result)
 }
 
 async fn collect_iterator_keys<F, FnFilterMap, FnFilterMapOutput>(
@@ -190,58 +163,37 @@ where
     FnFilterMap: Fn(&[u8]) -> FnFilterMapOutput,
     FnFilterMapOutput: Future<Output = Option<Vec<u8>>>,
 {
-    let mut iter = open_iterator(store, start.key(), direction)
-        .await
-        .map_err(|e| anyhow!("Failed to open iterator: {e:?}"))?;
-
-    let mut res = Vec::new();
-    let skip_first = start.should_skip_first();
-
-    if iter.key().is_err() {
-        return Ok(res);
+    let mut result = Vec::new();
+    if limit == 0 {
+        return Ok(result);
     }
-
-    let raw_key = serde_wasm_bindgen::from_value::<Vec<u8>>(
-        iter.key()
-            .map_err(|e| anyhow!("Failed to read value from cursor: {e:?}"))?
-            .unwrap(),
-    )
-    .unwrap();
-
-    if take_while(&raw_key) {
-        if !skip_first {
-            if let Some(new_key) = filter_map(&raw_key).await {
-                res.push(new_key);
-            }
+    let Some(mut cursor) = open_iterator(store, start, direction).await? else {
+        return Ok(result);
+    };
+    loop {
+        let Some(key) = cursor
+            .key()
+            .map_err(|error| anyhow!("Failed to read cursor key: {error:?}"))?
+        else {
+            break;
+        };
+        let key: Vec<u8> = serde_wasm_bindgen::from_value(key)
+            .map_err(|error| anyhow!("Failed to decode cursor key: {error:?}"))?;
+        if !take_while(&key) {
+            break;
         }
-    } else {
-        return Ok(res);
+        if let Some(key) = filter_map(&key).await {
+            result.push(key);
+        }
+        if result.len() == limit {
+            break;
+        }
+        cursor
+            .next(None)
+            .await
+            .map_err(|error| anyhow!("Failed to advance cursor: {error:?}"))?;
     }
-
-    while iter.next(None).await.is_ok() {
-        if iter.key().is_err() {
-            return Ok(res);
-        }
-
-        if res.len() >= limit {
-            return Ok(res);
-        }
-
-        let key = iter.key().unwrap();
-        if key.is_none() {
-            return Ok(res);
-        }
-
-        let raw_key = serde_wasm_bindgen::from_value::<Vec<u8>>(key.unwrap()).unwrap();
-        if take_while(&raw_key) {
-            if let Some(new_key) = filter_map(&raw_key).await {
-                res.push(new_key);
-            }
-        } else {
-            return Ok(res);
-        }
-    }
-    Ok(res)
+    Ok(result)
 }
 
 pub(crate) async fn handle_db_command<F, FnFilterMap, FnFilterMapOutput>(
@@ -302,7 +254,11 @@ where
                         .map_err(|e| anyhow!("Failed to send get request: {:?}", e))?
                         .await
                         .map_err(|e| anyhow!("Failed to fetch value: {:?}", e))?
-                        .map(|v| serde_wasm_bindgen::from_value::<KVPair>(v).unwrap().value),
+                        .map(|value| {
+                            serde_wasm_bindgen::from_value::<KVPair>(value).map(|row| row.value)
+                        })
+                        .transpose()
+                        .map_err(|error| anyhow!("Failed to decode read value: {error:?}"))?,
                 );
             }
             DbCommandResponse::Read { values: res }
@@ -383,7 +339,11 @@ where
         }
     };
     if let Some(tran) = tran {
-        assert_eq!(TransactionResult::Committed, tran.await.unwrap());
+        match tran.await {
+            Ok(TransactionResult::Committed) => {}
+            Ok(TransactionResult::Aborted) => bail!("Database transaction aborted"),
+            Err(error) => bail!("Database transaction failed: {error:?}"),
+        }
     }
     debug!("Command result={:?}", result);
     Ok(result)
