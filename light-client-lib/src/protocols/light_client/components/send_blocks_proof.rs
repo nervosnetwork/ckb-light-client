@@ -46,6 +46,7 @@ impl<'a> SendBlocksProofProcess<'a> {
                 self.peer_index,
                 &request,
                 !status.is_ok(),
+                false,
             );
         }
         status
@@ -58,7 +59,7 @@ impl<'a> SendBlocksProofProcess<'a> {
             original_request
         } else {
             debug!("peer {} has no outstanding proof request", self.peer_index);
-            return Status::ok();
+            return StatusCode::PeerIsNotOnProcess.into();
         };
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
@@ -99,7 +100,14 @@ impl<'a> SendBlocksProofProcess<'a> {
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                // An empty state hint has no hashes identifying the operation.
+                // The header is authenticated, but is not an accepted chain tip.
+                // Retire only this owner and avoid retrying its unavailable anchor.
+                self.protocol.peers().finish_blocks_proof_request(
+                    self.peer_index,
+                    original_request,
+                    true,
+                    true,
+                );
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.
@@ -107,7 +115,7 @@ impl<'a> SendBlocksProofProcess<'a> {
                     "peer {} send a proof with different last state",
                     self.peer_index
                 );
-                return Status::ok();
+                return StatusCode::UnexpectedResponse.into();
             }
         }
 
@@ -142,8 +150,8 @@ impl<'a> SendBlocksProofProcess<'a> {
             return StatusCode::UnexpectedResponse.into();
         }
         if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
-            // A late response must not retire or mutate an unrelated operation.
-            return Status::ok();
+            // Preserve the owner, but retain protocol penalties for invalid data.
+            return StatusCode::UnexpectedResponse.into();
         }
         *retire_request = Some(original_request.clone());
 
@@ -199,6 +207,14 @@ impl<'a> SendBlocksProofProcess<'a> {
                     headers.iter().map(|header| header.hash()).collect();
                 {
                     let mut matched_blocks = self.protocol.peers().matched_blocks().write().await;
+                    // The request may have been replaced while this lock was pending.
+                    if !self
+                        .protocol
+                        .peers()
+                        .owns_blocks_proof_request(self.peer_index, original_request)
+                    {
+                        return Status::ok();
+                    }
 
                     self.protocol
                         .peers
@@ -279,6 +295,14 @@ impl<'a> SendBlocksProofProcess<'a> {
         // 3. New main chain blocks at the same heights will be checked during re-filtering
         if original_request.should_get_blocks() && !missing_block_hashes.is_empty() {
             let mut matched_blocks = self.protocol.peers().matched_blocks().write().await;
+            // The request may have been replaced while this lock was pending.
+            if !self
+                .protocol
+                .peers()
+                .owns_blocks_proof_request(self.peer_index, original_request)
+            {
+                return Status::ok();
+            }
             let mut removed_count = 0;
 
             for missing_hash in &missing_block_hashes {

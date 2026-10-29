@@ -85,7 +85,7 @@ async fn stale_positive_and_negative_replies_do_not_retire_a_replacement_slot() 
 }
 
 #[tokio::test]
-async fn old_anchor_and_empty_hint_preserve_the_current_request() {
+async fn different_anchor_data_preserves_owner_and_empty_hint_releases_it() {
     for kind in KINDS {
         for empty in [false, true] {
             let mut f = Fixture::new();
@@ -112,11 +112,17 @@ async fn old_anchor_and_empty_hint_preserve_the_current_request() {
             };
             f.receive(old).await;
             assert!(!f.present(kind));
-            f.receive(f.positive(kind, f.wire.clone(), false)).await;
-            assert!(
-                f.present(kind),
-                "old anchor/hint retired active {kind:?} slot"
-            );
+            if empty {
+                // A hint releases the old anchor. Scheduling waits for accepted
+                // state progress or a survivor; it must not send the old anchor
+                // back to the peer that reported it unavailable.
+                f.context.sent_messages().borrow_mut().clear();
+                f.tick().await;
+                assert!(f.context.sent_messages().borrow().is_empty());
+            } else {
+                f.receive(f.positive(kind, f.wire.clone(), false)).await;
+                assert!(f.present(kind), "different-anchor data retired owner");
+            }
             assert!(f.context.not_banned(f.peer));
         }
     }
@@ -169,7 +175,8 @@ async fn duplicate_overlap_and_unsolicited_replies_preserve_request_lifecycle() 
             f.present(kind),
             "malformed duplicates/overlap retired the active slot"
         );
-        // Late copies after completion are harmless to new work and stored bytes.
+        // Late copies are rejected and consume the existing bad-message allowance.
+        // These few messages remain below this fixture's ban threshold.
         f.receive(f.positive(kind, f.wire.clone(), false)).await;
         f.receive(f.negative(kind, f.wire.clone(), vec![hash]))
             .await;

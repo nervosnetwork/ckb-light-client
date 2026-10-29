@@ -21,6 +21,9 @@ pub(crate) fn prove_or_download_matched_blocks(
         if let Some(peer_index) = best_peers
             .iter()
             .filter(|peer_index| {
+                if !peers.can_request_proof(**peer_index, &last_hash) {
+                    return false;
+                }
                 peers
                     .get_peer(peer_index)
                     .map(|peer| peer.get_blocks_proof_request().is_none())
