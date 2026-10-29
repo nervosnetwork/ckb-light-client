@@ -46,6 +46,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 self.peer_index,
                 &request,
                 !status.is_ok(),
+                false,
             );
         }
         status
@@ -61,7 +62,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
             original_request
         } else {
             debug!("peer {} has no outstanding proof request", self.peer_index);
-            return Status::ok();
+            return StatusCode::PeerIsNotOnProcess.into();
         };
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
@@ -106,7 +107,14 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                // An empty state hint has no hashes identifying the operation.
+                // The header is authenticated, but is not an accepted chain tip.
+                // Retire only this owner and avoid retrying its unavailable anchor.
+                self.protocol.peers().finish_txs_proof_request(
+                    self.peer_index,
+                    original_request,
+                    true,
+                    true,
+                );
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.
@@ -114,7 +122,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
                     "peer {} send a proof with different last state",
                     self.peer_index
                 );
-                return Status::ok();
+                return StatusCode::UnexpectedResponse.into();
             }
         }
 
@@ -150,8 +158,8 @@ impl<'a> SendTransactionsProofProcess<'a> {
             return StatusCode::UnexpectedResponse.into();
         }
         if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
-            // A late response must not retire or mutate an unrelated operation.
-            return Status::ok();
+            // Preserve the owner, but retain protocol penalties for invalid data.
+            return StatusCode::UnexpectedResponse.into();
         }
         *retire_request = Some(original_request.clone());
 

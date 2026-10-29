@@ -68,6 +68,9 @@ pub struct Peer {
     state: PeerState,
     blocks_proof_request: Option<BlocksProofRequest>,
     blocks_request: Option<BlocksRequest>,
+    // A proof hint reported this anchor absent from this peer's chain. Keep
+    // requests off it until the accepted tip changes; do not retry in a loop.
+    unavailable_proof_anchor: Option<Byte32>,
     txs_proof_request: Option<TransactionsProofRequest>,
     check_points: CheckPoints,
     latest_block_filter_hashes: LatestBlockFilterHashes,
@@ -1088,6 +1091,7 @@ impl Peer {
             state: Default::default(),
             blocks_proof_request: None,
             blocks_request: None,
+            unavailable_proof_anchor: None,
             txs_proof_request: None,
             check_points,
             latest_block_filter_hashes,
@@ -1611,6 +1615,26 @@ impl Peers {
             });
         }
     }
+    pub(crate) fn owns_blocks_proof_request(
+        &self,
+        index: PeerIndex,
+        expected: &BlocksProofRequest,
+    ) -> bool {
+        self.inner.get(&index).is_some_and(|peer| {
+            peer.blocks_proof_request
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.owner, &expected.owner))
+        })
+    }
+
+    /// Hints exclude only proof requests anchored at the unavailable tip.
+    /// Ordinary downloads and filter scheduling retain their existing policy.
+    pub(crate) fn can_request_proof(&self, index: PeerIndex, anchor: &Byte32) -> bool {
+        self.inner
+            .get(&index)
+            .is_some_and(|peer| peer.unavailable_proof_anchor.as_ref() != Some(anchor))
+    }
+
     /// Retire only the locally captured operation, including across handler awaits.
     /// Retry eligibility is recorded before its hash list is removed.
     pub(crate) fn finish_blocks_proof_request(
@@ -1618,6 +1642,7 @@ impl Peers {
         index: PeerIndex,
         expected: &BlocksProofRequest,
         retry: bool,
+        unavailable_anchor: bool,
     ) -> bool {
         let Some(mut peer) = self.inner.get_mut(&index) else {
             return false;
@@ -1636,6 +1661,9 @@ impl Peers {
                 }
             }
         }
+        if unavailable_anchor {
+            peer.unavailable_proof_anchor = Some(expected.last_hash());
+        }
         peer.blocks_proof_request = None;
         true
     }
@@ -1645,6 +1673,7 @@ impl Peers {
         index: PeerIndex,
         expected: &TransactionsProofRequest,
         retry: bool,
+        unavailable_anchor: bool,
     ) -> bool {
         let Some(mut peer) = self.inner.get_mut(&index) else {
             return false;
@@ -1662,6 +1691,9 @@ impl Peers {
                     info.timeout = true;
                 }
             }
+        }
+        if unavailable_anchor {
+            peer.unavailable_proof_anchor = Some(expected.last_hash());
         }
         peer.txs_proof_request = None;
         true
@@ -2140,9 +2172,11 @@ mod request_ownership_tests {
             let old = BlocksProofRequest::new(wire.clone(), 77, false);
             let replacement = BlocksProofRequest::new(wire, 77, false);
             peers.inner.get_mut(&peer).unwrap().blocks_proof_request = Some(replacement.clone());
-            assert!(!peers.finish_blocks_proof_request(peer, &old, true));
+            assert!(!peers.finish_blocks_proof_request(peer, &old, true, false));
+            assert!(!peers.finish_blocks_proof_request(peer, &old, true, true));
+            assert!(peers.can_request_proof(peer, &old.last_hash()));
             assert!(!peers.fetching_headers.get(&hash).unwrap().timeout);
-            assert!(peers.finish_blocks_proof_request(peer, &replacement, retry));
+            assert!(peers.finish_blocks_proof_request(peer, &replacement, retry, false));
             assert_eq!(peers.fetching_headers.get(&hash).unwrap().timeout, retry);
             assert!(peers
                 .get_peer(&peer)
@@ -2169,9 +2203,11 @@ mod request_ownership_tests {
             let old = TransactionsProofRequest::new(wire.clone(), 77);
             let replacement = TransactionsProofRequest::new(wire, 77);
             peers.inner.get_mut(&peer).unwrap().txs_proof_request = Some(replacement.clone());
-            assert!(!peers.finish_txs_proof_request(peer, &old, true));
+            assert!(!peers.finish_txs_proof_request(peer, &old, true, false));
+            assert!(!peers.finish_txs_proof_request(peer, &old, true, true));
+            assert!(peers.can_request_proof(peer, &old.last_hash()));
             assert!(!peers.fetching_txs.get(&hash).unwrap().timeout);
-            assert!(peers.finish_txs_proof_request(peer, &replacement, retry));
+            assert!(peers.finish_txs_proof_request(peer, &replacement, retry, false));
             assert_eq!(peers.fetching_txs.get(&hash).unwrap().timeout, retry);
             assert!(peers
                 .get_peer(&peer)

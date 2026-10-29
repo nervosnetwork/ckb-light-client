@@ -18,6 +18,9 @@ use request_fixture::{Fixture, Kind, KINDS};
 
 const START: u64 = 100_000;
 
+#[path = "maintainer_tests.rs"]
+mod maintainer_tests;
+
 enum Captured {
     Header(BlocksProofRequest),
     Transaction(TransactionsProofRequest),
@@ -60,8 +63,12 @@ impl Captured {
 
     fn finish(&self, f: &Fixture, index: PeerIndex, retry: bool) -> bool {
         match self {
-            Self::Header(request) => f.peers.finish_blocks_proof_request(index, request, retry),
-            Self::Transaction(request) => f.peers.finish_txs_proof_request(index, request, retry),
+            Self::Header(request) => f
+                .peers
+                .finish_blocks_proof_request(index, request, retry, false),
+            Self::Transaction(request) => f
+                .peers
+                .finish_txs_proof_request(index, request, retry, false),
         }
     }
 }
@@ -220,7 +227,7 @@ async fn retry_and_complete(f: &mut Fixture, kind: Kind, survivor: PeerIndex) {
 }
 
 #[tokio::test]
-async fn empty_hints_preserve_owner_and_deadline_then_recover_through_timeout() {
+async fn invalid_hints_and_silent_peer_recover_through_timeout() {
     let clock = faketime();
     for kind in KINDS {
         clock.set_faketime(START);
@@ -267,18 +274,6 @@ async fn empty_hints_preserve_owner_and_deadline_then_recover_through_timeout() 
             original.assert_same(&Captured::get(&f, kind, f.peer));
             assert_eq!(fetch_state(&f, kind), original_fetch);
         }
-        for elapsed in [1, MESSAGE_TIMEOUT / 2, MESSAGE_TIMEOUT - 1] {
-            clock.set_faketime(START + elapsed);
-            f.receive(f.negative(kind, valid.clone(), vec![])).await;
-            assert_eq!(observed(&f), valid.header().as_slice());
-            assert_eq!(accepted_state(&f), accepted);
-            original.assert_same(&Captured::get(&f, kind, f.peer));
-            assert_eq!(fetch_state(&f, kind), original_fetch);
-            assert!(!f
-                .peers
-                .get_peers_which_have_timeout(START + elapsed)
-                .contains(&f.peer));
-        }
         // Exactly at the original deadline is still not timed out (strict >).
         clock.set_faketime(START + MESSAGE_TIMEOUT);
         f.protocol
@@ -299,7 +294,7 @@ async fn empty_hints_preserve_owner_and_deadline_then_recover_through_timeout() 
                 .get_last_state()
                 .unwrap()
                 .update_ts(),
-            START + MESSAGE_TIMEOUT - 1
+            START
         );
         assert_eq!(
             f.peers
@@ -316,7 +311,7 @@ async fn empty_hints_preserve_owner_and_deadline_then_recover_through_timeout() 
         deliver_disconnects(&mut f, index).await;
         assert_eq!(accepted_state(&f), accepted);
         retry_and_complete(&mut f, kind, survivor).await;
-        println!("A {kind:?}: invalid/repeated valid hints, original deadline, refresh/disconnect, survivor completion passed");
+        println!("A {kind:?}: invalid hints/silent peer, original deadline, refresh/disconnect, survivor completion passed");
     }
 }
 

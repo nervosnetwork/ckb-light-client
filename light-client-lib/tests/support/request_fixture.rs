@@ -177,7 +177,9 @@ impl Fixture {
                         .proof(proof)
                         .headers(vec![self.block.header().data()].pack())
                         .blocks_uncles_hash(vec![self.block.calc_uncles_hash()].pack())
-                        .blocks_extension(vec![packed::BytesOpt::default()])
+                        .blocks_extension(vec![packed::BytesOpt::new_builder()
+                            .set(self.block.extension())
+                            .build()])
                         .build(),
                 )
                 .build(),
@@ -200,7 +202,9 @@ impl Fixture {
                             .proof(proof)
                             .filtered_blocks(vec![filtered])
                             .blocks_uncles_hash(vec![self.block.calc_uncles_hash()].pack())
-                            .blocks_extension(vec![packed::BytesOpt::default()])
+                            .blocks_extension(vec![packed::BytesOpt::new_builder()
+                                .set(self.block.extension())
+                                .build()])
                             .build(),
                     )
                     .build()

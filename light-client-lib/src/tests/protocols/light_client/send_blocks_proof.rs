@@ -34,7 +34,7 @@ async fn peer_state_is_not_found() {
 }
 
 #[tokio::test]
-async fn unsolicited_reply_without_a_request_is_ignored() {
+async fn unsolicited_reply_without_a_request_is_penalized() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -57,7 +57,7 @@ async fn unsolicited_reply_without_a_request_is_ignored() {
 
     protocol.received(nc.context(), peer_index, data).await;
 
-    assert!(nc.not_banned(peer_index));
+    assert!(nc.banned_since(peer_index, StatusCode::PeerIsNotOnProcess));
     assert!(protocol
         .get_peer(&peer_index)
         .unwrap()
@@ -67,7 +67,7 @@ async fn unsolicited_reply_without_a_request_is_ignored() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn changed_last_state_hint_preserves_request() {
+async fn changed_last_state_hint_releases_request() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -156,20 +156,7 @@ async fn changed_last_state_hint_preserves_request() {
         assert!(nc.not_banned(peer_index));
 
         let peer = protocol.get_peer(&peer_index).expect("has peer");
-        let request = peer
-            .get_blocks_proof_request()
-            .expect("hint preserves request");
-        assert_eq!(
-            request.last_hash(),
-            snapshot.get_header_by_number(num - 1).unwrap().hash()
-        );
-        assert_eq!(
-            request.block_hashes(),
-            block_numbers
-                .iter()
-                .map(|n| snapshot.get_header_by_number(*n).unwrap().hash().unpack())
-                .collect::<Vec<ckb_types::H256>>()
-        );
+        assert!(peer.get_blocks_proof_request().is_none());
     }
 }
 
@@ -275,7 +262,7 @@ async fn different_hash_set_preserves_request() {
 
         protocol.received(nc.context(), peer_index, data).await;
 
-        assert!(nc.not_banned(peer_index));
+        assert!(nc.banned_since(peer_index, StatusCode::UnexpectedResponse));
         assert!(nc.sent_messages().borrow().is_empty());
         let peer = protocol.get_peer(&peer_index).unwrap();
         let request = peer
@@ -580,7 +567,7 @@ async fn unrequested_header_when_all_blocks_are_missing_preserves_request() {
         returned_headers,
         missing_block_hashes: missing_block_hashes.clone(),
         returned_missing_block_hashes: missing_block_hashes,
-        expect_ignored: true,
+        expect_rejected_preserving_owner: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -616,7 +603,7 @@ async fn insufficient_missing_block_hashes_preserve_request() {
         returned_headers: block_numbers,
         missing_block_hashes,
         returned_missing_block_hashes,
-        expect_ignored: true,
+        expect_rejected_preserving_owner: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -635,7 +622,7 @@ async fn redundant_missing_block_hashes_preserve_request() {
         returned_headers: block_numbers,
         missing_block_hashes,
         returned_missing_block_hashes,
-        expect_ignored: true,
+        expect_rejected_preserving_owner: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -699,7 +686,7 @@ async fn insufficient_returned_headers_preserve_request() {
         block_numbers: block_numbers.clone(),
         proved_block_numbers: block_numbers,
         returned_headers,
-        expect_ignored: true,
+        expect_rejected_preserving_owner: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -715,7 +702,7 @@ async fn redundant_returned_headers_preserve_request() {
         block_numbers: block_numbers.clone(),
         proved_block_numbers: block_numbers,
         returned_headers,
-        expect_ignored: true,
+        expect_rejected_preserving_owner: true,
         ..Default::default()
     };
     test_send_blocks_proof(param).await;
@@ -748,7 +735,7 @@ struct TestParameter {
     returned_extensions: Option<Vec<packed::BytesOpt>>,
     use_legacy_message: bool,
     expected_status: Option<StatusCode>,
-    expect_ignored: bool,
+    expect_rejected_preserving_owner: bool,
 }
 
 async fn test_send_blocks_proof(param: TestParameter) {
@@ -920,8 +907,8 @@ async fn test_send_blocks_proof(param: TestParameter) {
             .clone();
         protocol.received(nc.context(), peer_index, data).await;
 
-        if param.expect_ignored {
-            assert!(nc.not_banned(peer_index));
+        if param.expect_rejected_preserving_owner {
+            assert!(nc.banned_since(peer_index, StatusCode::UnexpectedResponse));
             assert!(nc.sent_messages().borrow().is_empty());
             let peer = protocol.get_peer(&peer_index).unwrap();
             let request = peer
