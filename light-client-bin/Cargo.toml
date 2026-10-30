@@ -27,7 +27,7 @@ jsonrpc-core = "18.0"
 jsonrpc-derive = "18.0"
 jsonrpc-http-server = "18.0"
 jsonrpc-server-utils = "18.0"
-rocksdb = { package = "ckb-rocksdb", version = "=0.21.1", features = [
+rocksdb = { package = "ckb-rocksdb", version = "0.21.2", features = [
     "snappy",
 ], default-features = false, optional = true }
 env_logger = "0.11"
