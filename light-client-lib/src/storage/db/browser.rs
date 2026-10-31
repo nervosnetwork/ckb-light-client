@@ -377,6 +377,43 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        let response = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Read {
+                keys: keys.to_vec(),
+            })
+            .map_err(|error| Error::Indexdb(format!("{error:?}")))?;
+        match response {
+            DbCommandResponse::Read { values } if values.len() == keys.len() => Ok(values),
+            _ => Err(Error::Indexdb("invalid multi-key read response".into())),
+        }
+    }
+
+    fn try_collect_iterator(
+        &self,
+        start: IteratorStart,
+        direction: IteratorDirection,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
+        limit: usize,
+    ) -> Result<Vec<KVPair>> {
+        let response = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
+                start,
+                direction,
+                take_while: take_while_fn,
+                filter_map: filter_map_fn,
+                limit,
+            })
+            .map_err(|error| Error::Indexdb(format!("{error:?}")))?;
+        match response {
+            DbCommandResponse::Iterator { kvs } => Ok(kvs),
+            _ => Err(Error::Indexdb("invalid checked iterator response".into())),
+        }
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         let values = self
             .channel

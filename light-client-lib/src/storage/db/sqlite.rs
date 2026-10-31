@@ -161,6 +161,77 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        use rusqlite::OptionalExtension;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| crate::error::Error::runtime("poisoned database lock"))?;
+        let transaction = conn.unchecked_transaction()?;
+        let values = keys
+            .iter()
+            .map(|key| {
+                transaction
+                    .query_row(
+                        "SELECT value FROM kv_store WHERE key = ?",
+                        rusqlite::params![key],
+                        |row| row.get(0),
+                    )
+                    .optional()
+                    .map_err(Into::into)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        transaction.commit()?;
+        Ok(values)
+    }
+
+    fn try_collect_iterator(
+        &self,
+        start: IteratorStart,
+        direction: IteratorDirection,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
+        limit: usize,
+    ) -> Result<Vec<KVPair>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        // Materialize the selected prefix from one SELECT before invoking a
+        // filter callback: the callback may read this non-reentrant connection.
+        let rows = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|_| crate::error::Error::runtime("poisoned database lock"))?;
+            let (order, comparison) = match (direction, start.should_skip_first()) {
+                (IteratorDirection::Forward, false) => ("ASC", ">="),
+                (IteratorDirection::Forward, true) => ("ASC", ">"),
+                (IteratorDirection::Reverse, false) => ("DESC", "<="),
+                (IteratorDirection::Reverse, true) => ("DESC", "<"),
+            };
+            let mut statement = conn.prepare(&format!(
+                "SELECT key, value FROM kv_store WHERE key {comparison} ? ORDER BY key {order}"
+            ))?;
+            let mut query = statement.query(rusqlite::params![start.key()])?;
+            let mut rows = Vec::new();
+            while let Some(row) = query.next()? {
+                let key: Vec<u8> = row.get(0)?;
+                if !take_while_fn(&key) {
+                    break;
+                }
+                rows.push((key, row.get::<_, Vec<u8>>(1)?));
+            }
+            rows
+        };
+        Ok(rows
+            .into_iter()
+            .filter_map(|(key, value)| {
+                filter_map_fn(&key, &value).map(|value| KVPair { key, value })
+            })
+            .take(limit)
+            .collect())
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         Storage::get(self, key)
     }
@@ -293,5 +364,33 @@ impl CellProvider for Storage {
             }
         }
         CellStatus::Unknown
+    }
+}
+
+#[cfg(test)]
+mod checked_read_tests {
+    use super::*;
+
+    #[test]
+    fn poisoned_connection_returns_read_and_scan_errors() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        let connection = storage.conn.clone();
+        assert!(std::thread::spawn(move || {
+            let _guard = connection.lock().unwrap();
+            panic!("injected connection-lock interruption");
+        })
+        .join()
+        .is_err());
+        assert!(storage.get_many(&[vec![1]]).is_err());
+        assert!(storage
+            .try_collect_iterator(
+                IteratorStart::From(vec![]),
+                IteratorDirection::Forward,
+                Box::new(|_| true),
+                Box::new(|_, value| Some(value.to_vec())),
+                1
+            )
+            .is_err());
     }
 }
