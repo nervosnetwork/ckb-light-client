@@ -2,8 +2,8 @@ const path = require('path');
 const WasmPackPlugin = require("@wasm-tool/wasm-pack-plugin");
 const webpack = require("webpack");
 module.exports = {
-    entry: './index.ts',
-    target: "webworker",
+    entry: './index.mts',
+    target: "node",
     output: {
         path: path.resolve(__dirname, 'dist'),
         filename: 'index.js',
@@ -19,9 +19,9 @@ module.exports = {
             outName: "light-client-wasm",
             extraArgs: "--target web"
         }),
-        new webpack.ProvidePlugin({
-            Buffer: ['buffer', 'Buffer'],
-        }),
+        // new webpack.ProvidePlugin({
+        //     Buffer: ['buffer', 'Buffer'],
+        // }),
     ],
     module: {
         rules: [
@@ -33,17 +33,20 @@ module.exports = {
                 test: /\.ts$/,
                 use: 'ts-loader',
                 exclude: /node_modules/,
-            }
+            },
         ]
-
     },
     experiments: {
         outputModule: true
     },
     mode: "production",
-    resolve: {
-        fallback: {
-            buffer: require.resolve('buffer/'),
-        },
+    // resolve: {
+    //     fallback: {
+    //         buffer: require.resolve('buffer/'),
+    //     },
+    // },
+    node: {
+        global: false,
+        __dirname: false
     },
 };
