@@ -1,10 +1,13 @@
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
-    core::BlockNumber, h256, packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader,
+    core::BlockNumber, h256, packed, prelude::*,
+    utilities::merkle_mountain_range::VerifiableHeader, H256,
 };
+use std::collections::HashMap;
 
 use crate::{
-    protocols::{LastState, ProveRequest, ProveState, StatusCode},
+    protocols::{LastState, MatchedBlockState, ProveRequest, ProveState, StatusCode},
+    storage::LightClientStorage,
     tests::{
         prelude::*,
         utils::{MockChain, MockNetworkContext},
@@ -111,6 +114,19 @@ async fn last_state_is_changed() {
             ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
+        let expected_heights = block_numbers
+            .iter()
+            .map(|&n| {
+                (
+                    snapshot
+                        .get_header_by_number(n)
+                        .expect("block stored")
+                        .hash()
+                        .unpack(),
+                    n,
+                )
+            })
+            .collect::<HashMap<H256, BlockNumber>>();
         protocol
             .peers()
             .update_last_state(peer_index, last_state)
@@ -123,9 +139,12 @@ async fn last_state_is_changed() {
             .commit_prove_state(peer_index, prove_state)
             .await
             .unwrap();
-        protocol
-            .peers()
-            .update_blocks_proof_request(peer_index, Some(content), true);
+        protocol.peers().update_blocks_proof_request(
+            peer_index,
+            Some(content),
+            expected_heights,
+            true,
+        );
     }
 
     num += 1;
@@ -218,9 +237,25 @@ async fn unexpected_response() {
             .commit_prove_state(peer_index, prove_state)
             .await
             .unwrap();
-        protocol
-            .peers()
-            .update_blocks_proof_request(peer_index, Some(content), true);
+        let expected_heights = block_numbers
+            .iter()
+            .map(|&n| {
+                (
+                    snapshot
+                        .get_header_by_number(n)
+                        .expect("block stored")
+                        .hash()
+                        .unpack(),
+                    n,
+                )
+            })
+            .collect::<HashMap<H256, BlockNumber>>();
+        protocol.peers().update_blocks_proof_request(
+            peer_index,
+            Some(content),
+            expected_heights,
+            true,
+        );
     }
 
     // Run the test.
@@ -326,9 +361,25 @@ async fn get_blocks_with_chunks() {
             .commit_prove_state(peer_index, prove_state)
             .await
             .unwrap();
-        protocol
-            .peers()
-            .update_blocks_proof_request(peer_index, Some(content), true);
+        let expected_heights = block_numbers
+            .iter()
+            .map(|&n| {
+                (
+                    snapshot
+                        .get_header_by_number(n)
+                        .expect("block stored")
+                        .hash()
+                        .unpack(),
+                    n,
+                )
+            })
+            .collect::<HashMap<H256, BlockNumber>>();
+        protocol.peers().update_blocks_proof_request(
+            peer_index,
+            Some(content),
+            expected_heights,
+            true,
+        );
     }
 
     // Run the test.
@@ -709,8 +760,173 @@ struct TestParameter {
     returned_extensions: Option<Vec<packed::BytesOpt>>,
     use_legacy_message: bool,
     expected_status: Option<StatusCode>,
+    /// Heights to record as the ones `BlockFilters` matched each block at.
+    ///
+    /// Defaults to the blocks' real heights, which is the honest case. Setting a
+    /// height different from where the block actually sits models a peer that sent
+    /// correct filter data for one height and the provable hash of a block from
+    /// another — the shape of the 0058 attack.
+    matched_heights: Option<Vec<BlockNumber>>,
 }
 
+/// A peer sends correct filter data for heights 1000/1005/1008, but fills the
+/// corresponding `block_hashes[]` entries with the hashes of blocks 3/5/8 — real,
+/// provable blocks that sit at other heights.
+///
+/// The MMR proof for those blocks succeeds, because it only shows they are
+/// somewhere in the chain; it says nothing about which height they occupy. Without
+/// the height binding in `SendBlocksProofProcess` the client would download them,
+/// index them as 1000/1005/1008, and advance the cursor past those heights — so the
+/// real blocks there would never be scanned and any transaction touching a watched
+/// script would be missed. This is the shape of sec-reports `PENDING-HIGH-0058`.
+#[tokio::test(flavor = "multi_thread")]
+async fn rejected_proof_of_block_at_a_different_height_than_the_filters_matched() {
+    let param = TestParameter {
+        last_block_number: 20,
+        block_numbers: vec![3, 5, 8],
+        proved_block_numbers: vec![3, 5, 8],
+        returned_headers: vec![3, 5, 8],
+        // The filters claimed these blocks sit at heights with nothing to do with
+        // where they actually are.
+        matched_heights: Some(vec![1000, 1005, 1008]),
+        expected_status: Some(StatusCode::InvalidProof),
+        ..Default::default()
+    };
+    test_send_blocks_proof(param).await;
+}
+
+/// A block whose hash came from `BlockFilters` is reported missing by the proof
+/// peer: the peer that supplied the hash is banned and the filter cursor is rolled
+/// back to the height before it, so the height is re-filtered rather than skipped.
+///
+/// The existing `*_missing_block_hashes` tests build their request directly and
+/// leave the in-memory `matched_blocks` map empty, so the handling finds nothing to
+/// act on and only the `Remove` no-op path is reached. Seeding the map with a
+/// `filter_source` is what exercises the `Retry` path.
+///
+/// This is a standalone test rather than a case of the shared harness because the
+/// retry path sends its own `GetBlockFilters`, and the harness's `expected_status`
+/// branch asserts that nothing was sent. The supplier is also deliberately a
+/// different peer from the responder, which the harness cannot express either.
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_block_rolls_the_filter_cursor_back_to_the_height_before_it() {
+    let chain = MockChain::new_with_dummy_pow("test-light-client").start();
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    let block_number: BlockNumber = 8;
+    let missing_hash = h256!("0x1").pack();
+    let filter_source_peer = PeerIndex::new(7);
+
+    // Mine far enough that the probe below has a real header to anchor on.
+    chain.mine_to(20);
+    let snapshot = chain.shared().snapshot();
+
+    let client_peer = PeerIndex::new(1);
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(client_peer);
+        peers.request_last_state(client_peer).unwrap();
+        peers
+    };
+    let mut protocol = chain.create_light_client_protocol(peers);
+
+    let num = 20;
+    {
+        let peer_state = protocol
+            .get_peer_state(&client_peer)
+            .expect("has peer state");
+        let prove_request = {
+            let last_header: VerifiableHeader = snapshot
+                .get_verifiable_header_by_number(num)
+                .expect("block stored")
+                .into();
+            let content = protocol
+                .build_prove_request_content(&peer_state, &last_header)
+                .await
+                .expect("build prove request content");
+            let last_state = LastState::new(last_header);
+            ProveRequest::new(last_state, content)
+        };
+        let last_state = LastState::new(prove_request.get_last_header().to_owned());
+        let prove_state = {
+            let last_n_blocks_start_number = if num > protocol.last_n_blocks() + 1 {
+                num - protocol.last_n_blocks()
+            } else {
+                1
+            };
+            let last_n_headers = (last_n_blocks_start_number..num)
+                .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
+                .collect::<Vec<_>>();
+            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+        };
+
+        // The block was admitted from a `BlockFilters` response, so we know which
+        // peer supplied its hash.
+        {
+            let mut matched_blocks = protocol.peers().matched_blocks().write().await;
+            matched_blocks.insert(
+                missing_hash.unpack(),
+                MatchedBlockState::new(block_number, false, Some(filter_source_peer)),
+            );
+        }
+
+        let content =
+            chain.build_blocks_proof_content(num, &[], std::slice::from_ref(&missing_hash));
+        protocol
+            .peers()
+            .update_last_state(client_peer, last_state)
+            .unwrap();
+        protocol
+            .peers()
+            .update_prove_request(client_peer, prove_request)
+            .unwrap();
+        protocol
+            .commit_prove_state(client_peer, prove_state)
+            .await
+            .unwrap();
+        protocol.peers().update_blocks_proof_request(
+            client_peer,
+            Some(content),
+            HashMap::new(),
+            true,
+        );
+    }
+
+    {
+        // The response must carry the same last state the request asked about,
+        // otherwise it is rejected as an unexpected response before the
+        // missing-block handling runs.
+        let last_header = snapshot
+            .get_verifiable_header_by_number(num)
+            .expect("block stored");
+        let data = {
+            let content = packed::SendBlocksProof::new_builder()
+                .last_header(last_header)
+                .missing_block_hashes(vec![missing_hash.clone()].pack())
+                .build();
+            packed::LightClientMessage::new_builder()
+                .set(content)
+                .build()
+        }
+        .as_bytes();
+
+        protocol.received(nc.context(), client_peer, data).await;
+    }
+
+    // The peer that supplied the hash is the one that gets banned, not the one that
+    // reported it missing — `Status::process` bans the *responder*, which here is
+    // `client_peer`.
+    assert!(
+        nc.banned_since(filter_source_peer, StatusCode::InvalidProof),
+        "the peer that supplied the unprovable hash should have been banned"
+    );
+
+    assert_eq!(
+        chain.client_storage().get_min_filtered_block_number(),
+        block_number - 1,
+        "the cursor should roll back to just below the height that was skipped"
+    );
+}
 async fn test_send_blocks_proof(param: TestParameter) {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
@@ -775,9 +991,31 @@ async fn test_send_blocks_proof(param: TestParameter) {
             .commit_prove_state(peer_index, prove_state)
             .await
             .unwrap();
-        protocol
-            .peers()
-            .update_blocks_proof_request(peer_index, Some(content), true);
+        let claimed_heights = param
+            .matched_heights
+            .clone()
+            .unwrap_or_else(|| param.block_numbers.clone());
+        let expected_heights = param
+            .block_numbers
+            .iter()
+            .zip(claimed_heights)
+            .map(|(&real, claimed)| {
+                (
+                    snapshot
+                        .get_header_by_number(real)
+                        .expect("block stored")
+                        .hash()
+                        .unpack(),
+                    claimed,
+                )
+            })
+            .collect::<HashMap<H256, BlockNumber>>();
+        protocol.peers().update_blocks_proof_request(
+            peer_index,
+            Some(content),
+            expected_heights,
+            true,
+        );
     }
 
     // Run the test.
