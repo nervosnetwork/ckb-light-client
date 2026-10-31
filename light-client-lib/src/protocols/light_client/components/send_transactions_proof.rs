@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    super::{LightClientProtocol, Status, StatusCode},
+    super::{peers::TransactionsProofRequest, LightClientProtocol, Status, StatusCode},
     verify_mmr_proof,
 };
 
@@ -39,20 +39,29 @@ impl<'a> SendTransactionsProofProcess<'a> {
     }
 
     pub(crate) async fn execute(self) -> Status {
-        let status = self.execute_internally().await;
-        self.protocol
-            .peers()
-            .update_txs_proof_request(self.peer_index, None);
+        let mut retire_request = None;
+        let status = self.execute_internally(&mut retire_request).await;
+        if let Some(request) = retire_request {
+            self.protocol.peers().finish_txs_proof_request(
+                self.peer_index,
+                &request,
+                !status.is_ok(),
+                false,
+            );
+        }
         status
     }
 
-    async fn execute_internally(&self) -> Status {
+    async fn execute_internally(
+        &self,
+        retire_request: &mut Option<TransactionsProofRequest>,
+    ) -> Status {
         let peer = return_if_failed!(self.protocol.get_peer(&self.peer_index));
 
         let original_request = if let Some(original_request) = peer.get_txs_proof_request() {
             original_request
         } else {
-            error!("peer {} isn't waiting for a proof", self.peer_index);
+            debug!("peer {} has no outstanding proof request", self.peer_index);
             return StatusCode::PeerIsNotOnProcess.into();
         };
 
@@ -98,9 +107,14 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                self.protocol
-                    .peers()
-                    .mark_fetching_txs_timeout(self.peer_index);
+                // The header is authenticated, but is not an accepted chain tip.
+                // Retire only this owner and avoid retrying its unavailable anchor.
+                self.protocol.peers().finish_txs_proof_request(
+                    self.peer_index,
+                    original_request,
+                    true,
+                    true,
+                );
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.
@@ -134,10 +148,20 @@ impl<'a> SendTransactionsProofProcess<'a> {
             .to_entity()
             .into_iter()
             .collect::<Vec<_>>();
-        if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
-            error!("peer {} send an unknown proof", self.peer_index);
+        // A duplicate/overlap is malformed regardless of which slot it targets.
+        let mut distinct = std::collections::HashSet::new();
+        if received_tx_hashes
+            .iter()
+            .chain(missing_tx_hashes.iter())
+            .any(|hash| !distinct.insert(hash))
+        {
             return StatusCode::UnexpectedResponse.into();
         }
+        if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
+            // Preserve the owner, but retain protocol penalties for invalid data.
+            return StatusCode::UnexpectedResponse.into();
+        }
+        *retire_request = Some(original_request.clone());
 
         // If all transactions are missing.
         if filtered_blocks.is_empty() {

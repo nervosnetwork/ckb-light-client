@@ -11,7 +11,7 @@ use rand::seq::SliceRandom;
 use crate::storage::{HeaderWithExtension, LightClientStorage};
 
 use super::{
-    super::{LightClientProtocol, Status, StatusCode},
+    super::{peers::BlocksProofRequest, LightClientProtocol, Status, StatusCode},
     verify_mmr_proof,
 };
 
@@ -38,21 +38,27 @@ impl<'a> SendBlocksProofProcess<'a> {
     }
 
     pub(crate) async fn execute(self) -> Status {
-        let status = self.execute_internally().await;
+        let mut retire_request = None;
+        let status = self.execute_internally(&mut retire_request).await;
         debug!("block proof status: {}", status);
-        self.protocol
-            .peers()
-            .update_blocks_proof_request(self.peer_index, None, false);
+        if let Some(request) = retire_request {
+            self.protocol.peers().finish_blocks_proof_request(
+                self.peer_index,
+                &request,
+                !status.is_ok(),
+                false,
+            );
+        }
         status
     }
 
-    async fn execute_internally(&self) -> Status {
+    async fn execute_internally(&self, retire_request: &mut Option<BlocksProofRequest>) -> Status {
         let peer = return_if_failed!(self.protocol.get_peer(&self.peer_index));
 
         let original_request = if let Some(original_request) = peer.get_blocks_proof_request() {
             original_request
         } else {
-            error!("peer {} isn't waiting for a proof", self.peer_index);
+            debug!("peer {} has no outstanding proof request", self.peer_index);
             return StatusCode::PeerIsNotOnProcess.into();
         };
 
@@ -94,9 +100,14 @@ impl<'a> SendBlocksProofProcess<'a> {
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                self.protocol
-                    .peers()
-                    .mark_fetching_headers_timeout(self.peer_index);
+                // The header is authenticated, but is not an accepted chain tip.
+                // Retire only this owner and avoid retrying its unavailable anchor.
+                self.protocol.peers().finish_blocks_proof_request(
+                    self.peer_index,
+                    original_request,
+                    true,
+                    true,
+                );
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.
@@ -129,10 +140,20 @@ impl<'a> SendBlocksProofProcess<'a> {
 
         debug!("got block proof: missing {:?}", &missing_block_hashes);
 
-        if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
-            error!("peer {} send an unknown proof", self.peer_index);
+        // A duplicate/overlap is malformed regardless of which slot it targets.
+        let mut distinct = std::collections::HashSet::new();
+        if received_block_hashes
+            .iter()
+            .chain(missing_block_hashes.iter())
+            .any(|hash| !distinct.insert(hash))
+        {
             return StatusCode::UnexpectedResponse.into();
         }
+        if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
+            // Preserve the owner, but retain protocol penalties for invalid data.
+            return StatusCode::UnexpectedResponse.into();
+        }
+        *retire_request = Some(original_request.clone());
 
         // If all blocks are missing.
         if headers.is_empty() {
@@ -186,6 +207,14 @@ impl<'a> SendBlocksProofProcess<'a> {
                     headers.iter().map(|header| header.hash()).collect();
                 {
                     let mut matched_blocks = self.protocol.peers().matched_blocks().write().await;
+                    // The request may have been replaced while this lock was pending.
+                    if !self
+                        .protocol
+                        .peers()
+                        .owns_blocks_proof_request(self.peer_index, original_request)
+                    {
+                        return Status::ok();
+                    }
 
                     self.protocol
                         .peers
@@ -266,6 +295,14 @@ impl<'a> SendBlocksProofProcess<'a> {
         // 3. New main chain blocks at the same heights will be checked during re-filtering
         if original_request.should_get_blocks() && !missing_block_hashes.is_empty() {
             let mut matched_blocks = self.protocol.peers().matched_blocks().write().await;
+            // The request may have been replaced while this lock was pending.
+            if !self
+                .protocol
+                .peers()
+                .owns_blocks_proof_request(self.peer_index, original_request)
+            {
+                return Status::ok();
+            }
             let mut removed_count = 0;
 
             for missing_hash in &missing_block_hashes {

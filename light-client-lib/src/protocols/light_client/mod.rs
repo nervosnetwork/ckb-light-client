@@ -722,7 +722,15 @@ impl LightClientProtocol {
         }
 
         let tip_header = self.storage.get_tip_header();
-        let best_peers: Vec<PeerIndex> = self.peers.get_best_proved_peers(&tip_header);
+        let best_peers: Vec<PeerIndex> = self
+            .peers
+            .get_best_proved_peers(&tip_header)
+            .into_iter()
+            .filter(|index| {
+                self.peers
+                    .can_request_proof(*index, &tip_header.calc_header_hash())
+            })
+            .collect();
         if best_peers.is_empty() {
             debug!("no peers found for fetch headers and transactions");
             return;

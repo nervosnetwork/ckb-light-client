@@ -16,6 +16,7 @@ struct MockProtocolContext {
     protocol: SupportProtocols,
     sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
     banned_peers: RefCell<Vec<(PeerIndex, Duration, String)>>,
+    disconnected_peers: RefCell<Vec<PeerIndex>>,
     connected_peers: RefCell<HashSet<PeerIndex>>,
 }
 
@@ -33,6 +34,7 @@ impl MockProtocolContext {
             protocol,
             sent_messages: Default::default(),
             banned_peers: Default::default(),
+            disconnected_peers: Default::default(),
             connected_peers: Default::default(),
         }
     }
@@ -89,6 +91,11 @@ impl MockNetworkContext {
 
     pub(crate) fn context(&self) -> Arc<dyn CKBProtocolContext + Sync> {
         Arc::clone(&self.inner) as Arc<dyn CKBProtocolContext + Sync>
+    }
+
+    // The harness delivers these transport events to the real protocol callback.
+    pub(crate) fn take_disconnects(&self) -> Vec<PeerIndex> {
+        std::mem::take(&mut *self.inner.disconnected_peers.borrow_mut())
     }
 }
 
@@ -200,6 +207,7 @@ impl CKBProtocolContext for MockProtocolContext {
         unimplemented!();
     }
     fn disconnect(&self, peer_index: PeerIndex, _message: &str) -> Result<(), Error> {
+        self.disconnected_peers.borrow_mut().push(peer_index);
         self.connected_peers.borrow_mut().remove(&peer_index);
         Ok(())
     }
