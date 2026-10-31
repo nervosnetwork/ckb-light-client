@@ -8,7 +8,7 @@ use log::{debug, error};
 
 use crate::{
     protocols::light_client::components::{verify_extra_hash, verify_legacy_extra_hash},
-    storage::{HeaderWithExtension, LightClientStorage},
+    storage::HeaderWithExtension,
 };
 
 use super::{
@@ -39,21 +39,34 @@ impl<'a> SendTransactionsProofProcess<'a> {
     }
 
     pub(crate) async fn execute(self) -> Status {
-        let status = self.execute_internally().await;
-        self.protocol
-            .peers()
-            .update_txs_proof_request(self.peer_index, None);
+        let mut retire_request = false;
+        let status = self.execute_internally(&mut retire_request).await;
+        if retire_request {
+            // Preserve retry eligibility before removing the identified request's
+            // hash list. Peer discipline may allow an invalid response without
+            // immediately disconnecting the peer.
+            if !status.is_ok() {
+                self.protocol
+                    .peers()
+                    .mark_fetching_txs_timeout(self.peer_index);
+            }
+            self.protocol
+                .peers()
+                .update_txs_proof_request(self.peer_index, None);
+        }
         status
     }
 
-    async fn execute_internally(&self) -> Status {
+    async fn execute_internally(&self, retire_request: &mut bool) -> Status {
         let peer = return_if_failed!(self.protocol.get_peer(&self.peer_index));
 
         let original_request = if let Some(original_request) = peer.get_txs_proof_request() {
             original_request
         } else {
             error!("peer {} isn't waiting for a proof", self.peer_index);
-            return StatusCode::PeerIsNotOnProcess.into();
+            // A response can arrive after timeout/replacement/completion. Ignore it
+            // without attributing peer fault or changing any fetch bookkeeping.
+            return Status::ok();
         };
 
         let last_header: VerifiableHeader = self.message.last_header().to_entity().into();
@@ -95,12 +108,12 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 && self.message.filtered_blocks().is_empty()
                 && self.message.missing_tx_hashes().is_empty()
             {
+                // No requested hashes are echoed, so this may announce an old
+                // operation. Update the peer hint without draining the active slot.
+                // Its matching reply or the existing timeout will retire it.
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                self.protocol
-                    .peers()
-                    .mark_fetching_txs_timeout(self.peer_index);
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.
@@ -108,7 +121,8 @@ impl<'a> SendTransactionsProofProcess<'a> {
                     "peer {} send a proof with different last state",
                     self.peer_index
                 );
-                return StatusCode::UnexpectedResponse.into();
+                // A late response must not retire a different outstanding operation.
+                return Status::ok();
             }
         }
 
@@ -134,9 +148,45 @@ impl<'a> SendTransactionsProofProcess<'a> {
             .to_entity()
             .into_iter()
             .collect::<Vec<_>>();
-        if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
-            error!("peer {} send an unknown proof", self.peer_index);
+        // Duplicates/overlap are intrinsically invalid, independently of the request slot.
+        let mut distinct = std::collections::HashSet::new();
+        if received_tx_hashes
+            .iter()
+            .chain(missing_tx_hashes.iter())
+            .any(|hash| !distinct.insert(hash))
+        {
             return StatusCode::UnexpectedResponse.into();
+        }
+        if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
+            debug!(
+                "peer {} response does not match the outstanding hashes",
+                self.peer_index
+            );
+            return Status::ok();
+        }
+
+        // Retire only the operation identified by both anchor and requested hashes.
+        *retire_request = true;
+
+        // The original request slot is retained until this response is drained.
+        // A valid old-fork response must neither complete a fetch nor mark it missing.
+        match crate::storage::canonical::anchor_current(
+            self.protocol.storage(),
+            &last_header.header().data(),
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.protocol
+                    .peers()
+                    .mark_fetching_txs_timeout(self.peer_index);
+                return Status::ok();
+            }
+            Err(error) => {
+                self.protocol
+                    .peers()
+                    .mark_fetching_txs_timeout(self.peer_index);
+                return StatusCode::InternalError.with_context(error.to_string());
+            }
         }
 
         // If all transactions are missing.
@@ -218,20 +268,36 @@ impl<'a> SendTransactionsProofProcess<'a> {
 
             for (filtered_block, extension) in filtered_blocks.into_iter().zip(extensions.iter()) {
                 let header = filtered_block.header().into_view();
+                // CBMT proof indices are heap positions, not transaction ordinals.
+                // Only the one-leaf case determines an ordinal without a block body.
+                let index = if filtered_block.proof().indices().len() == 1
+                    && Unpack::<u32>::unpack(
+                        &filtered_block.proof().indices().get(0).expect("one index"),
+                    ) == 0
+                {
+                    0
+                } else {
+                    u32::MAX
+                };
                 for tx in filtered_block.transactions() {
-                    if self
-                        .protocol
-                        .peers()
-                        .remove_fetching_transaction(&tx.calc_tx_hash(), &header.hash())
-                    {
-                        self.protocol.storage().add_fetched_tx(
-                            &tx,
-                            &HeaderWithExtension {
-                                header: header.data(),
-                                extension: extension.as_ref().cloned(),
-                            },
-                        );
+                    if let Err(error) = crate::storage::canonical::store_proved_transaction(
+                        self.protocol.storage(),
+                        &tx,
+                        index,
+                        &HeaderWithExtension {
+                            header: header.data(),
+                            extension: extension.clone(),
+                        },
+                        &last_header.header().data(),
+                    ) {
+                        self.protocol
+                            .peers()
+                            .mark_fetching_txs_timeout(self.peer_index);
+                        return StatusCode::InternalError.with_context(error.to_string());
                     }
+                    self.protocol
+                        .peers()
+                        .remove_fetching_transaction(&tx.calc_tx_hash(), &header.hash());
                 }
             }
         }

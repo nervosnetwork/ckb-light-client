@@ -3,7 +3,6 @@
 
 use super::super::backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};
 use super::super::storage_trait::LightClientStorage;
-use super::super::{Byte32, Key};
 use super::iterator::{IteratorDirection, IteratorStart, KVPair};
 use crate::error::Result;
 use ckb_types::{
@@ -11,7 +10,7 @@ use ckb_types::{
         cell::{CellMeta, CellProvider, CellStatus},
         TransactionInfo,
     },
-    packed::{CellOutput, Header, OutPoint},
+    packed::{CellOutput, OutPoint},
     prelude::*,
 };
 use rusqlite::{Connection, OpenFlags};
@@ -161,6 +160,29 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        use rusqlite::OptionalExtension;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| crate::error::Error::runtime("poisoned database lock"))?;
+        let tx = conn.unchecked_transaction()?;
+        let values = keys
+            .iter()
+            .map(|key| {
+                tx.query_row(
+                    "SELECT value FROM kv_store WHERE key = ?",
+                    rusqlite::params![key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        tx.commit()?;
+        Ok(values)
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         Storage::get(self, key)
     }
@@ -194,12 +216,27 @@ impl StorageBackend for Storage {
         filter_map_fn: FilterMapFn,
         limit: usize,
     ) -> Vec<KVPair> {
+        self.try_collect_iterator(start, direction, take_while_fn, filter_map_fn, limit)
+            .expect("database iteration")
+    }
+
+    fn try_collect_iterator(
+        &self,
+        start: IteratorStart,
+        direction: IteratorDirection,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
+        limit: usize,
+    ) -> Result<Vec<KVPair>> {
         // First, collect all matching rows while holding the lock.
         // This is necessary because filter_map_fn may call storage.get() which needs the lock,
         // and std::sync::Mutex is not reentrant. By collecting rows first and releasing the lock,
         // we avoid deadlock when filter_map_fn tries to acquire the lock again.
         let rows: Vec<(Vec<u8>, Vec<u8>)> = {
-            let conn = self.conn.lock().unwrap();
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|_| crate::error::Error::runtime("poisoned database lock"))?;
 
             let (order_clause, comparison) = match direction {
                 IteratorDirection::Forward => ("ASC", ">="),
@@ -211,28 +248,34 @@ impl StorageBackend for Storage {
                 comparison, order_clause
             );
 
-            let mut stmt = conn.prepare(&query).expect("prepare query");
+            let mut stmt = conn.prepare(&query)?;
 
             let from_key = start.key();
-            let query_rows = stmt
-                .query_map(rusqlite::params![from_key], |row| {
-                    Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
-                })
-                .expect("query rows");
+            let query_rows = stmt.query_map(rusqlite::params![from_key], |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, Vec<u8>>(1)?))
+            })?;
 
             // Collect rows that pass the take_while condition.
             // We need to eagerly collect because the lock must be released before filter_map_fn runs.
             let skip = if start.should_skip_first() { 1 } else { 0 };
-            query_rows
-                .filter_map(|r| r.ok())
-                .skip(skip)
-                .take_while(|(key, _)| take_while_fn(key))
-                .collect()
+            let mut rows = Vec::new();
+            for (index, row) in query_rows.enumerate() {
+                let row = row?;
+                if index < skip {
+                    continue;
+                }
+                if !take_while_fn(&row.0) {
+                    break;
+                }
+                rows.push(row);
+            }
+            rows
         };
         // Lock is released here
 
         // Now process rows with filter_map_fn (which may call storage.get())
-        rows.into_iter()
+        Ok(rows
+            .into_iter()
             .filter_map(|(key, value)| {
                 filter_map_fn(&key, &value).map(|transformed_value| KVPair {
                     key,
@@ -240,7 +283,7 @@ impl StorageBackend for Storage {
                 })
             })
             .take(limit)
-            .collect()
+            .collect())
     }
 }
 
@@ -251,23 +294,15 @@ impl LightClientStorage for Storage {}
 impl CellProvider for Storage {
     // assume all cells are live and load data eagerly
     fn cell(&self, out_point: &OutPoint, _eager_load: bool) -> CellStatus {
-        if let Some((block_number, tx_index, tx)) = self.get_transaction(&out_point.tx_hash()) {
-            let block_hash = Byte32::from_slice(
-                &StorageBackend::get(self, Key::BlockNumber(block_number).into_vec())
-                    .expect("db get should be ok")
-                    .expect("stored block number / hash mapping"),
-            )
-            .expect("stored block hash should be OK");
-
-            let header = Header::from_slice(
-                &StorageBackend::get(self, Key::BlockHash(&block_hash).into_vec())
-                    .expect("db get should be ok")
-                    .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
-            )
-            .expect("stored header should be OK")
-            .into_view();
-
+        if let Ok(Some(stored)) = crate::storage::canonical::transaction(self, &out_point.tx_hash())
+        {
+            let block_number = stored.number;
+            let tx_index = stored.index;
+            let tx = stored.transaction;
+            let header = stored.header.into_view();
+            let block_hash = header.hash();
             let output_index = out_point.index().unpack();
+            let tx_index = crate::storage::canonical::resolver_index(&tx, tx_index);
             let tx = tx.into_view();
             if let Some(cell_output) = tx.outputs().get(output_index) {
                 let output_data = tx

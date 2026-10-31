@@ -1522,16 +1522,7 @@ impl Peers {
                 if value.0 {
                     return None;
                 }
-                // Skip if marked as missing by peers (e.g., uncle blocks)
-                if let Some(fetch_info) = self.fetching_headers.get(&key.pack()) {
-                    if fetch_info.missing {
-                        log::warn!(
-                            "Skipping matched block {:#x} - marked as missing by peers (likely an uncle block)",
-                            key.pack()
-                        );
-                        return None;
-                    }
-                }
+                // A peer-reported miss cannot certify that a watched match is irrelevant.
                 Some(key.pack())
             })
             .take(limit)

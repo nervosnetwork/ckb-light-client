@@ -54,6 +54,12 @@ async function read(scripts) {
     for (const tx of txs.transactions) history.add(tx.transaction.hash());
   }
   require(cells.reduce((sum,c) => sum + BigInt(c.capacity),0n) === capacity, 'Capacity query disagrees with returned cell values');
+  const transaction = await client.getTransaction(A);
+  require(transaction.status === 'committed' && transaction.blockHash === GENESIS, 'Configured genesis membership missing');
+  const fetched = await client.fetchTransaction(A);
+  require(fetched.status === 'fetched' && fetched.data.status === 'committed', 'Known membership should complete fetch without peers');
+  const historical = await client.getHeader(GENESIS);
+  require(historical.hash === GENESIS, 'By-hash header availability regressed');
   const peers = await client.getPeers();
   require(peers.length === 0, 'Unexpected connected peers');
   return { cells: cells.sort((a,b) => a.outPoint.localeCompare(b.outPoint)), capacity: String(capacity), history: [...history].sort(), peers };

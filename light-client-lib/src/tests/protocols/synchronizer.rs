@@ -38,7 +38,20 @@ async fn test_sync_add_block() {
         .unwrap_or_default();
     let start_number = min_filtered_block_number + 1;
     let blocks_count = 1;
-    let block_view = BlockBuilder::default().build();
+    let block_view = BlockBuilder::default()
+        .number(start_number)
+        .epoch(ckb_types::core::EpochNumberWithFraction::new(
+            0,
+            start_number,
+            1000,
+        ))
+        .build();
+    // Existing body-pipeline unit fixture starts from an explicit accepted checkpoint.
+    chain.client_storage().update_last_state(
+        &ckb_types::U256::one(),
+        &block_view.header().data(),
+        &[],
+    );
     let proved_block_hash = block_view.hash();
     chain.client_storage().add_matched_blocks(
         start_number,

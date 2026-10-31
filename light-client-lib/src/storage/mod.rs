@@ -16,6 +16,7 @@ use ckb_types::{
 };
 
 mod backend;
+pub(crate) mod canonical;
 mod db;
 mod storage_trait;
 
@@ -237,10 +238,32 @@ impl CellDataProvider for StorageWithChainData {
     }
 }
 
-impl HeaderProvider for StorageWithChainData {
-    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
+impl StorageWithChainData {
+    /// Historical availability, including headers retained in verified peer state.
+    pub(crate) fn get_cached_header(&self, hash: &Byte32) -> Option<HeaderView> {
         LightClientStorage::get_header(&self.storage, hash)
             .or_else(|| self.peers.find_header_in_proved_state(hash))
+    }
+}
+
+impl HeaderProvider for StorageWithChainData {
+    fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
+        let header = self.get_cached_header(hash)?;
+        match canonical::anchor_current(&self.storage, &header.data()) {
+            Ok(true) => Some(header),
+            Ok(false) => {
+                // Cached historical bytes cannot satisfy a resolver dependency.
+                // Reuse the ordinary proof queue instead of leaving cached legacy
+                // headers impossible to recover through normal verification.
+                let info = self.peers.get_header_fetch_info(hash);
+                if info.is_none() || info.is_some_and(|(_, _, missing)| missing) {
+                    self.peers
+                        .add_fetch_header(hash.clone(), ckb_systemtime::unix_time_as_millis());
+                }
+                None
+            }
+            Err(_) => None,
+        }
     }
 }
 

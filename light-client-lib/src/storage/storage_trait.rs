@@ -31,6 +31,22 @@ fn encode_last_n_headers(headers: &[HeaderView]) -> Vec<u8> {
     value
 }
 
+// Keep #301's accepted-state/window writes together in the caller's batch.
+pub(super) fn write_last_state<B: BatchWriter>(
+    batch: &mut B,
+    total_difficulty: &U256,
+    tip_header: &Header,
+    last_n_headers: &[HeaderView],
+) {
+    let mut value = total_difficulty.to_le_bytes().to_vec();
+    value.extend(tip_header.as_slice());
+    batch.put(&Key::Meta(LAST_STATE_KEY).into_vec(), &value);
+    batch.put(
+        &Key::Meta(LAST_N_HEADERS_KEY).into_vec(),
+        &encode_last_n_headers(last_n_headers),
+    );
+}
+
 /// High-level storage trait that provides business logic
 ///
 /// This trait extends `StorageBackend` with higher-level operations.
@@ -90,6 +106,11 @@ pub trait LightClientStorage: StorageBackend {
 
     /// Update filter scripts
     fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
+        if scripts.is_empty() && !matches!(command, SetScriptsCommand::All) {
+            return;
+        }
+        let can_filter_genesis =
+            super::canonical::begin_registration(self).expect("begin watched registration");
         let mut should_filter_genesis_block = false;
         let mut batch = self.batch();
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
@@ -171,10 +192,13 @@ pub trait LightClientStorage: StorageBackend {
         self.update_min_filtered_block_number_by_scripts();
         self.clear_matched_blocks();
 
-        if should_filter_genesis_block {
+        // Interrupted rollback fences every membership read, including genesis.
+        // Keep the registration and uncertainty without attempting fenced indexing.
+        if should_filter_genesis_block && can_filter_genesis {
             let block = self.get_genesis_block();
             self.filter_block(block);
         }
+        super::canonical::finish_registration(self).expect("finish watched registration");
     }
 
     /// Get scripts hash by block number
@@ -390,18 +414,36 @@ pub trait LightClientStorage: StorageBackend {
                     stored_genesis_hash, genesis_hash
                 );
             }
+            // The configured genesis is the one association recoverable without
+            // a peer proof, including when reopening a height-only legacy store.
+            let mut batch = self.batch();
+            super::canonical::member(&mut batch, &block.header());
+            for (index, tx) in block.transactions().into_iter().enumerate() {
+                let value: Vec<u8> = Value::Transaction(0, index as TxIndex, &tx).into();
+                batch.put(&Key::TxHash(&tx.calc_tx_hash()).into_vec(), &value);
+                super::canonical::bind(&mut batch, &tx, &block.header(), true, index as u32);
+            }
+            batch
+                .commit()
+                .expect("restore configured genesis associations");
         } else {
             let mut batch = self.batch();
             let block_hash = block.calc_header_hash();
             batch.put(
                 &Key::Meta(LAST_STATE_KEY).into_vec(),
-                block.header().as_slice(),
+                &[
+                    U256::zero().to_le_bytes().as_slice(),
+                    block.header().as_slice(),
+                ]
+                .concat(),
             );
             batch.put(
                 &Key::BlockHash(&block_hash).into_vec(),
                 block.header().as_slice(),
             );
             batch.put(&Key::BlockNumber(0).into_vec(), block_hash.as_slice());
+            super::canonical::member(&mut batch, &block.header());
+            batch.put(&Key::Meta("INDEX_ASSOCIATIONS_V1").into_vec(), &[1]);
             let mut genesis_hash_and_txs_hash = genesis_hash.as_slice().to_vec();
             block
                 .transactions()
@@ -413,6 +455,7 @@ pub trait LightClientStorage: StorageBackend {
                     let key = Key::TxHash(&tx_hash).into_vec();
                     let value: Vec<u8> = Value::Transaction(0, tx_index as TxIndex, &tx).into();
                     batch.put(&key, &value);
+                    super::canonical::bind(&mut batch, &tx, &block.header(), true, tx_index as u32);
                 });
             batch.put(&genesis_block_key, &genesis_hash_and_txs_hash);
             batch.commit().expect("batch commit should be ok");
@@ -501,6 +544,7 @@ pub trait LightClientStorage: StorageBackend {
         let key = Key::TxHash(&tx_hash).into_vec();
         let value: Vec<u8> = Value::Transaction(block_number, tx_index as TxIndex, tx).into();
         batch.put(&key, &value);
+        super::canonical::bind(&mut batch, tx, &hwe.header, false, u32::MAX);
         batch.commit().expect("batch commit should be ok");
     }
 
@@ -513,6 +557,14 @@ pub trait LightClientStorage: StorageBackend {
     /// - Records transaction history for matched scripts
     /// - Stores the matched transactions
     fn filter_block(&self, block: Block) {
+        assert!(
+            super::canonical::anchor_current(self, &block.header()).unwrap_or(false),
+            "block membership must be proved before indexing"
+        );
+        // Genesis is configured locally and may be indexed while registration is fenced.
+        if Unpack::<u64>::unpack(&block.header().raw().number()) != 0 {
+            super::canonical::index_ready(self).expect("index context must be ready");
+        }
         let scripts: HashSet<(packed::Script, ScriptType)> = self
             .get_filter_scripts()
             .into_iter()
@@ -521,6 +573,7 @@ pub trait LightClientStorage: StorageBackend {
         let block_number: BlockNumber = block.header().raw().number().unpack();
         let mut filter_matched = false;
         let mut batch = self.batch();
+        let block_header = block.header();
         let mut txs: HashMap<Byte32, (u32, Transaction)> = HashMap::new();
 
         for (tx_index, tx) in block.transactions().into_iter().enumerate() {
@@ -528,9 +581,12 @@ pub trait LightClientStorage: StorageBackend {
             for (input_index, input) in tx.raw().inputs().into_iter().enumerate() {
                 let previous_tx_hash = input.previous_output().tx_hash();
                 if let Some((generated_by_block_number, generated_by_tx_index, previous_tx)) =
-                    self.get_transaction(&previous_tx_hash).or(txs
-                        .get(&previous_tx_hash)
-                        .map(|(tx_idx, tx)| (block_number, *tx_idx, tx.clone())))
+                    super::canonical::transaction(self, &previous_tx_hash)
+                        .expect("input association read")
+                        .map(|tx| (tx.number, tx.index, tx.transaction))
+                        .or(txs
+                            .get(&previous_tx_hash)
+                            .map(|(tx_idx, tx)| (block_number, *tx_idx, tx.clone())))
                 {
                     let previous_output_index: u32 = input.previous_output().index().unpack();
                     if let Some(previous_output) = previous_tx
@@ -567,6 +623,13 @@ pub trait LightClientStorage: StorageBackend {
                             let value: Vec<u8> =
                                 Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
                             batch.put(&key, &value);
+                            super::canonical::bind(
+                                &mut batch,
+                                &tx,
+                                &block_header,
+                                true,
+                                tx_index as u32,
+                            );
                         }
                         // Check type script
                         if let Some(type_script) = previous_output.type_().to_opt() {
@@ -598,6 +661,13 @@ pub trait LightClientStorage: StorageBackend {
                                     Value::Transaction(block_number, tx_index as TxIndex, &tx)
                                         .into();
                                 batch.put(&key, &value);
+                                super::canonical::bind(
+                                    &mut batch,
+                                    &tx,
+                                    &block_header,
+                                    true,
+                                    tx_index as u32,
+                                );
                             }
                         }
                     }
@@ -634,6 +704,7 @@ pub trait LightClientStorage: StorageBackend {
                     let value: Vec<u8> =
                         Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
                     batch.put(&key, &value);
+                    super::canonical::bind(&mut batch, &tx, &block_header, true, tx_index as u32);
                 }
                 if let Some(type_script) = output.type_().to_opt() {
                     if scripts.contains(&(type_script.clone(), ScriptType::Type)) {
@@ -663,6 +734,13 @@ pub trait LightClientStorage: StorageBackend {
                         let value: Vec<u8> =
                             Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
                         batch.put(&key, &value);
+                        super::canonical::bind(
+                            &mut batch,
+                            &tx,
+                            &block_header,
+                            true,
+                            tx_index as u32,
+                        );
                     }
                 }
             }
@@ -672,6 +750,7 @@ pub trait LightClientStorage: StorageBackend {
 
         // If any transaction matched, store the block header
         if filter_matched {
+            super::canonical::member(&mut batch, &block.header());
             let block_hash = block.calc_header_hash();
             let hwe = HeaderWithExtension {
                 header: block.header(),
@@ -849,28 +928,17 @@ pub trait LightClientStorage: StorageBackend {
             );
         }
 
+        super::canonical::invalidate(self, &mut batch, to_number)
+            .expect("membership invalidation scan");
         batch.commit().expect("batch commit should be ok");
     }
 
     /// Get transaction with header by transaction hash
     fn get_transaction_with_header(&self, tx_hash: &Byte32) -> Option<(Transaction, Header)> {
-        self.get_transaction(tx_hash)
-            .map(|(block_number, _tx_index, tx)| {
-                let block_hash = Byte32::from_slice(
-                    &StorageBackend::get(self, Key::BlockNumber(block_number).into_vec())
-                        .expect("db get should be ok")
-                        .expect("stored block number / hash mapping"),
-                )
-                .expect("stored block hash should be OK");
-
-                let header = Header::from_slice(
-                    &StorageBackend::get(self, Key::BlockHash(&block_hash).into_vec())
-                        .expect("db get should be ok")
-                        .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
-                )
-                .expect("stored header should be OK");
-                (tx, header)
-            })
+        super::canonical::transaction(self, tx_hash)
+            .ok()
+            .flatten()
+            .map(|tx| (tx.transaction, tx.header))
     }
 
     // ========== Chain state management ==========
@@ -882,17 +950,7 @@ pub trait LightClientStorage: StorageBackend {
         tip_header: &Header,
         last_n_headers: &[HeaderView],
     ) {
-        let key = Key::Meta(LAST_STATE_KEY).into_vec();
-        let mut value = total_difficulty.to_le_bytes().to_vec();
-        value.extend(tip_header.as_slice());
-        let mut batch = self.batch();
-        batch.put(&key, &value);
-        batch.put(
-            &Key::Meta(LAST_N_HEADERS_KEY).into_vec(),
-            &encode_last_n_headers(last_n_headers),
-        );
-        batch
-            .commit()
+        super::canonical::update_state(self, total_difficulty, tip_header, last_n_headers, None)
             .expect("batch commit last state should be ok");
     }
 
@@ -953,40 +1011,31 @@ pub trait LightClientStorage: StorageBackend {
 
     // ========== Additional methods ==========
 
-    /// Get block hash by number
+    /// Read the legacy historical height cache; this is not accepted-chain membership.
     fn get_block_hash(&self, block_number: BlockNumber) -> Option<Byte32> {
         StorageBackend::get(self, Key::BlockNumber(block_number).into_vec())
             .ok()
             .flatten()
-            .map(|v| Byte32::from_slice(&v).expect("stored block hash"))
+            .and_then(|v| Byte32::from_slice(&v).ok())
     }
 
-    /// Get transaction
+    /// Read historical bytes and position metadata without asserting chain membership.
+    /// A compact proof may leave the transaction ordinal unknown (u32::MAX).
     fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, u32, Transaction)> {
-        StorageBackend::get(self, Key::TxHash(tx_hash).into_vec())
-            .map(|v| {
-                v.map(|v| {
-                    (
-                        BlockNumber::from_be_bytes(v[0..8].try_into().expect("stored BlockNumber")),
-                        TxIndex::from_be_bytes(v[8..12].try_into().expect("stored TxIndex")),
-                        Transaction::from_slice(&v[12..]).expect("stored Transaction"),
-                    )
-                })
-            })
-            .expect("db get should be ok")
+        let bytes = StorageBackend::get(self, Key::TxHash(tx_hash).into_vec()).ok()??;
+        let number = u64::from_be_bytes(bytes.get(..8)?.try_into().ok()?);
+        let index = u32::from_be_bytes(bytes.get(8..12)?.try_into().ok()?);
+        let tx = Transaction::from_slice(bytes.get(12..)?).ok()?;
+        (tx.calc_tx_hash() == *tx_hash).then_some((number, index, tx))
     }
 
     /// Get header by hash
     fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
-        StorageBackend::get(self, Key::BlockHash(hash).into_vec())
-            .map(|v| {
-                v.map(|v| {
-                    Header::from_slice(&v[..Header::TOTAL_SIZE])
-                        .expect("stored Header")
-                        .into_view()
-                })
-            })
-            .expect("db get should be ok")
+        let bytes = StorageBackend::get(self, Key::BlockHash(hash).into_vec()).ok()??;
+        let header = Header::from_slice(bytes.get(..Header::TOTAL_SIZE)?)
+            .ok()?
+            .into_view();
+        (header.hash() == *hash).then_some(header)
     }
 
     // ========== Private helper methods ==========
@@ -995,7 +1044,11 @@ pub trait LightClientStorage: StorageBackend {
     fn update_last_n_headers(&self, headers: &[HeaderView]) {
         let key = Key::Meta(LAST_N_HEADERS_KEY).into_vec();
         let value = encode_last_n_headers(headers);
-        StorageBackend::put(self, key, value).expect("db put last n headers should be ok");
+        let mut batch = self.batch();
+        batch.put(&key, &value);
+        // A separately written window is not bound to the accepted tip.
+        batch.delete(&Key::Meta("CHAIN_CONTEXT_V1").into_vec());
+        batch.commit().expect("db put last n headers should be ok");
     }
 
     /// Update min filtered block number by scripts

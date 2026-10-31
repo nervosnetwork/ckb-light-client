@@ -342,9 +342,12 @@ impl LightClientProtocol {
         peer_index: PeerIndex,
         new_prove_state: ProveState,
     ) -> Result<bool, Status> {
+        // Serialize acceptance/rollback with watched-block indexing in SyncProtocol.
+        let mut matched_blocks = self.peers.matched_blocks().write().await;
         let (old_total_difficulty, prev_last_header) = self.storage.get_last_state();
         let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
         if new_total_difficulty > old_total_difficulty {
+            let mut fork = None;
             let reorg_last_headers = new_prove_state.get_reorg_last_headers();
             if reorg_last_headers.is_empty() {
                 let prev_last_header_number: BlockNumber = prev_last_header.raw().number().unpack();
@@ -353,14 +356,16 @@ impl LightClientProtocol {
                 // For safety, just remove the block#1.
                 if prev_last_header_number == 1 {
                     info!("rollback to block#1 since previous last header number is 1");
-                    let mut matched_blocks = self.peers.matched_blocks().write().await;
 
+                    crate::storage::canonical::begin_transition(&self.storage)
+                        .map_err(|e| StatusCode::InternalError.with_context(e.to_string()))?;
                     while let Some(matched_blocks_data) = self.storage.get_latest_matched_blocks() {
                         if matched_blocks_data.start_number > 0 {
                             self.storage
                                 .remove_matched_blocks(matched_blocks_data.start_number);
                         }
                     }
+                    fork = Some(0);
                     self.storage.rollback_to_block(1);
 
                     matched_blocks.clear();
@@ -383,7 +388,9 @@ impl LightClientProtocol {
                 });
                 if let Some(to_number) = fork_number {
                     debug!("fork to number: {}", to_number);
-                    let mut matched_blocks = self.peers.matched_blocks().write().await;
+                    crate::storage::canonical::begin_transition(&self.storage)
+                        .map_err(|e| StatusCode::InternalError.with_context(e.to_string()))?;
+                    fork = Some(to_number);
                     let mut start_number_opt = None;
                     while let Some(matched_blocks_data) = self.storage.get_latest_matched_blocks() {
                         // Remove matched blocks if the range contains blocks after the fork point
@@ -411,11 +418,17 @@ impl LightClientProtocol {
                 }
             }
 
-            self.storage.update_last_state(
+            crate::storage::canonical::update_state(
+                &self.storage,
                 &new_total_difficulty,
                 &new_prove_state.get_last_header().header().data(),
                 new_prove_state.get_last_headers(),
-            );
+                fork,
+            )
+            .map_err(|e| StatusCode::InternalError.with_context(e.to_string()))?;
+            if crate::storage::canonical::index_ready(&self.storage).is_err() {
+                matched_blocks.clear();
+            }
         }
         self.peers()
             .update_prove_state(peer_index, new_prove_state)?;
@@ -704,7 +717,15 @@ impl LightClientProtocol {
         self.peers.cleanup_old_missing_headers(MAX_MISSING_AGE_MS);
 
         let tip_header = self.storage.get_tip_header();
-        let matched_blocks = self.peers.matched_blocks().read().await;
+        let mut matched_blocks = self.peers.matched_blocks().write().await;
+        if let Err(error) = crate::utils::network::index_downloaded_blocks(
+            &self.storage,
+            &self.peers,
+            &mut matched_blocks,
+        ) {
+            warn!("watched indexing paused: {error}");
+            return;
+        }
 
         prove_or_download_matched_blocks(
             Arc::clone(&self.peers),

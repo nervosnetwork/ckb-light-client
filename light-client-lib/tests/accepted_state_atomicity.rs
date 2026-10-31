@@ -173,3 +173,43 @@ fn concurrent_database_snapshots_never_mix_tip_and_recent_window() {
         "snapshot observed a partially persisted transition"
     );
 }
+
+#[test]
+fn backend_multikey_snapshot_preserves_batch_generation_order_and_missing_entries() {
+    use ckb_light_client_lib::storage::{BatchWriter, StorageBackend};
+    use std::sync::{Arc, Barrier};
+    let directory = tempfile::tempdir().unwrap();
+    let storage = Storage::new(directory.path());
+    let keys = vec![vec![250, 1], vec![250, 2], vec![250, 3], vec![250, 1]];
+    let mut initial = storage.batch();
+    initial.put(&keys[0], &[0]);
+    initial.put(&keys[1], &[0]);
+    initial.commit().unwrap();
+    let barrier = Arc::new(Barrier::new(2));
+    let ready = barrier.clone();
+    let writer = storage.clone();
+    let handle = std::thread::spawn(move || {
+        ready.wait();
+        for generation in 1..=200u8 {
+            let mut batch = writer.batch();
+            batch.put(&[250, 1], &[generation]);
+            batch.put(&[250, 2], &[generation]);
+            batch.commit().unwrap();
+        }
+    });
+    barrier.wait();
+    for _ in 0..200 {
+        let rows = storage.get_many(&keys).unwrap();
+        assert_eq!(rows.len(), 4);
+        assert_eq!(rows[0], rows[1]);
+        assert_eq!(rows[0], rows[3]);
+        assert!(rows[2].is_none());
+    }
+    handle.join().unwrap();
+    drop(storage);
+    let reopened = Storage::new(directory.path());
+    assert_eq!(
+        reopened.get_many(&keys).unwrap(),
+        vec![Some(vec![200]), Some(vec![200]), None, Some(vec![200])]
+    );
+}
