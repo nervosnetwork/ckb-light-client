@@ -190,26 +190,18 @@ impl StorageWithChainData {
         pending_txs
             .get(&out_point.tx_hash())
             .and_then(|(tx, _, _)| {
-                tx.raw()
-                    .outputs()
-                    .get(out_point.index().unpack())
-                    .map(|cell_output| {
-                        let output_data = tx
-                            .raw()
-                            .outputs_data()
-                            .get(out_point.index().unpack())
-                            .expect("output_data's index should be same as output")
-                            .raw_data();
-                        let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
-                        CellMeta {
-                            out_point: out_point.clone(),
-                            cell_output,
-                            transaction_info: None,
-                            data_bytes: output_data.len() as u64,
-                            mem_cell_data: Some(output_data),
-                            mem_cell_data_hash: Some(output_data_data_hash),
-                        }
-                    })
+                let index = out_point.index().unpack();
+                let cell_output = tx.raw().outputs().get(index)?;
+                let output_data = tx.raw().outputs_data().get(index)?.raw_data();
+                let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
+                Some(CellMeta {
+                    out_point: out_point.clone(),
+                    cell_output,
+                    transaction_info: None,
+                    data_bytes: output_data.len() as u64,
+                    mem_cell_data: Some(output_data),
+                    mem_cell_data_hash: Some(output_data_data_hash),
+                })
             })
     }
 }
@@ -428,22 +420,35 @@ fn append_key(
     encoded.extend_from_slice(&io_index.to_be_bytes());
 }
 
-fn parse_matched_blocks(data: &[u8]) -> (u64, Vec<(Byte32, bool)>) {
-    let mut u64_bytes = [0u8; 8];
-    u64_bytes.copy_from_slice(&data[0..8]);
+fn parse_matched_blocks(data: &[u8]) -> Result<(u64, Vec<(Byte32, bool)>), String> {
+    let Some(u64_bytes) = data
+        .get(0..8)
+        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+    else {
+        return Err(format!(
+            "stored matched blocks are too short: {} bytes",
+            data.len()
+        ));
+    };
     let blocks_count = u64::from_le_bytes(u64_bytes);
-    assert!((data.len() - 8).is_multiple_of(33));
-    let matched_len = (data.len() - 8) / 33;
+    let matched_data = &data[8..];
+    if !matched_data.len().is_multiple_of(33) {
+        return Err(format!(
+            "stored matched blocks have an invalid length: {} bytes",
+            data.len()
+        ));
+    }
+    let matched_len = matched_data.len() / 33;
     let matched_blocks = (0..matched_len)
         .map(|i| {
-            let offset = 8 + i * 33;
-            let part = &data[offset..offset + 32];
+            let offset = i * 33;
+            let part = &matched_data[offset..offset + 32];
             let hash = packed::Byte32Reader::from_slice_should_be_ok(part).to_entity();
-            let proved = data[offset + 32] == 1;
+            let proved = matched_data[offset + 32] == 1;
             (hash, proved)
         })
         .collect::<Vec<_>>();
-    (blocks_count, matched_blocks)
+    Ok((blocks_count, matched_blocks))
 }
 
 // a helper fn extracts script fields raw data
@@ -454,4 +459,22 @@ pub fn extract_raw_data(script: &Script) -> Vec<u8> {
         &script.args().raw_data(),
     ]
     .concat()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_matched_blocks;
+
+    #[test]
+    fn test_parse_matched_blocks_rejects_invalid_data() {
+        assert!(parse_matched_blocks(&[]).is_err());
+        assert!(parse_matched_blocks(&[0u8; 7]).is_err());
+        // Eight bytes hold the count only; no blocks is valid.
+        assert!(parse_matched_blocks(&[0u8; 8]).is_ok());
+        // A partial block entry is invalid.
+        assert!(parse_matched_blocks(&[0u8; 9]).is_err());
+        assert!(parse_matched_blocks(&[0u8; 40]).is_err());
+        // One complete block entry.
+        assert!(parse_matched_blocks(&[0u8; 41]).is_ok());
+    }
 }

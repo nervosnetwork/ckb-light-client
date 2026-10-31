@@ -35,20 +35,22 @@ pub(crate) async fn wait_for_command(
         .map_err(|e| anyhow!("Failed to deserialize result of wait async: {:?}", e))?;
 
     if resp.async_ {
-        JsFuture::from(
-            resp.value
-                .dyn_into::<Promise>()
-                .expect("Value must be casted into promise!"),
-        )
-        .await
-        .expect("value must not fail!");
+        let promise = resp
+            .value
+            .dyn_into::<Promise>()
+            .map_err(|_| anyhow!("value must be casted into promise"))?;
+        JsFuture::from(promise)
+            .await
+            .map_err(|err| anyhow!("failed to wait for command: {err:?}"))?;
     } else {
         let value = resp
             .value
             .as_string()
-            .expect("Value must be casted to string");
+            .ok_or_else(|| anyhow!("value must be casted to string"))?;
         if value != "not-equal" {
-            panic!("Value must be not-equal if should_wait_async is false");
+            return Err(anyhow!(
+                "value must be not-equal if should_wait_async is false"
+            ));
         }
     }
 
