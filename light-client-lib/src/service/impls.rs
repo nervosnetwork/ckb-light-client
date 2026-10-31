@@ -10,7 +10,8 @@ use crate::{
     service::{
         helpers::{build_filter_options, build_query_options},
         Cell, CellType, CellsCapacity, FetchStatus, Order, Pagination, ScriptType, SearchKey,
-        Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
+        Status, TransactionEvidence, TransactionEvidenceState, TransactionWithStatus, Tx, TxStatus,
+        TxWithCell, TxWithCells,
     },
     storage::{
         extract_raw_data, Key, KeyPrefix, LightClientStorage, StorageWithChainData, LAST_STATE_KEY,
@@ -748,6 +749,62 @@ impl LightClientChainService {
         FetchStatus::Added {
             timestamp: now.into(),
         }
+    }
+
+    /// Observe provenance without promoting a stored or locally pending tx to verified.
+    pub fn get_transaction_evidence(&self, tx_hash: &H256) -> Result<TransactionEvidence> {
+        let mut result =
+            crate::storage::transaction_evidence::observe(self.swc.storage(), tx_hash)?;
+        if result.state == TransactionEvidenceState::Unknown {
+            // Read the pending pool directly; a second storage lookup could race
+            // with proof storage and misclassify a committed transaction as pending.
+            #[cfg(target_arch = "wasm32")]
+            let pending = self.swc.pending_txs().blocking_read().get(&tx_hash.pack());
+            #[cfg(not(target_arch = "wasm32"))]
+            let pending = self
+                .swc
+                .pending_txs()
+                .read()
+                .map_err(|_| Error::runtime("poisoned pending transaction lock"))?
+                .get(&tx_hash.pack());
+            if let Some((transaction, _, _)) = pending {
+                result.state = TransactionEvidenceState::LocalPending;
+                result.transaction = Some(transaction.into_view().into());
+            }
+        }
+        Ok(result)
+    }
+
+    /// Schedule transaction inclusion proof even when historical bytes are cached.
+    /// Cached bytes alone do not complete an exact-anchor evidence fetch.
+    pub fn fetch_transaction_evidence(
+        &self,
+        tx_hash: &H256,
+    ) -> Result<FetchStatus<TransactionEvidence>> {
+        let evidence = self.get_transaction_evidence(tx_hash)?;
+        if evidence.state == TransactionEvidenceState::VerifiedCurrent {
+            return Ok(FetchStatus::Fetched { data: evidence });
+        }
+        let now = unix_time_as_millis();
+        if let Some((added_ts, first_sent, missing)) = self.swc.get_tx_fetch_info(tx_hash) {
+            if missing {
+                self.swc.add_fetch_tx(tx_hash.clone(), now);
+                return Ok(FetchStatus::NotFound);
+            }
+            if first_sent > 0 {
+                return Ok(FetchStatus::Fetching {
+                    first_sent: first_sent.into(),
+                });
+            }
+            return Ok(FetchStatus::Added {
+                timestamp: added_ts.into(),
+            });
+        } else {
+            self.swc.add_fetch_tx(tx_hash.clone(), now);
+        }
+        Ok(FetchStatus::Added {
+            timestamp: now.into(),
+        })
     }
 
     /// Estimate cycles for a transaction
