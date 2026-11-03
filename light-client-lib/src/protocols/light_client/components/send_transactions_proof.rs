@@ -148,15 +148,6 @@ impl<'a> SendTransactionsProofProcess<'a> {
             .to_entity()
             .into_iter()
             .collect::<Vec<_>>();
-        // A duplicate/overlap is malformed regardless of which slot it targets.
-        let mut distinct = std::collections::HashSet::new();
-        if received_tx_hashes
-            .iter()
-            .chain(missing_tx_hashes.iter())
-            .any(|hash| !distinct.insert(hash))
-        {
-            return StatusCode::UnexpectedResponse.into();
-        }
         if !original_request.check_tx_hashes(&received_tx_hashes, &missing_tx_hashes) {
             // Preserve the owner, but retain protocol penalties for invalid data.
             return StatusCode::UnexpectedResponse.into();

@@ -140,15 +140,6 @@ impl<'a> SendBlocksProofProcess<'a> {
 
         debug!("got block proof: missing {:?}", &missing_block_hashes);
 
-        // A duplicate/overlap is malformed regardless of which slot it targets.
-        let mut distinct = std::collections::HashSet::new();
-        if received_block_hashes
-            .iter()
-            .chain(missing_block_hashes.iter())
-            .any(|hash| !distinct.insert(hash))
-        {
-            return StatusCode::UnexpectedResponse.into();
-        }
         if !original_request.check_block_hashes(&received_block_hashes, &missing_block_hashes) {
             // Preserve the owner, but retain protocol penalties for invalid data.
             return StatusCode::UnexpectedResponse.into();

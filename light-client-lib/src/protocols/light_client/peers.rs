@@ -427,20 +427,23 @@ impl BlocksProofRequest {
         received_block_hashes: &[Byte32],
         missing_block_hashes: &[Byte32],
     ) -> bool {
-        if self.content.block_hashes().len()
-            == received_block_hashes.len() + missing_block_hashes.len()
-        {
-            let block_hashes = received_block_hashes
-                .iter()
-                .chain(missing_block_hashes)
-                .collect::<HashSet<_>>();
-            self.content
-                .block_hashes()
-                .into_iter()
-                .all(|hash| block_hashes.contains(&hash))
-        } else {
-            false
+        let requested_hashes = self.content.block_hashes().into_iter().collect::<Vec<_>>();
+        let Some(response_len) = received_block_hashes
+            .len()
+            .checked_add(missing_block_hashes.len())
+        else {
+            return false;
+        };
+        if requested_hashes.len() != response_len {
+            return false;
         }
+
+        let requested = requested_hashes.iter().collect::<HashSet<_>>();
+        let response = received_block_hashes
+            .iter()
+            .chain(missing_block_hashes)
+            .collect::<HashSet<_>>();
+        requested.len() == response_len && response.len() == response_len && requested == response
     }
 
     pub(crate) fn should_get_blocks(&self) -> bool {
@@ -488,18 +491,23 @@ impl TransactionsProofRequest {
         received_tx_hashes: &[Byte32],
         missing_tx_hashes: &[Byte32],
     ) -> bool {
-        if self.content.tx_hashes().len() == received_tx_hashes.len() + missing_tx_hashes.len() {
-            let tx_hashes = received_tx_hashes
-                .iter()
-                .chain(missing_tx_hashes)
-                .collect::<HashSet<_>>();
-            self.content
-                .tx_hashes()
-                .into_iter()
-                .all(|hash| tx_hashes.contains(&hash))
-        } else {
-            false
+        let requested_hashes = self.content.tx_hashes().into_iter().collect::<Vec<_>>();
+        let Some(response_len) = received_tx_hashes
+            .len()
+            .checked_add(missing_tx_hashes.len())
+        else {
+            return false;
+        };
+        if requested_hashes.len() != response_len {
+            return false;
         }
+
+        let requested = requested_hashes.iter().collect::<HashSet<_>>();
+        let response = received_tx_hashes
+            .iter()
+            .chain(missing_tx_hashes)
+            .collect::<HashSet<_>>();
+        requested.len() == response_len && response.len() == response_len && requested == response
     }
 }
 
@@ -2216,6 +2224,99 @@ mod request_ownership_tests {
                 .is_none());
             assert_eq!(peers.get_txs_to_fetch().contains(&hash), retry);
         }
+    }
+}
+
+#[cfg(test)]
+mod proof_hash_validation_tests {
+    use super::*;
+
+    fn assert_exact_hash_partition(mut check: impl FnMut(&[Byte32], &[Byte32]) -> bool) {
+        let a = Byte32::new([1; 32]);
+        let b = Byte32::new([2; 32]);
+        let c = Byte32::new([3; 32]);
+        let extra = Byte32::new([4; 32]);
+
+        assert!(check(&[c.clone(), a.clone()], &[b.clone()]));
+        assert!(!check(&[a.clone(), extra.clone()], &[c.clone()]));
+        assert!(!check(&[a.clone(), b.clone()], &[extra.clone()]));
+        assert!(!check(&[a.clone(), a.clone()], &[c.clone()]));
+        assert!(!check(&[a.clone()], &[b.clone(), b.clone()]));
+        assert!(!check(&[a.clone(), b.clone()], &[b.clone()]));
+    }
+
+    #[test]
+    fn block_proof_hashes_must_be_an_exact_unique_partition_of_the_request() {
+        let hashes = vec![
+            Byte32::new([1; 32]),
+            Byte32::new([2; 32]),
+            Byte32::new([3; 32]),
+        ];
+        let request = BlocksProofRequest::new(
+            packed::GetBlocksProof::new_builder()
+                .block_hashes(hashes.pack())
+                .build(),
+            0,
+            false,
+        );
+
+        assert_exact_hash_partition(|received, missing| {
+            request.check_block_hashes(received, missing)
+        });
+
+        let duplicate_request = BlocksProofRequest::new(
+            packed::GetBlocksProof::new_builder()
+                .block_hashes(
+                    vec![
+                        Byte32::new([1; 32]),
+                        Byte32::new([1; 32]),
+                        Byte32::new([3; 32]),
+                    ]
+                    .pack(),
+                )
+                .build(),
+            0,
+            false,
+        );
+        assert!(!duplicate_request.check_block_hashes(
+            &[Byte32::new([1; 32]), Byte32::new([2; 32])],
+            &[Byte32::new([3; 32])]
+        ));
+    }
+
+    #[test]
+    fn transaction_proof_hashes_must_be_an_exact_unique_partition_of_the_request() {
+        let hashes = vec![
+            Byte32::new([1; 32]),
+            Byte32::new([2; 32]),
+            Byte32::new([3; 32]),
+        ];
+        let request = TransactionsProofRequest::new(
+            packed::GetTransactionsProof::new_builder()
+                .tx_hashes(hashes.pack())
+                .build(),
+            0,
+        );
+
+        assert_exact_hash_partition(|received, missing| request.check_tx_hashes(received, missing));
+
+        let duplicate_request = TransactionsProofRequest::new(
+            packed::GetTransactionsProof::new_builder()
+                .tx_hashes(
+                    vec![
+                        Byte32::new([1; 32]),
+                        Byte32::new([1; 32]),
+                        Byte32::new([3; 32]),
+                    ]
+                    .pack(),
+                )
+                .build(),
+            0,
+        );
+        assert!(!duplicate_request.check_tx_hashes(
+            &[Byte32::new([1; 32]), Byte32::new([2; 32])],
+            &[Byte32::new([3; 32])]
+        ));
     }
 }
 
