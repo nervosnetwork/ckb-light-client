@@ -45,6 +45,17 @@ pub trait StorageBackend: Send + Sync {
     /// Get value by key
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>>;
 
+    /// Read keys from one database snapshot, preserving input order, duplicates
+    /// and missing entries. An error must not be returned as a missing value.
+    ///
+    /// Existing backends may leave this unsupported until they can provide a
+    /// snapshot. Sequential calls to `get` do not satisfy this contract.
+    fn get_many(&self, _keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        Err(crate::error::Error::runtime(
+            "atomic multi-key reads are unsupported",
+        ))
+    }
+
     /// Put key-value pair
     fn put(&self, key: Vec<u8>, value: Vec<u8>) -> Result<()>;
 
@@ -57,6 +68,31 @@ pub trait StorageBackend: Send + Sync {
     fn batch(&self) -> Self::Batch;
 
     // ========== Iterator operations ==========
+
+    /// Scan one snapshot and propagate backend/cursor/decoding failures instead
+    /// of returning a partial result. `After` excludes only the supplied key,
+    /// even if it is absent. `limit` counts mapped rows; zero returns no rows.
+    ///
+    /// Callbacks retain the existing infallible signatures. In particular,
+    /// `None` from `filter_map_fn` means intentional exclusion, not an error.
+    /// Reads made by a callback need not share the scan's snapshot. As with the
+    /// existing iterator, `take_while_fn` must not call back into storage;
+    /// `filter_map_fn` may read storage.
+    ///
+    /// The default deliberately does not wrap `collect_iterator`: an infallible
+    /// implementation may already have discarded an error.
+    fn try_collect_iterator(
+        &self,
+        _start: IteratorStart,
+        _direction: IteratorDirection,
+        _take_while_fn: TakeWhileFn,
+        _filter_map_fn: FilterMapFn,
+        _limit: usize,
+    ) -> Result<Vec<KVPair>> {
+        Err(crate::error::Error::runtime(
+            "checked iteration is unsupported",
+        ))
+    }
 
     /// Collect items using iterator with custom filter and map functions
     ///

@@ -33,7 +33,7 @@ pub enum IteratorDirection {
 pub enum IteratorStart {
     /// Start from the specified key (inclusive)
     From(Vec<u8>),
-    /// Start after the specified key (exclusive, skips the first match)
+    /// Start strictly beyond the key in the selected direction, even if absent
     After(Vec<u8>),
 }
 
@@ -93,6 +93,20 @@ pub enum DbCommandRequest {
     },
     /// Apply mutations in order in a single read-write transaction.
     Batch { operations: Vec<BatchOperation> },
+    /// Checked scan: cursor/read/decode/transaction failures discard the page.
+    /// Appended to preserve existing bincode command discriminants.
+    CheckedIterator {
+        start: IteratorStart,
+        direction: IteratorDirection,
+        limit: usize,
+    },
+    /// Explicitly opts into historical partial rows on non-aborting advancement
+    /// failure. Keep Iterator strict for older checked clients using that tag.
+    LegacyIterator {
+        start: IteratorStart,
+        direction: IteratorDirection,
+        limit: usize,
+    },
 }
 #[repr(i32)]
 #[derive(Debug)]
@@ -245,4 +259,18 @@ pub fn read_command_payload<T: DeserializeOwned>(
     let result =
         bincode::deserialize::<T>(&buf).with_context(|| anyhow!("Failed to decode command"))?;
     Ok(result)
+}
+
+/// OpenDatabaseResponse payload. Older workers send boolean true (byte 1).
+/// Existing clients ignore that payload; newer clients require this capability
+/// before sending a checked command, so old workers cannot certify partial rows.
+pub const CHECKED_SCAN_WORKER_VERSION: u8 = 2;
+
+pub fn require_checked_scan_worker(version: u8) -> anyhow::Result<()> {
+    if version < CHECKED_SCAN_WORKER_VERSION {
+        anyhow::bail!(
+            "database worker does not support checked scans; rebuild client and worker together"
+        );
+    }
+    Ok(())
 }

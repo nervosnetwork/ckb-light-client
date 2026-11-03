@@ -79,7 +79,7 @@ pub async fn main_loop(log_level: &str) {
                         db = Some(o);
                         write_command_with_payload(
                             OutputCommand::OpenDatabaseResponse as i32,
-                            true,
+                            light_client_db_common::CHECKED_SCAN_WORKER_VERSION,
                             &output_i32_arr,
                             &output_u8_arr,
                         )

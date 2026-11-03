@@ -44,6 +44,7 @@ enum CommandRequestWithTakeWhileAndFilterMap {
         take_while: TakeWhileFn,
         filter_map: FilterMapFn,
         limit: usize,
+        checked: bool,
     },
 }
 
@@ -115,6 +116,12 @@ impl CommunicationChannel {
         let output_cmd = OutputCommand::try_from(output_i32_arr.get_index(0)).unwrap();
         match output_cmd {
             OutputCommand::OpenDatabaseResponse => {
+                let version =
+                    read_command_payload::<u8>(output_i32_arr, output_u8_arr).unwrap_or(0);
+                CHECKED_SCANS_SUPPORTED.store(
+                    light_client_db_common::require_checked_scan_worker(version).is_ok(),
+                    std::sync::atomic::Ordering::SeqCst,
+                );
                 DB_INITIALIZED.store(true, std::sync::atomic::Ordering::SeqCst);
             }
             OutputCommand::Error => panic!(
@@ -159,11 +166,26 @@ impl CommunicationChannel {
                 take_while,
                 filter_map,
                 limit,
+                checked,
             } => (
-                DbCommandRequest::Iterator {
-                    start,
-                    direction,
-                    limit,
+                if checked {
+                    DbCommandRequest::CheckedIterator {
+                        start,
+                        direction,
+                        limit,
+                    }
+                } else if CHECKED_SCANS_SUPPORTED.load(std::sync::atomic::Ordering::SeqCst) {
+                    DbCommandRequest::LegacyIterator {
+                        start,
+                        direction,
+                        limit,
+                    }
+                } else {
+                    DbCommandRequest::Iterator {
+                        start,
+                        direction,
+                        limit,
+                    }
                 },
                 Some(take_while),
                 Some(filter_map),
@@ -242,6 +264,7 @@ impl CommunicationChannel {
 }
 
 static DB_INITIALIZED: AtomicBool = AtomicBool::new(false);
+static CHECKED_SCANS_SUPPORTED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone)]
 pub struct Storage {
@@ -377,6 +400,49 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        let response = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Read {
+                keys: keys.to_vec(),
+            })
+            .map_err(|error| Error::Indexdb(format!("{error:?}")))?;
+        match response {
+            DbCommandResponse::Read { values } if values.len() == keys.len() => Ok(values),
+            _ => Err(Error::Indexdb("invalid multi-key read response".into())),
+        }
+    }
+
+    fn try_collect_iterator(
+        &self,
+        start: IteratorStart,
+        direction: IteratorDirection,
+        take_while_fn: TakeWhileFn,
+        filter_map_fn: FilterMapFn,
+        limit: usize,
+    ) -> Result<Vec<KVPair>> {
+        if !CHECKED_SCANS_SUPPORTED.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(Error::Indexdb(
+                "database worker does not support checked scans".into(),
+            ));
+        }
+        let response = self
+            .channel
+            .dispatch_database_command(CommandRequestWithTakeWhileAndFilterMap::Iterator {
+                start,
+                direction,
+                take_while: take_while_fn,
+                filter_map: filter_map_fn,
+                limit,
+                checked: true,
+            })
+            .map_err(|error| Error::Indexdb(format!("{error:?}")))?;
+        match response {
+            DbCommandResponse::Iterator { kvs } => Ok(kvs),
+            _ => Err(Error::Indexdb("invalid checked iterator response".into())),
+        }
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         let values = self
             .channel
@@ -431,6 +497,7 @@ impl StorageBackend for Storage {
                 take_while: take_while_fn,
                 filter_map: filter_map_fn,
                 limit,
+                checked: false,
             })
             .unwrap();
         if let DbCommandResponse::Iterator { kvs } = value {
