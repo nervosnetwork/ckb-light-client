@@ -113,10 +113,14 @@ impl<'a> BlockFilterHashesProcess<'a> {
                     .protocol
                     .storage
                     .get_check_points(cached_check_point_index, 2);
-                (
-                    cached_check_points[0].clone(),
-                    cached_check_points[1].clone(),
-                )
+                let (Some(cached_check_point), Some(next_cached_check_point)) =
+                    (cached_check_points.first(), cached_check_points.get(1))
+                else {
+                    let errmsg =
+                        format!("check point at index {cached_check_point_index} is not stored");
+                    return StatusCode::Ignore.with_context(errmsg);
+                };
+                (cached_check_point.clone(), next_cached_check_point.clone())
             };
 
             if start_number == cached_check_point_number + 1 {

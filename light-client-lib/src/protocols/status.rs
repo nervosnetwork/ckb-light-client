@@ -55,6 +55,8 @@ pub enum StatusCode {
     InvalidTotalDifficulty = 434,
     /// Failed to verify the parent block.
     InvalidParentBlock = 435,
+    /// Failed to verify the epoch.
+    InvalidEpoch = 436,
     /// Failed to verify the proof.
     InvalidProof = 439,
 

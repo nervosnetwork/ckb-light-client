@@ -9,7 +9,6 @@ use std::{
 };
 
 use ckb_light_client_lib::{
-    error::Error,
     protocols::{
         FilterProtocol, LightClientProtocol, Peers, PendingTxs, RelayProtocol, SyncProtocol,
         BAD_MESSAGE_ALLOWED_EACH_HOUR, CHECK_POINT_INTERVAL,
@@ -64,6 +63,13 @@ fn status(flag: u8) -> bool {
 fn change_status(flag: u8) {
     START_FLAG.store(flag, Ordering::SeqCst);
 }
+
+fn parse_h256(value: &str) -> Result<H256, JsValue> {
+    let hex = value
+        .strip_prefix("0x")
+        .ok_or_else(|| JsValue::from_str("hash should start with 0x"))?;
+    H256::from_str(hex).map_err(|e| JsValue::from_str(&e.to_string()))
+}
 #[allow(clippy::enum_variant_names)]
 #[derive(Deserialize)]
 #[serde(tag = "type")]
@@ -93,9 +99,9 @@ pub async fn light_client(
         return Err(JsValue::from_str("Can't start twice"));
     }
     utils::set_panic_hook();
-    wasm_logger::init(wasm_logger::Config::new(
-        log::Level::from_str(&log_level).expect("Bad log level"),
-    ));
+    let log_level =
+        log::Level::from_str(&log_level).map_err(|_| JsValue::from_str("invalid log level"))?;
+    wasm_logger::init(wasm_logger::Config::new(log_level));
     let network_flag: NetworkSetting = serde_wasm_bindgen::from_value(network_setting)?;
 
     let wasm_transport_type: WasmTransportType =
@@ -139,11 +145,11 @@ pub async fn light_client(
         NetworkSetting::TestNet { .. } => Resource::bundled("specs/testnet.toml".to_string()),
         NetworkSetting::DevNet { spec, .. } => Resource::raw(spec),
     })
-    .expect("load spec should be OK");
+    .map_err(|e| JsValue::from_str(&format!("failed to load spec since {e}")))?;
 
     let consensus = chain_spec
         .build_consensus()
-        .expect("build consensus should be ok");
+        .map_err(|e| JsValue::from_str(&format!("failed to build consensus since {e}")))?;
     let genesis = consensus.genesis_block().data();
 
     storage.init_genesis_block(genesis);
@@ -154,8 +160,7 @@ pub async fn light_client(
 
     let pending_txs = Arc::new(tokio::sync::RwLock::new(PendingTxs::default()));
     let max_outbound_peers = config.network.max_outbound_peers;
-    let network_secret_key =
-        serde_wasm_bindgen::from_value(network_secret_key).expect("Invalid network secret key");
+    let network_secret_key = serde_wasm_bindgen::from_value(network_secret_key)?;
     config.network.secret_key = network_secret_key;
     let network_state = NetworkState::from_config(config.network)
         .await
@@ -170,9 +175,8 @@ pub async fn light_client(
         })
         .map_err(|err| {
             let errmsg = format!("failed to initialize network state since {}", err);
-            Error::runtime(errmsg)
-        })
-        .unwrap();
+            JsValue::from_str(&errmsg)
+        })?;
     let required_protocol_ids = vec![
         SupportProtocols::Sync.protocol_id(),
         SupportProtocols::LightClient.protocol_id(),
@@ -237,9 +241,8 @@ pub async fn light_client(
     .start(&handle)
     .map_err(|err| {
         let errmsg = format!("failed to start network since {}", err);
-        Error::runtime(errmsg)
-    })
-    .unwrap();
+        JsValue::from_str(&errmsg)
+    })?;
 
     let storage_with_data = StorageWithChainData::new(storage, peers, pending_txs);
 
@@ -252,8 +255,13 @@ pub async fn light_client(
 
 #[wasm_bindgen]
 pub fn stop() {
+    if !status(0b1) {
+        return;
+    }
     broadcast_exit_signals();
-    STORAGE_WITH_DATA.get().unwrap().storage().shutdown();
+    if let Some(storage_with_data) = STORAGE_WITH_DATA.get() {
+        storage_with_data.storage().shutdown();
+    }
     change_status(0b10);
 }
 
@@ -303,7 +311,7 @@ pub fn get_header(hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let block_hash = parse_h256(hash)?;
     Ok(get_chain_service()
         .get_header(&block_hash)
         .serialize(&SERIALIZER)?)
@@ -314,7 +322,7 @@ pub fn fetch_header(hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let block_hash = H256::from_str(&hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let block_hash = parse_h256(hash)?;
     Ok(get_chain_service()
         .fetch_header(&block_hash)
         .serialize(&SERIALIZER)?)
@@ -470,7 +478,7 @@ pub fn get_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let tx_hash = parse_h256(tx_hash)?;
     Ok(get_chain_service()
         .get_transaction(&tx_hash)
         .serialize(&SERIALIZER)?)
@@ -481,7 +489,7 @@ pub fn fetch_transaction(tx_hash: &str) -> Result<JsValue, JsValue> {
     if !status(0b1) {
         return Err(JsValue::from_str("light client not on start state"));
     }
-    let tx_hash = H256::from_str(&tx_hash[2..]).map_err(|e| JsValue::from_str(&e.to_string()))?;
+    let tx_hash = parse_h256(tx_hash)?;
     Ok(get_chain_service()
         .fetch_transaction(&tx_hash)
         .serialize(&SERIALIZER)?)

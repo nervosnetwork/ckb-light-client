@@ -289,19 +289,19 @@ pub trait LightClientStorage: StorageBackend {
             for block in &matched_blocks.blocks {
                 if let Some(header) = self.get_header(&block.hash) {
                     let stored_number: u64 = header.number();
-                    if stored_number < start_number || stored_number >= start_number + blocks_count
-                    {
+                    let expected_range_end = start_number.saturating_add(blocks_count);
+                    if stored_number < start_number || stored_number >= expected_range_end {
                         warn!(
                             "Invalid matched block {:#x} at number {} outside expected range [{}, {}), removing entry at start_number={}",
-                            block.hash, stored_number, start_number, start_number + blocks_count, start_number
+                            block.hash, stored_number, start_number, expected_range_end, start_number
                         );
                         should_remove = true;
                         break;
                     }
-                } else if start_number + 1000 < tip_number {
+                } else if start_number.saturating_add(1000) < tip_number {
                     warn!(
                         "Matched block {:#x} not found in storage, entry at start_number={} is {} blocks behind tip, removing",
-                        block.hash, start_number, tip_number - start_number
+                        block.hash, start_number, tip_number.saturating_sub(start_number)
                     );
                     should_remove = true;
                     break;
@@ -712,12 +712,16 @@ pub trait LightClientStorage: StorageBackend {
                     IteratorStart::From(start_key),
                     IteratorDirection::Reverse,
                     Box::new(move |key| {
-                        key.starts_with(&key_prefix_clone)
-                            && BlockNumber::from_be_bytes(
-                                key[key_prefix_len..key_prefix_len + 8]
-                                    .try_into()
-                                    .expect("stored BlockNumber"),
-                            ) >= to_number
+                        if !key.starts_with(&key_prefix_clone) {
+                            return false;
+                        }
+                        let Some(block_number_bytes) = key
+                            .get(key_prefix_len..key_prefix_len + 8)
+                            .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                        else {
+                            return false;
+                        };
+                        BlockNumber::from_be_bytes(block_number_bytes) >= to_number
                     }),
                     Box::new(|_key, value| Some(value.to_vec())),
                     usize::MAX,
@@ -726,28 +730,67 @@ pub trait LightClientStorage: StorageBackend {
                 for kv in results {
                     let key = &kv.key;
                     let value = &kv.value;
-                    let block_number = BlockNumber::from_be_bytes(
-                        key[key_prefix_len..key_prefix_len + 8]
-                            .try_into()
-                            .expect("stored BlockNumber"),
-                    );
+                    let Some(block_number_bytes) = key
+                        .get(key_prefix_len..key_prefix_len + 8)
+                        .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                    else {
+                        log::warn!(
+                            "skip malformed transaction history key: {} bytes",
+                            key.len()
+                        );
+                        continue;
+                    };
+                    let Some(tx_index_bytes) = key
+                        .get(key_prefix_len + 8..key_prefix_len + 12)
+                        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                    else {
+                        log::warn!(
+                            "skip malformed transaction history key: {} bytes",
+                            key.len()
+                        );
+                        continue;
+                    };
+                    let Some(cell_index_bytes) = key
+                        .get(key_prefix_len + 12..key_prefix_len + 16)
+                        .and_then(|bytes| <[u8; 4]>::try_from(bytes).ok())
+                    else {
+                        log::warn!(
+                            "skip malformed transaction history key: {} bytes",
+                            key.len()
+                        );
+                        continue;
+                    };
+                    let block_number = BlockNumber::from_be_bytes(block_number_bytes);
                     log::debug!("rollback {}", block_number);
-                    let tx_index = TxIndex::from_be_bytes(
-                        key[key_prefix_len + 8..key_prefix_len + 12]
-                            .try_into()
-                            .expect("stored TxIndex"),
-                    );
-                    let cell_index = CellIndex::from_be_bytes(
-                        key[key_prefix_len + 12..key_prefix_len + 16]
-                            .try_into()
-                            .expect("stored CellIndex"),
-                    );
-                    let tx_hash = packed::Byte32Reader::from_slice_should_be_ok(value).to_entity();
-                    if key[key_prefix_len + 16] == 0 {
-                        let (_, _, tx) = self
-                            .get_transaction(&tx_hash)
-                            .expect("stored transaction history");
-                        let input = tx.raw().inputs().get(cell_index as usize).unwrap();
+                    let tx_index = TxIndex::from_be_bytes(tx_index_bytes);
+                    let cell_index = CellIndex::from_be_bytes(cell_index_bytes);
+                    let cell_type = match key.get(key_prefix_len + 16) {
+                        Some(0) => CellType::Input,
+                        Some(_) => CellType::Output,
+                        None => {
+                            log::warn!(
+                                "skip malformed transaction history key: {} bytes",
+                                key.len()
+                            );
+                            continue;
+                        }
+                    };
+                    let Ok(tx_hash) = packed::Byte32::from_slice(value) else {
+                        log::warn!(
+                            "skip malformed transaction history value: {} bytes",
+                            value.len()
+                        );
+                        continue;
+                    };
+                    if matches!(cell_type, CellType::Input) {
+                        let Some((_, _, tx)) = self.get_transaction(&tx_hash) else {
+                            log::warn!("stored transaction is missing: {:#x}", tx_hash);
+                            continue;
+                        };
+                        let Some(input) = tx.raw().inputs().get(cell_index as usize) else {
+                            log::warn!("input is missing from stored transaction: {:#x}", tx_hash);
+                            continue;
+                        };
                         if let Some((
                             generated_by_block_number,
                             generated_by_tx_index,
@@ -965,12 +1008,15 @@ pub trait LightClientStorage: StorageBackend {
     fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, u32, Transaction)> {
         StorageBackend::get(self, Key::TxHash(tx_hash).into_vec())
             .map(|v| {
-                v.map(|v| {
-                    (
-                        BlockNumber::from_be_bytes(v[0..8].try_into().expect("stored BlockNumber")),
-                        TxIndex::from_be_bytes(v[8..12].try_into().expect("stored TxIndex")),
-                        Transaction::from_slice(&v[12..]).expect("stored Transaction"),
-                    )
+                v.and_then(|v| {
+                    let block_number: [u8; 8] = v.get(0..8)?.try_into().ok()?;
+                    let tx_index: [u8; 4] = v.get(8..12)?.try_into().ok()?;
+                    let transaction = Transaction::from_slice(v.get(12..)?).ok()?;
+                    Some((
+                        BlockNumber::from_be_bytes(block_number),
+                        TxIndex::from_be_bytes(tx_index),
+                        transaction,
+                    ))
                 })
             })
             .expect("db get should be ok")
@@ -1044,42 +1090,69 @@ pub trait LightClientStorage: StorageBackend {
     }
 
     /// Get matched blocks internal helper
+    ///
+    /// Malformed entries are removed so that they do not block the iteration.
     fn get_matched_blocks_internal(&self, direction: IteratorDirection) -> Option<MatchedBlocks> {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
-        let iter_from = match direction {
-            IteratorDirection::Forward => key_prefix.clone(),
-            IteratorDirection::Reverse => {
-                let mut key = key_prefix.clone();
-                key.extend(u64::MAX.to_be_bytes());
-                key
-            }
-        };
+        loop {
+            let iter_from = match direction {
+                IteratorDirection::Forward => key_prefix.clone(),
+                IteratorDirection::Reverse => {
+                    let mut key = key_prefix.clone();
+                    key.extend(u64::MAX.to_be_bytes());
+                    key
+                }
+            };
 
-        let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(iter_from),
-            direction,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            1,
-        );
+            let key_prefix_clone = key_prefix.clone();
+            let results = self.collect_iterator(
+                IteratorStart::From(iter_from),
+                direction,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                1,
+            );
 
-        results.into_iter().next().map(|kv| {
+            let kv = results.into_iter().next()?;
             let key = &kv.key;
             let value = &kv.value;
-            let mut u64_bytes = [0u8; 8];
-            u64_bytes.copy_from_slice(&key[key_prefix.len()..]);
-            let start_number = u64::from_be_bytes(u64_bytes);
-            let (blocks_count, raw_blocks) = parse_matched_blocks(value);
+            let start_number = key
+                .get(key_prefix.len()..)
+                .and_then(|bytes| <[u8; 8]>::try_from(bytes).ok())
+                .map(u64::from_be_bytes);
+            let Some(start_number) = start_number else {
+                log::error!(
+                    "stored matched blocks key is malformed: {} bytes, removing it",
+                    key.len()
+                );
+                if let Err(err) = StorageBackend::delete(self, key) {
+                    log::error!("failed to remove malformed matched blocks key: {err:?}");
+                    return None;
+                }
+                continue;
+            };
+            let (blocks_count, raw_blocks) = match parse_matched_blocks(value) {
+                Ok(parsed) => parsed,
+                Err(errmsg) => {
+                    log::error!(
+                        "failed to parse matched blocks at {start_number}: {errmsg}, removing it"
+                    );
+                    if let Err(err) = StorageBackend::delete(self, key) {
+                        log::error!("failed to remove malformed matched blocks entry: {err:?}");
+                        return None;
+                    }
+                    continue;
+                }
+            };
             let blocks = raw_blocks
                 .into_iter()
                 .map(|(hash, proved)| MatchedBlock { hash, proved })
                 .collect();
-            MatchedBlocks {
+            return Some(MatchedBlocks {
                 start_number,
                 blocks_count,
                 blocks,
-            }
-        })
+            });
+        }
     }
 }

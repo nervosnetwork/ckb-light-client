@@ -270,11 +270,13 @@ impl CellProvider for Storage {
             let output_index = out_point.index().unpack();
             let tx = tx.into_view();
             if let Some(cell_output) = tx.outputs().get(output_index) {
-                let output_data = tx
+                let Some(output_data) = tx
                     .outputs_data()
                     .get(output_index)
-                    .expect("output_data's index should be same as output")
-                    .raw_data();
+                    .map(|data| data.raw_data())
+                else {
+                    return CellStatus::Unknown;
+                };
                 let output_data_data_hash = CellOutput::calc_data_hash(&output_data);
                 let cell_meta = CellMeta {
                     out_point: out_point.clone(),
