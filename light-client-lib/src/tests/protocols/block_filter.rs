@@ -71,6 +71,10 @@ async fn test_block_filter_ignore_start_number() {
         );
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
@@ -120,6 +124,10 @@ async fn test_block_filter_empty_filters() {
         );
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
@@ -170,6 +178,10 @@ async fn test_block_filter_invalid_filters_count() {
         );
         let peers = chain.create_peers_with_parameters(bad_message_allowed_each_hour);
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
@@ -223,6 +235,10 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
         );
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
@@ -251,6 +267,17 @@ async fn test_block_filter_start_number_greater_then_proved_number() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_block_filter_ok_with_blocks_not_matched() {
+    no_match_filter_case(false, false).await;
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn test_block_filter_no_match_cannot_skip_persisted_pending_range() {
+    no_match_filter_case(true, false).await;
+}
+#[tokio::test(flavor = "multi_thread")]
+async fn no_match_recheck_ignores_stale_active_cache_after_completion_ack_loss() {
+    no_match_filter_case(false, true).await;
+}
+async fn no_match_filter_case(pending: bool, stale: bool) {
     setup();
 
     let chain = MockChain::new_with_dummy_pow("test-block-filter").start();
@@ -263,7 +290,11 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
         vec![ScriptStatus {
             script: Script::default(),
             script_type: ScriptType::Lock,
-            block_number: min_filtered_block_number,
+            block_number: if pending {
+                min_filtered_block_number - 1
+            } else {
+                min_filtered_block_number
+            },
         }],
         Default::default(),
     );
@@ -280,22 +311,23 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
             .into();
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
 
     let mut protocol = chain.create_filter_protocol(Arc::clone(&peers));
 
-    let block_hashes = {
-        let block_hash_1 = snapshot.get_block_hash(start_number).unwrap();
-        let block_hash_2 = snapshot.get_block_hash(start_number + 1).unwrap();
-        vec![block_hash_1, block_hash_2]
-    };
-    let filters = {
-        let filter_data_1 = snapshot.get_block_filter_data(start_number).unwrap();
-        let filter_data_2 = snapshot.get_block_filter_data(start_number + 1).unwrap();
-        vec![filter_data_1, filter_data_2]
-    };
+    let count = if stale { 3 } else { 2 };
+    let block_hashes = (0..count)
+        .map(|i| snapshot.get_block_hash(start_number + i).unwrap())
+        .collect::<Vec<_>>();
+    let filters = (0..count)
+        .map(|i| snapshot.get_block_filter_data(start_number + i).unwrap())
+        .collect::<Vec<_>>();
     let filter_hashes = {
         let mut filter_hashes = snapshot
             .get_block_filter_hashes_until(proved_number)
@@ -314,6 +346,37 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
         .set(content)
         .build();
 
+    if pending {
+        chain
+            .client_storage()
+            .update_min_filtered_block_number(min_filtered_block_number);
+        chain.client_storage().add_matched_blocks(
+            min_filtered_block_number,
+            1,
+            vec![(
+                snapshot.get_block_hash(min_filtered_block_number).unwrap(),
+                false,
+            )],
+        );
+        assert!(peers.matched_blocks().read().await.is_empty());
+    }
+    if stale {
+        chain.client_storage().add_matched_blocks(
+            start_number,
+            count,
+            vec![(
+                snapshot.get_block_hash(min_filtered_block_number).unwrap(),
+                false,
+            )],
+        );
+        crate::storage::canonical::coverage::prepare(chain.client_storage()).unwrap();
+        let mut active = peers.matched_blocks().write().await;
+        let old_hash = snapshot.get_block_hash(min_filtered_block_number).unwrap();
+        active.insert(
+            old_hash.unpack(),
+            (true, Some(snapshot.get_block(&old_hash).unwrap().data())),
+        );
+    }
     peers.mock_latest_block_filter_hashes(peer_index, 0, filter_hashes);
     protocol
         .received(nc.context(), peer_index, message.as_bytes())
@@ -323,8 +386,33 @@ async fn test_block_filter_ok_with_blocks_not_matched() {
     assert!(nc.not_banned(peer_index));
     assert_eq!(
         chain.client_storage().get_filter_scripts()[0].block_number,
-        filtered_block_number
+        if pending {
+            min_filtered_block_number - 1
+        } else {
+            filtered_block_number
+        }
     );
+    if pending {
+        assert!(chain
+            .client_storage()
+            .get_earliest_matched_blocks()
+            .is_some());
+        assert_eq!(
+            chain.client_storage().get_min_filtered_block_number(),
+            filtered_block_number
+        );
+    }
+    if stale {
+        assert!(
+            peers.matched_blocks().read().await.is_empty(),
+            "stale cache must not block a completed no-match recheck"
+        );
+        assert!(
+            crate::storage::canonical::query_context(chain.client_storage()).is_ok(),
+            "saved goal must complete without waiting for a new block"
+        );
+        return;
+    }
     let message = {
         let content = packed::GetBlockFilters::new_builder()
             .start_number(filtered_block_number + 1)
@@ -402,6 +490,10 @@ async fn test_block_filter_ok_with_blocks_matched() {
         let prove_state_block_hash = tip_header.header().hash();
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         (peers, prove_state_block_hash)
     };
@@ -500,6 +592,10 @@ async fn test_block_filter_notify_ask_filters() {
         );
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
@@ -653,6 +749,10 @@ async fn test_block_filter_notify_not_reach_ask() {
         );
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
@@ -693,6 +793,10 @@ async fn test_block_filter_notify_proved_number_not_big_enough() {
         );
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
@@ -724,24 +828,43 @@ async fn test_block_filter_notify_recover_matched_blocks() {
         Default::default(),
     );
     let tip_hash = tip_header.header().hash();
-    chain
-        .client_storage()
-        .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
+    let proved_header = HeaderBuilder::default()
+        .number(3u64)
+        .epoch(EpochNumberWithFraction::new(0, 3, 100))
+        .build();
+    chain.client_storage().update_last_state(
+        &U256::one(),
+        &tip_header.header().data(),
+        &[proved_header.clone()],
+    );
     let peers = {
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers
     };
     let unproved_block_hash = H256(rand::random()).pack();
-    let proved_block_hash = H256(rand::random()).pack();
+    let proved_block_hash = proved_header.hash();
+    crate::storage::canonical::store_proved_header(
+        chain.client_storage(),
+        &crate::storage::HeaderWithExtension {
+            header: proved_header.data(),
+            extension: None,
+        },
+        &chain.client_storage().get_tip_header(),
+    )
+    .unwrap();
     let matched_blocks = vec![
-        (unproved_block_hash.clone(), false),
-        (proved_block_hash.clone(), true),
+        (2, unproved_block_hash.clone()),
+        (3, proved_block_hash.clone()),
     ];
     chain
         .client_storage()
-        .add_matched_blocks(2, 2, matched_blocks);
+        .add_positioned_matched_blocks(2, 2, matched_blocks);
     let mut protocol = chain.create_filter_protocol(Arc::clone(&peers));
 
     peers.mock_latest_block_filter_hashes(
@@ -860,6 +983,10 @@ async fn test_block_filter_without_enough_hashes() {
     let peers = {
         let peers = chain.create_peers();
         peers.add_peer(peer_index);
+        // Explicit accepted checkpoint for this filter-only fixture.
+        chain
+            .client_storage()
+            .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
         peers.mock_prove_state(peer_index, tip_header).unwrap();
         peers.set_max_outbound_peers(3);
         peers
