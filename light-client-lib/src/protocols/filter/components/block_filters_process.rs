@@ -47,15 +47,10 @@ impl<'a> BlockFiltersProcess<'a> {
         }
         let peer_state = peer_state_opt.expect("checked Some");
 
-        let prove_state_block_hash = if let Some(header) = peer_state
-            .get_prove_state()
-            .map(|prove_state| prove_state.get_last_header().header())
-        {
-            header.hash()
-        } else {
+        if peer_state.get_prove_state().is_none() {
             warn!("ignoring, peer {} prove state is none", self.peer);
             return Status::ok();
-        };
+        }
         let mut matched_blocks = self.filter.peers.matched_blocks().write().await;
 
         let block_filters = self.message.to_entity();
@@ -247,9 +242,31 @@ impl<'a> BlockFiltersProcess<'a> {
         };
 
         if possible_match_blocks_len != 0 {
+            // SECURITY: a matched block counts as already proved only when we can
+            // confirm the hash against our own authenticated header at that height.
+            //
+            // This previously read `block_hash == prove_state_block_hash`, i.e. the
+            // peer's own claimed tip. `prove_state_block_hash` is peer-supplied and
+            // unauthenticated, so a peer could grant free trust to an arbitrary hash
+            // just by claiming it as its tip: the hash then skipped `GetBlocksProof`
+            // entirely (see `get_matched_blocks_to_prove`, which returns early for
+            // proved blocks) and was downloaded and indexed as if it sat at this
+            // height. The filter hash chain authenticates `filters[]`, not
+            // `block_hashes[]`, so the peer's claim alone must not be enough.
+            //
+            // The shortcut still applies to re-filtered heights — those do have an
+            // authenticated header stored, so nothing is lost. For a height above our
+            // tip the block is left unproved and goes through the normal proof flow.
             let blocks = possible_match_blocks
                 .iter()
-                .map(|block_hash| (block_hash.clone(), block_hash == &prove_state_block_hash))
+                .map(|(block_hash, block_number)| {
+                    // The height comes from the filter that matched, not from the
+                    // entry's position: only matching filters are collected.
+                    let locally_authenticated =
+                        self.filter.storage.get_block_hash(*block_number).as_ref()
+                            == Some(block_hash);
+                    (block_hash.clone(), *block_number, locally_authenticated)
+                })
                 .collect::<Vec<_>>();
             self.filter.storage.add_matched_blocks(
                 start_number,
@@ -261,11 +278,13 @@ impl<'a> BlockFiltersProcess<'a> {
                 if let Some(db_matched_blocks) = self.filter.storage.get_earliest_matched_blocks() {
                     self.filter.peers.add_matched_blocks(
                         &mut matched_blocks,
+                        db_matched_blocks.start_number,
                         db_matched_blocks
                             .blocks
                             .into_iter()
-                            .map(|b| (b.hash, b.proved))
+                            .map(|b| (b.hash, b.block_number, b.proved))
                             .collect(),
+                        Some(self.peer),
                     );
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.filter.peers),

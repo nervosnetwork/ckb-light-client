@@ -194,12 +194,12 @@ async fn test_light_client_get_idle_matched_blocks() {
     let unproved_block_hash = H256(rand::random()).pack();
     let proved_block_hash = H256(rand::random()).pack();
     let blocks = vec![
-        (unproved_block_hash.clone(), false),
-        (proved_block_hash.clone(), true),
+        (unproved_block_hash.clone(), 0, false),
+        (proved_block_hash.clone(), 1, true),
     ];
     {
         let mut matched_blocks = peers.matched_blocks().write().await;
-        peers.add_matched_blocks(&mut matched_blocks, blocks);
+        peers.add_matched_blocks(&mut matched_blocks, 0, blocks, None);
     }
 
     let mut protocol = chain.create_light_client_protocol(peers);

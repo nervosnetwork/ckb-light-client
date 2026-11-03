@@ -40,11 +40,16 @@ impl FilterProtocol {
         }
     }
 
+    /// Returns each matched block hash together with the height its filter sat at.
+    ///
+    /// The height has to travel with the hash: only matching filters are collected,
+    /// so the returned list is a sparse subset of the range and a caller cannot
+    /// recover the height from the entry's position.
     pub fn check_filters_data(
         &self,
         block_filters: packed::BlockFilters,
         limit: usize,
-    ) -> Result<Vec<packed::Byte32>, Status> {
+    ) -> Result<Vec<(packed::Byte32, BlockNumber)>, Status> {
         let start_number: BlockNumber = block_filters.start_number().unpack();
         let reader = GCSFilterReader::new(SipHasher24Builder::new(0, 0), M, P);
         let script_hashes = self
@@ -60,7 +65,7 @@ impl FilterProtocol {
                     StatusCode::MalformedProtocolMessage.with_context(errmsg)
                 })?;
             if is_match {
-                let block_hash = match block_filters.block_hashes().get(index) {
+                let claimed_hash = match block_filters.block_hashes().get(index) {
                     Some(h) => h,
                     None => {
                         let errmsg = format!(
@@ -71,8 +76,41 @@ impl FilterProtocol {
                         return Err(StatusCode::MalformedProtocolMessage.with_context(errmsg));
                     }
                 };
-                info!("check_filters_data matched, block_hash: {:#x}", block_hash);
-                matched.push(block_hash);
+
+                // SECURITY: `block_hashes[]` rides alongside the filter array but is
+                // not covered by the filter hash chain — `calc_filter_hash` commits
+                // only to `(parent_filter_hash, filter_data)`, so the peer is free to
+                // put any hash it likes at this index and still pass the filter check.
+                //
+                // When we already hold the authenticated header for this height, that
+                // header — not the peer — is authoritative: take our own hash and drop
+                // the claim entirely. Comparing and rejecting instead would only cover
+                // this case, and would leave the peer's value in play for heights above
+                // our tip, which is where a forged hash is actually dangerous.
+                let block_number = start_number + index as BlockNumber;
+                let block_hash = match self.storage.get_block_hash(block_number) {
+                    Some(authenticated_hash) => {
+                        if authenticated_hash.as_slice() != claimed_hash.as_slice() {
+                            info!(
+                                "block hash mismatch at height {}: peer claims {:#x} but our \
+                                 authenticated header is {:#x}; using our own hash",
+                                block_number, claimed_hash, authenticated_hash
+                            );
+                        }
+                        authenticated_hash
+                    }
+                    // No authenticated header for this height yet. The claim is carried
+                    // forward and must be bound to this height by the proof flow before
+                    // the block is downloaded — see the `GetBlocksProof` height check in
+                    // `SendBlocksProofProcess`.
+                    None => claimed_hash.clone(),
+                };
+
+                info!(
+                    "check_filters_data matched, block_hash: {:#x} at height {}",
+                    block_hash, block_number
+                );
+                matched.push((block_hash, block_number));
             } else {
                 match block_filters.block_hashes().get(index) {
                     Some(h) => trace!("check_filters_data not matched, block_hash: {:#x}", h),
@@ -195,7 +233,7 @@ impl FilterProtocol {
                             }
                             true
                         })
-                        .map(|b| (b.hash.clone(), b.proved))
+                        .map(|b| (b.hash.clone(), b.block_number, b.proved))
                         .collect();
 
                     if filtered_blocks.is_empty() {
@@ -223,8 +261,12 @@ impl FilterProtocol {
                     }
 
                     // recover matched blocks from storage (only non-missing ones)
-                    self.peers
-                        .add_matched_blocks(&mut matched_blocks, filtered_blocks);
+                    self.peers.add_matched_blocks(
+                        &mut matched_blocks,
+                        db_matched_blocks.start_number,
+                        filtered_blocks,
+                        None,
+                    );
                     let tip_header = self.storage.get_tip_header();
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.peers),
@@ -242,8 +284,8 @@ impl FilterProtocol {
                     }
                 } else {
                     debug!("matched blocks are not empty:");
-                    matched_blocks.iter().for_each(|matched_block| {
-                        debug!("matched_block: {}, {:?}", matched_block.0, matched_block.1);
+                    matched_blocks.iter().for_each(|(hash, state)| {
+                        debug!("matched_block: {:#x}, proved={}", hash, state.proved);
                     });
                 }
             } else if self.should_ask(immediately).await && could_ask_more {

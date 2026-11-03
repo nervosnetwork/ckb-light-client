@@ -1383,13 +1383,15 @@ fn test_set_scripts_clear_matched_blocks() {
     let rpc = create_block_filter_rpc(storage.clone(), Arc::clone(&peers));
 
     storage.update_min_filtered_block_number(1234);
-    storage.add_matched_blocks(2233, 200, vec![(H256(rand::random()).pack(), false)]);
-    storage.add_matched_blocks(4455, 200, vec![(H256(rand::random()).pack(), false)]);
+    storage.add_matched_blocks(2233, 200, vec![(H256(rand::random()).pack(), 2233, false)]);
+    storage.add_matched_blocks(4455, 200, vec![(H256(rand::random()).pack(), 4455, false)]);
     {
         let mut matched_blocks = peers.matched_blocks().blocking_write();
         peers.add_matched_blocks(
             &mut matched_blocks,
-            vec![(H256(rand::random()).pack(), false)],
+            0,
+            vec![(H256(rand::random()).pack(), 0, false)],
+            None,
         );
     }
     let block_number_a: u64 = 3;

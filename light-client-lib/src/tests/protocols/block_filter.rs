@@ -471,6 +471,136 @@ async fn test_block_filter_ok_with_blocks_matched() {
     );
 }
 
+/// The matched heights must be the blocks' real heights, not their position in
+/// the matched list.
+///
+/// `check_filters_data` pushes a hash only for the filters that match, so the
+/// returned vector is a sparse subset of the range: its k-th entry is the k-th
+/// *match*, not the k-th block. Deriving the height as `start_number + k` is
+/// therefore wrong as soon as a non-matching block sits before a match, and the
+/// error propagates into the stored height, into the proof request's expected
+/// height, and into the rollback target.
+///
+/// Here the range covers three blocks and only the third matches, so the correct
+/// height is `start_number + 2`. A dense range would hide this — the existing
+/// `test_block_filter_ok_with_blocks_matched` has every block in its range match,
+/// which is why it never caught the problem.
+#[tokio::test(flavor = "multi_thread")]
+async fn test_block_filter_matched_heights_are_the_blocks_real_heights() {
+    use crate::protocols::MatchedBlockState;
+
+    setup();
+
+    let chain = MockChain::new_with_dummy_pow("test-block-filter").start();
+    let nc = MockNetworkContext::new(SupportProtocols::Filter);
+
+    let min_filtered_block_number = 30;
+    let start_number = min_filtered_block_number + 1;
+    let proved_number = start_number + 5;
+    let script = Script::new_builder()
+        .code_hash(H256(rand::random()).pack())
+        .build();
+    chain.client_storage().update_filter_scripts(
+        vec![ScriptStatus {
+            script: script.clone(),
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }],
+        SetScriptsCommand::All,
+    );
+    chain
+        .client_storage()
+        .update_min_filtered_block_number(min_filtered_block_number);
+
+    // `mine_to` is inclusive, so this leaves the tip at `start_number - 1` and the
+    // cellbase of that block available as an input below.
+    chain.mine_to(start_number - 1);
+
+    // Only `start_number + 2` carries a transaction paying the watched script.
+    // `start_number` and `start_number + 1` stay unmatched, so the match lands at
+    // index 2 of the range while being the first (and only) entry of the matched
+    // list.
+    {
+        let tx = {
+            let tx = chain.get_cellbase_as_input(start_number - 1);
+            let output = tx.output(0).unwrap().as_builder().lock(script).build();
+            tx.as_advanced_builder().set_outputs(vec![output]).build()
+        };
+        chain.mine_block(|block| {
+            let ids = vec![tx.proposal_short_id()];
+            block.as_advanced_builder().proposals(ids).build()
+        });
+        chain.mine_blocks(1);
+        chain.mine_block(|block| block.as_advanced_builder().transaction(tx.clone()).build());
+        chain.mine_blocks(1);
+    }
+
+    chain.mine_to(proved_number);
+
+    let snapshot = chain.shared().snapshot();
+
+    let tip_header: VerifiableHeader = snapshot
+        .get_verifiable_header_by_number(proved_number)
+        .expect("block stored")
+        .into();
+    chain
+        .client_storage()
+        .update_last_state(&U256::one(), &tip_header.header().data(), &[]);
+
+    let peer_index = PeerIndex::new(3);
+    let peers = {
+        let peers = chain.create_peers();
+        peers.add_peer(peer_index);
+        peers.mock_prove_state(peer_index, tip_header).unwrap();
+        peers
+    };
+
+    let block_hash_0 = snapshot.get_block_hash(start_number).unwrap();
+    let block_hash_1 = snapshot.get_block_hash(start_number + 1).unwrap();
+    let block_hash_2 = snapshot.get_block_hash(start_number + 2).unwrap();
+    let filter_data_0 = snapshot.get_block_filter_data(start_number).unwrap();
+    let filter_data_1 = snapshot.get_block_filter_data(start_number + 1).unwrap();
+    let filter_data_2 = snapshot.get_block_filter_data(start_number + 2).unwrap();
+    let filter_hashes = {
+        let mut filter_hashes = snapshot
+            .get_block_filter_hashes_until(start_number + 4)
+            .unwrap();
+        filter_hashes.remove(0);
+        filter_hashes
+    };
+
+    let content = packed::BlockFilters::new_builder()
+        .start_number(start_number)
+        .block_hashes(vec![block_hash_0, block_hash_1, block_hash_2.clone()].pack())
+        .filters(vec![filter_data_0, filter_data_1, filter_data_2].pack())
+        .build();
+    let message = packed::BlockFilterMessage::new_builder()
+        .set(content)
+        .build()
+        .as_bytes();
+
+    let mut protocol = chain.create_filter_protocol(Arc::clone(&peers));
+    peers.mock_latest_block_filter_hashes(peer_index, 0, filter_hashes);
+    protocol.received(nc.context(), peer_index, message).await;
+    assert!(nc.not_banned(peer_index));
+
+    // The only match is the block at `start_number + 2`, and its recorded height
+    // must say so.
+    let matched_blocks = peers.matched_blocks().read().await;
+    assert_eq!(matched_blocks.len(), 1);
+    let state: &MatchedBlockState = matched_blocks
+        .get(&block_hash_2.unpack())
+        .expect("the block carrying the watched script should be matched");
+    assert_eq!(
+        state.block_number,
+        start_number + 2,
+        "matched block {:#x} sits at height {}, but was recorded at {}",
+        block_hash_2,
+        start_number + 2,
+        state.block_number
+    );
+}
+
 #[tokio::test]
 async fn test_block_filter_notify_ask_filters() {
     let chain = MockChain::new_with_dummy_pow("test-block-filter");
@@ -736,8 +866,8 @@ async fn test_block_filter_notify_recover_matched_blocks() {
     let unproved_block_hash = H256(rand::random()).pack();
     let proved_block_hash = H256(rand::random()).pack();
     let matched_blocks = vec![
-        (unproved_block_hash.clone(), false),
-        (proved_block_hash.clone(), true),
+        (unproved_block_hash.clone(), 2, false),
+        (proved_block_hash.clone(), 3, true),
     ];
     chain
         .client_storage()

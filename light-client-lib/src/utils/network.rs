@@ -1,4 +1,4 @@
-use crate::protocols::{Peers, GET_BLOCKS_PROOF_LIMIT};
+use crate::protocols::{MatchedBlockState, Peers, GET_BLOCKS_PROOF_LIMIT};
 use ckb_network::{CKBProtocolContext, SupportProtocols};
 use ckb_types::{packed, prelude::*, H256};
 use log::{debug, info};
@@ -9,7 +9,7 @@ use std::sync::Arc;
 pub(crate) fn prove_or_download_matched_blocks(
     peers: Arc<Peers>,
     best_tip: &packed::Header,
-    matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
+    matched_blocks: &HashMap<H256, MatchedBlockState>,
     nc: &dyn CKBProtocolContext,
     init_blocks_in_transit_per_peer: usize,
 ) {
@@ -39,6 +39,17 @@ pub(crate) fn prove_or_download_matched_blocks(
                     blocks_to_prove.len(),
                     blocks_to_prove,
                 );
+                // Record the height each hash was matched at. The proof response
+                // does not carry heights, so this is what lets us reject a header
+                // that proves the block sits at some other height.
+                let expected_heights = blocks_to_prove
+                    .iter()
+                    .filter_map(|block_hash| {
+                        matched_blocks
+                            .get(&block_hash.unpack())
+                            .map(|state| (block_hash.unpack(), state.block_number))
+                    })
+                    .collect::<HashMap<_, _>>();
                 let content = packed::GetBlocksProof::new_builder()
                     .block_hashes(blocks_to_prove.pack())
                     .last_hash(last_hash.clone())
@@ -47,7 +58,12 @@ pub(crate) fn prove_or_download_matched_blocks(
                     .set(content.clone())
                     .build()
                     .as_bytes();
-                peers.update_blocks_proof_request(*peer_index, Some(content), true);
+                peers.update_blocks_proof_request(
+                    *peer_index,
+                    Some(content),
+                    expected_heights,
+                    true,
+                );
                 if let Err(err) = nc.send_message(
                     SupportProtocols::LightClient.protocol_id(),
                     *peer_index,
