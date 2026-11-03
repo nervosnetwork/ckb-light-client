@@ -134,6 +134,14 @@ impl<'a> SendBlocksProofProcess<'a> {
             return StatusCode::UnexpectedResponse.into();
         }
 
+        // Protocol processing has one mutable owner, so accepted-tip publication
+        // cannot interleave with this response. Reuse one coherent identity for
+        // every returned and missing header; the snapshot guard is already released.
+        let (_, chain) = self
+            .protocol
+            .peers()
+            .header_revalidation_chain(self.protocol.storage());
+
         // If all blocks are missing.
         if headers.is_empty() {
             if !self.message.proof().is_empty() {
@@ -244,7 +252,20 @@ impl<'a> SendBlocksProofProcess<'a> {
             }
 
             for (header, extension) in headers.into_iter().zip(extensions) {
-                if self.protocol.peers().remove_fetching_header(&header.hash()) {
+                let block_hash = header.hash();
+                let normal_fetch = original_request.normal_fetch_hashes().contains(&block_hash)
+                    && self.protocol.peers().remove_fetching_header(&block_hash);
+                let revalidations: Vec<_> = original_request
+                    .revalidations()
+                    .iter()
+                    .filter_map(|request| request.upgrade())
+                    .filter(|request| request.block_hash == block_hash)
+                    .collect();
+                if normal_fetch
+                    || revalidations
+                        .iter()
+                        .any(|request| request.is_fetching(self.peer_index, &chain))
+                {
                     self.protocol
                         .storage()
                         .add_fetched_header(&HeaderWithExtension {
@@ -252,11 +273,26 @@ impl<'a> SendBlocksProofProcess<'a> {
                             extension,
                         });
                 }
+                for request in revalidations {
+                    request.complete(self.peer_index, &chain, Some(&header));
+                }
             }
         }
+        let normal_missing: Vec<_> = missing_block_hashes
+            .iter()
+            .filter(|hash| original_request.normal_fetch_hashes().contains(hash))
+            .cloned()
+            .collect();
         self.protocol
             .peers()
-            .mark_fetching_headers_missing(&missing_block_hashes);
+            .mark_fetching_headers_missing(&normal_missing);
+        for request in original_request.revalidations() {
+            if let Some(request) = request.upgrade() {
+                if missing_block_hashes.contains(&request.block_hash) {
+                    request.complete(self.peer_index, &chain, None);
+                }
+            }
+        }
 
         // Remove missing blocks from matched_blocks to prevent batch stall
         // This is safe because:

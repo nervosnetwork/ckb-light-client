@@ -1,3 +1,5 @@
+use std::sync::{Arc, Weak};
+
 use ckb_jsonrpc_types::{
     BlockNumber, Capacity, CellOutput, Cycle, HeaderView, JsonBytes, NodeAddress, OutPoint,
     RemoteNodeProtocol, Script, TransactionView, Uint32, Uint64,
@@ -5,7 +7,11 @@ use ckb_jsonrpc_types::{
 use ckb_types::H256;
 use serde::{Deserialize, Serialize};
 
-use crate::storage;
+use crate::{
+    error::{Error, Result},
+    protocols::light_client::HeaderRevalidation,
+    storage::{self, StorageWithChainData},
+};
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen::prelude::wasm_bindgen)]
 #[derive(Deserialize, Serialize, Eq, PartialEq, Debug)]
@@ -37,6 +43,47 @@ pub enum FetchStatus<T> {
     Fetching { first_sent: Uint64 },
     Fetched { data: T },
     NotFound,
+}
+
+/// A fresh header-proof operation bound to its hash and originating client.
+///
+/// Create with [`super::LightClientChainService::revalidate_header`]. Retaining
+/// this handle retains its result; dropping it abandons pending work. It does
+/// not keep the originating client alive and has no public clone operation.
+#[derive(Debug)]
+#[must_use = "retain the handle to poll or complete the revalidation"]
+pub struct HeaderRevalidationHandle {
+    client: Weak<StorageWithChainData>,
+    request: Arc<HeaderRevalidation>,
+}
+
+impl HeaderRevalidationHandle {
+    pub(crate) fn new(
+        client: Weak<StorageWithChainData>,
+        request: Arc<HeaderRevalidation>,
+    ) -> Self {
+        Self { client, request }
+    }
+
+    /// Poll without starting another request or consulting header cache results.
+    ///
+    /// Verified extensions preserve the operation. Forks or unknown continuity
+    /// invalidate it, including completed results. Missing is terminal for this
+    /// handle; timeouts and disconnects retry through the existing scheduler.
+    /// Returns an error if the last originating chain-service clone was dropped
+    /// or required synchronization state is poisoned. Stopping only networking
+    /// while retaining the service does not signal destruction; pending work
+    /// has no overall deadline. Dropping this handle abandons it.
+    pub fn status(&self) -> Result<FetchStatus<HeaderView>> {
+        let client = self
+            .client
+            .upgrade()
+            .ok_or_else(|| Error::runtime("header revalidation client is no longer available"))?;
+        let (_, chain) = client
+            .peers()
+            .try_header_revalidation_chain(client.storage())?;
+        self.request.status(&chain)
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug)]
