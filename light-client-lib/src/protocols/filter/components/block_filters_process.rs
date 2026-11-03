@@ -1,13 +1,13 @@
 use crate::protocols::FilterProtocol;
 use crate::protocols::{Status, StatusCode};
-use crate::storage::LightClientStorage;
-use crate::utils::network::prove_or_download_matched_blocks;
+use crate::storage::{canonical::coverage, LightClientStorage};
+use crate::utils::network::{prove_or_download_matched_blocks, restore_matched_cache};
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{BoxedCKBProtocolContext, PeerIndex};
 use ckb_types::core::BlockNumber;
 use ckb_types::utilities::calc_filter_hash;
 use ckb_types::{packed, prelude::*};
-use log::{debug, info, trace, warn};
+use log::{debug, info, trace};
 use rand::seq::SliceRandom;
 use std::{cmp, sync::Arc};
 
@@ -47,16 +47,17 @@ impl<'a> BlockFiltersProcess<'a> {
         }
         let peer_state = peer_state_opt.expect("checked Some");
 
-        let prove_state_block_hash = if let Some(header) = peer_state
+        let Some(peer_anchor) = peer_state
             .get_prove_state()
-            .map(|prove_state| prove_state.get_last_header().header())
-        {
-            header.hash()
-        } else {
-            warn!("ignoring, peer {} prove state is none", self.peer);
+            .map(|p| p.get_last_header().header().data())
+        else {
             return Status::ok();
         };
         let mut matched_blocks = self.filter.peers.matched_blocks().write().await;
+        let revision = match coverage::scripts_revision(&self.filter.storage) {
+            Ok(revision) => revision,
+            Err(error) => return StatusCode::InternalError.with_context(error.to_string()),
+        };
 
         let block_filters = self.message.to_entity();
         let start_number: BlockNumber = block_filters.start_number().unpack();
@@ -105,6 +106,13 @@ impl<'a> BlockFiltersProcess<'a> {
             return Status::ok();
         }
 
+        match crate::storage::canonical::anchor_current(&self.filter.storage, &peer_anchor) {
+            Ok(true) => {}
+            Ok(false) => {
+                return StatusCode::Ignore.with_context("filter peer anchor is no longer accepted")
+            }
+            Err(error) => return StatusCode::InternalError.with_context(error.to_string()),
+        }
         let (finalized_check_point_index, finalized_check_point_hash) =
             self.filter.storage.get_last_check_point();
         let finalized_check_point_number = self
@@ -202,7 +210,34 @@ impl<'a> BlockFiltersProcess<'a> {
                 }
             };
 
-        let limit = cmp::min(filters_count, expected_block_filter_hashes.len());
+        let limit = match coverage::recheck_limit(
+            &self.filter.storage,
+            start_number,
+            cmp::min(
+                cmp::min(filters_count, expected_block_filter_hashes.len()),
+                usize::try_from(
+                    Unpack::<u64>::unpack(&peer_anchor.raw().number())
+                        .saturating_add(1)
+                        .saturating_sub(start_number),
+                )
+                .unwrap_or(usize::MAX),
+            ),
+        ) {
+            Ok(limit) => limit,
+            Err(error) => return StatusCode::InternalError.with_context(error.to_string()),
+        };
+        if limit == 0 {
+            return Status::ok();
+        }
+        let mut distinct = std::collections::HashSet::new();
+        if block_filters
+            .block_hashes()
+            .into_iter()
+            .take(limit)
+            .any(|h| !distinct.insert(h))
+        {
+            return StatusCode::UnexpectedResponse.with_context("duplicate filter block hashes");
+        }
 
         for (index, (filter, expected_hash)) in block_filters
             .filters()
@@ -226,7 +261,7 @@ impl<'a> BlockFiltersProcess<'a> {
         }
 
         let possible_match_blocks =
-            return_if_failed!(self.filter.check_filters_data(block_filters, limit));
+            return_if_failed!(self.filter.check_filter_positions(block_filters, limit));
         let possible_match_blocks_len = possible_match_blocks.len();
         trace!(
             "peer {}, matched blocks: {}",
@@ -246,26 +281,30 @@ impl<'a> BlockFiltersProcess<'a> {
             return StatusCode::Ignore.with_context(errmsg);
         };
 
+        if let Err(error) = coverage::save_filters(
+            &self.filter.storage,
+            start_number,
+            actual_blocks_count as u64,
+            possible_match_blocks,
+            revision,
+        ) {
+            return StatusCode::InternalError.with_context(error.to_string());
+        }
+        let option = match restore_matched_cache(
+            &self.filter.storage,
+            &self.filter.peers,
+            &mut matched_blocks,
+        ) {
+            Ok(restored) => restored,
+            Err(error) => return StatusCode::InternalError.with_context(error.to_string()),
+        };
         if possible_match_blocks_len != 0 {
-            let blocks = possible_match_blocks
-                .iter()
-                .map(|block_hash| (block_hash.clone(), block_hash == &prove_state_block_hash))
-                .collect::<Vec<_>>();
-            self.filter.storage.add_matched_blocks(
-                start_number,
-                actual_blocks_count as u64,
-                blocks,
-            );
-            let option = matched_blocks.is_empty();
             if option {
                 if let Some(db_matched_blocks) = self.filter.storage.get_earliest_matched_blocks() {
                     self.filter.peers.add_matched_blocks(
                         &mut matched_blocks,
-                        db_matched_blocks
-                            .blocks
-                            .into_iter()
-                            .map(|b| (b.hash, b.proved))
-                            .collect(),
+                        coverage::restorable_blocks(&self.filter.storage, &db_matched_blocks)
+                            .expect("restore verified positions"),
                     );
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.filter.peers),
@@ -276,7 +315,11 @@ impl<'a> BlockFiltersProcess<'a> {
                     );
                 }
             }
-        } else if matched_blocks.is_empty() {
+        } else if self.filter.storage.get_earliest_matched_blocks().is_none() {
+            // A lost completion acknowledgement may leave an old in-memory
+            // batch. It is a cache, not another coverage obligation. A checked
+            // no-match page can finish once the durable pending set is empty.
+            self.filter.peers.clear_matched_blocks(&mut matched_blocks);
             self.filter
                 .storage
                 .update_block_number(filtered_block_number)

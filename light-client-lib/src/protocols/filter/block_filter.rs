@@ -2,7 +2,7 @@ use super::{components, BAD_MESSAGE_BAN_TIME};
 use crate::protocols::{Peers, Status, StatusCode};
 use crate::storage::{LightClientStorage, Storage};
 use crate::types::{Duration, Instant, RwLock};
-use crate::utils::network::prove_or_download_matched_blocks;
+use crate::utils::network::{prove_or_download_matched_blocks, restore_matched_cache};
 use crate::{read_lock, write_lock};
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
 use ckb_network::{
@@ -45,6 +45,18 @@ impl FilterProtocol {
         block_filters: packed::BlockFilters,
         limit: usize,
     ) -> Result<Vec<packed::Byte32>, Status> {
+        Ok(self
+            .check_filter_positions(block_filters, limit)?
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect())
+    }
+
+    pub(crate) fn check_filter_positions(
+        &self,
+        block_filters: packed::BlockFilters,
+        limit: usize,
+    ) -> Result<Vec<(u64, packed::Byte32)>, Status> {
         let start_number: BlockNumber = block_filters.start_number().unpack();
         let reader = GCSFilterReader::new(SipHasher24Builder::new(0, 0), M, P);
         let script_hashes = self
@@ -72,7 +84,7 @@ impl FilterProtocol {
                     }
                 };
                 info!("check_filters_data matched, block_hash: {:#x}", block_hash);
-                matched.push(block_hash);
+                matched.push((start_number + index as u64, block_hash));
             } else {
                 match block_filters.block_hashes().get(index) {
                     Some(h) => trace!("check_filters_data not matched, block_hash: {:#x}", h),
@@ -155,6 +167,20 @@ impl FilterProtocol {
             debug!("found best proved peer {}", peer);
 
             let mut matched_blocks = self.peers.matched_blocks().write().await;
+            match crate::storage::canonical::coverage::prepare(&self.storage) {
+                Ok(true) => {
+                    self.peers.clear_matched_blocks(&mut matched_blocks);
+                    let rewind = self.storage.get_min_filtered_block_number();
+                    self.peers.update_min_filtered_block_number(rewind).await;
+                    self.send_get_block_filters(nc, *peer, rewind + 1);
+                    return;
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    warn!("filter recheck paused: {error}");
+                    return;
+                }
+            }
             if let Some(db_matched_blocks) = self.storage.get_earliest_matched_blocks() {
                 debug!(
                     "try recover matched blocks from storage, start_number={}, \
@@ -163,68 +189,47 @@ impl FilterProtocol {
                     db_matched_blocks.blocks_count,
                     matched_blocks.len(),
                 );
-                let option = matched_blocks.is_empty();
+                let option =
+                    match restore_matched_cache(&self.storage, &self.peers, &mut matched_blocks) {
+                        Ok(restored) => restored,
+                        Err(error) => {
+                            warn!("matched cache restore failed: {error}");
+                            return;
+                        }
+                    };
+
+                if self.should_ask(false).await
+                    && self
+                        .peers
+                        .matched_hash_unavailable(&self.storage.get_tip_header(), &matched_blocks)
+                {
+                    if let Err(error) = crate::storage::canonical::coverage::recheck(
+                        &self.storage,
+                        db_matched_blocks.start_number,
+                    ) {
+                        warn!("unavailable filter match recheck paused: {error}");
+                        return;
+                    }
+                    self.peers.clear_matched_blocks(&mut matched_blocks);
+                    let rewind = self.storage.get_min_filtered_block_number();
+                    self.update_min_filtered_block_number(rewind).await;
+                    self.send_get_block_filters(nc, *peer, rewind + 1);
+                    return;
+                }
 
                 if option {
                     debug!("matched_blocks is empty");
 
-                    // Filter out blocks already marked as missing (e.g., uncle blocks)
-                    let filtered_blocks: Vec<_> = db_matched_blocks
-                        .blocks
-                        .iter()
-                        .filter(|b| {
-                            if let Some((_added_ts, _first_sent, missing)) =
-                                self.peers.get_header_fetch_info(&b.hash)
-                            {
-                                debug!(
-                                    "header fetch info for block {:#x}:added_ts={}, first_sent={}, missing={}",
-                                    b.hash,
-                                    _added_ts,
-                                    _first_sent,
-                                    missing
-                                );
-                                if missing {
-                                    debug!(
-                                        "Skipping block {:#x} from DB - marked as missing",
-                                        b.hash
-                                    );
-                                    return false;
-                                }
-                            } else {
-                                trace!("not found header fetch info for block {:#x}", b.hash);
-                            }
-                            true
-                        })
-                        .map(|b| (b.hash.clone(), b.proved))
-                        .collect();
-
-                    if filtered_blocks.is_empty() {
-                        // All blocks in this DB range are missing - remove it and load next
-                        info!(
-                            "All {} blocks in DB range {} are missing (uncle blocks), removing",
-                            db_matched_blocks.blocks.len(),
-                            db_matched_blocks.start_number
-                        );
-                        self.storage
-                            .remove_matched_blocks(db_matched_blocks.start_number);
-
-                        // Also remove these blocks from fetching_headers to prevent memory leak
-                        for block in &db_matched_blocks.blocks {
-                            self.peers.remove_fetching_header(&block.hash);
-                        }
-
-                        // Will load next range on next iteration
-                        return;
-                    } else {
-                        debug!(
-                            "add filtered blocks into matched_blocks, count={}",
-                            filtered_blocks.len()
-                        );
-                    }
-
-                    // recover matched blocks from storage (only non-missing ones)
-                    self.peers
-                        .add_matched_blocks(&mut matched_blocks, filtered_blocks);
+                    // A peer miss is not evidence that verified filter coverage
+                    // is complete. Restore every persisted match, including misses.
+                    self.peers.add_matched_blocks(
+                        &mut matched_blocks,
+                        crate::storage::canonical::coverage::restorable_blocks(
+                            &self.storage,
+                            &db_matched_blocks,
+                        )
+                        .expect("restore verified filter positions"),
+                    );
                     let tip_header = self.storage.get_tip_header();
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.peers),

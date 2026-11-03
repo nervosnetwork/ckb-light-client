@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use ckb_constant::sync::INIT_BLOCKS_IN_TRANSIT_PER_PEER;
@@ -73,6 +72,15 @@ impl CKBProtocolHandler for SyncProtocol {
                 let new_block = reader.to_entity().block();
                 let block_hash = new_block.header().calc_header_hash();
                 let block_hash_key = block_hash.unpack();
+                let ordinal_pending =
+                    match crate::storage::canonical::needs_ordinal_body(&self.storage, &block_hash)
+                    {
+                        Ok(pending) => pending,
+                        Err(error) => {
+                            warn!("ordinal recovery read failed: {error}");
+                            return;
+                        }
+                    };
                 let mut body_validated = false;
                 // The proof state can change after releasing the read lock. Recheck it
                 // under the write lock and validate before caching if it became proved.
@@ -84,7 +92,7 @@ impl CKBProtocolHandler for SyncProtocol {
                         .await
                         .get(&block_hash_key)
                         .is_some_and(|(proved, _)| *proved);
-                    if should_validate && !body_validated {
+                    if (should_validate || ordinal_pending) && !body_validated {
                         let block = new_block.clone().into_view_without_reset_header();
                         if !block_body_matches_header(&block) {
                             warn!(
@@ -112,59 +120,32 @@ impl CKBProtocolHandler for SyncProtocol {
                     }
                     break matched_blocks;
                 };
-                self.peers.add_block(&mut matched_blocks, new_block);
-                if !matched_blocks.is_empty()
-                    && self.peers.all_matched_blocks_downloaded(&matched_blocks)
-                {
-                    let matched_blocks_data = self
-                        .storage
-                        .get_earliest_matched_blocks()
-                        .expect("get matched blocks from storage");
-                    let start_number = matched_blocks_data.start_number;
-                    let blocks_count = matched_blocks_data.blocks_count;
-                    let db_blocks: HashSet<_> = matched_blocks_data
-                        .blocks
-                        .into_iter()
-                        .map(|b| b.hash)
-                        .collect();
-
-                    self.storage.remove_matched_blocks(start_number);
-                    let blocks = self.peers.clear_matched_blocks(&mut matched_blocks);
-                    assert_eq!(blocks.len(), db_blocks.len());
-                    info!(
-                        "all matched blocks downloaded, start_number={}, blocks_count={}, matched_count={}",
-                        start_number,
-                        blocks_count,
-                        db_blocks.len()
-                    );
-                    // update storage
-                    for block in blocks {
-                        assert!(db_blocks.contains(&block.header().calc_header_hash()));
-                        self.storage.filter_block(block);
+                // Serialize provenance writes with accepted-chain rollback too.
+                if ordinal_pending {
+                    if let Err(error) =
+                        crate::storage::canonical::recover_ordinals(&self.storage, &new_block)
+                    {
+                        warn!("ordinal body rejected: {error}");
+                        return;
                     }
-                    self.storage
-                        .update_block_number(start_number + blocks_count - 1);
-
-                    // send more GetBlocksProof/GetBlocks requests
-                    if let Some(db_matched_blocks) = self.storage.get_earliest_matched_blocks() {
-                        self.peers.add_matched_blocks(
-                            &mut matched_blocks,
-                            db_matched_blocks
-                                .blocks
-                                .into_iter()
-                                .map(|b| (b.hash, b.proved))
-                                .collect(),
-                        );
-                        let tip_header = self.storage.get_tip_header();
-                        prove_or_download_matched_blocks(
-                            Arc::clone(&self.peers),
-                            &tip_header,
-                            &matched_blocks,
-                            nc.as_ref(),
-                            INIT_BLOCKS_IN_TRANSIT_PER_PEER,
-                        );
-                    }
+                    self.peers.finish_ordinal_download(&block_hash);
                 }
+                self.peers.add_block(&mut matched_blocks, new_block);
+                if let Err(error) = crate::utils::network::index_downloaded_blocks(
+                    &self.storage,
+                    &self.peers,
+                    &mut matched_blocks,
+                ) {
+                    warn!("watched indexing paused: {error}");
+                }
+                let tip_header = self.storage.get_tip_header();
+                prove_or_download_matched_blocks(
+                    Arc::clone(&self.peers),
+                    &tip_header,
+                    &matched_blocks,
+                    nc.as_ref(),
+                    INIT_BLOCKS_IN_TRANSIT_PER_PEER,
+                );
             }
             _ => {
                 let content = packed::InIBD::new_builder().build();

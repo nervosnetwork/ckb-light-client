@@ -8,7 +8,7 @@ use log::{debug, error};
 
 use crate::{
     protocols::light_client::components::{verify_extra_hash, verify_legacy_extra_hash},
-    storage::{HeaderWithExtension, LightClientStorage},
+    storage::HeaderWithExtension,
 };
 
 use super::{
@@ -154,6 +154,27 @@ impl<'a> SendTransactionsProofProcess<'a> {
         }
         *retire_request = Some(original_request.clone());
 
+        // The original request slot is retained until this response is drained.
+        // A valid old-fork response must neither complete a fetch nor mark it missing.
+        match crate::storage::canonical::anchor_current(
+            self.protocol.storage(),
+            &last_header.header().data(),
+        ) {
+            Ok(true) => {}
+            Ok(false) => {
+                self.protocol
+                    .peers()
+                    .mark_fetching_txs_timeout(self.peer_index);
+                return Status::ok();
+            }
+            Err(error) => {
+                self.protocol
+                    .peers()
+                    .mark_fetching_txs_timeout(self.peer_index);
+                return StatusCode::InternalError.with_context(error.to_string());
+            }
+        }
+
         // If all transactions are missing.
         if filtered_blocks.is_empty() {
             if !self.message.proof().is_empty() {
@@ -233,20 +254,36 @@ impl<'a> SendTransactionsProofProcess<'a> {
 
             for (filtered_block, extension) in filtered_blocks.into_iter().zip(extensions.iter()) {
                 let header = filtered_block.header().into_view();
+                // CBMT proof indices are heap positions, not transaction ordinals.
+                // Only the one-leaf case determines an ordinal without a block body.
+                let index = if filtered_block.proof().indices().len() == 1
+                    && Unpack::<u32>::unpack(
+                        &filtered_block.proof().indices().get(0).expect("one index"),
+                    ) == 0
+                {
+                    0
+                } else {
+                    u32::MAX
+                };
                 for tx in filtered_block.transactions() {
-                    if self
-                        .protocol
-                        .peers()
-                        .remove_fetching_transaction(&tx.calc_tx_hash(), &header.hash())
-                    {
-                        self.protocol.storage().add_fetched_tx(
-                            &tx,
-                            &HeaderWithExtension {
-                                header: header.data(),
-                                extension: extension.as_ref().cloned(),
-                            },
-                        );
+                    if let Err(error) = crate::storage::canonical::store_proved_transaction(
+                        self.protocol.storage(),
+                        &tx,
+                        index,
+                        &HeaderWithExtension {
+                            header: header.data(),
+                            extension: extension.clone(),
+                        },
+                        &last_header.header().data(),
+                    ) {
+                        self.protocol
+                            .peers()
+                            .mark_fetching_txs_timeout(self.peer_index);
+                        return StatusCode::InternalError.with_context(error.to_string());
                     }
+                    self.protocol
+                        .peers()
+                        .remove_fetching_transaction(&tx.calc_tx_hash(), &header.hash());
                 }
             }
         }

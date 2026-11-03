@@ -12,16 +12,99 @@ use crate::{
         Cell, CellType, CellsCapacity, FetchStatus, Order, Pagination, ScriptType, SearchKey,
         Status, TransactionWithStatus, Tx, TxStatus, TxWithCell, TxWithCells,
     },
-    storage::{
-        extract_raw_data, Key, KeyPrefix, LightClientStorage, StorageWithChainData, LAST_STATE_KEY,
-    },
+    storage::{extract_raw_data, Key, KeyPrefix, LightClientStorage, StorageWithChainData},
 };
 use ckb_chain_spec::consensus::Consensus;
 use ckb_jsonrpc_types::{JsonBytes, Transaction, Uint32, Uint64};
 use ckb_systemtime::unix_time_as_millis;
-use ckb_traits::HeaderProvider;
+
+use crate::storage::canonical;
 use ckb_types::{core, packed, prelude::*, H256};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+// Iterator callbacks cannot return Result; retain failures instead of silently
+// turning unvalidated rows into missing cells, history or a zero balance.
+fn query_transaction<S: LightClientStorage>(
+    storage: &S,
+    hash: &packed::Byte32,
+    number: u64,
+    index: u32,
+    cache: &Mutex<Option<QueryTransaction>>,
+    error: &Mutex<Option<Error>>,
+) -> Option<packed::Transaction> {
+    match read_indexed_transaction(storage, hash, number, index, cache) {
+        Ok(tx) => Some(tx),
+        Err(e) => {
+            *error.lock().expect("query error lock") = Some(e);
+            None
+        }
+    }
+}
+// One validated transaction per query, shared by its filtering/rendering passes.
+// Memory is bounded to one transaction; the accepted/index context is rechecked
+// before returning. No observation is reused across public calls.
+struct QueryTransaction {
+    hash: packed::Byte32,
+    number: u64,
+    index: u32,
+    transaction: packed::Transaction,
+}
+fn read_indexed_transaction<S: LightClientStorage>(
+    storage: &S,
+    hash: &packed::Byte32,
+    number: u64,
+    index: u32,
+    cache: &Mutex<Option<QueryTransaction>>,
+) -> Result<packed::Transaction> {
+    let mut cached = cache.lock().expect("query transaction lock");
+    if let Some(old) = cached.as_ref() {
+        if old.hash == *hash && old.number == number && old.index == index {
+            return Ok(old.transaction.clone());
+        }
+    }
+    let transaction = canonical::indexed_transaction(storage, hash, number, index)?;
+    *cached = Some(QueryTransaction {
+        hash: hash.clone(),
+        number,
+        index,
+        transaction: transaction.clone(),
+    });
+    Ok(transaction)
+}
+fn query_result(error: &Mutex<Option<Error>>) -> Result<()> {
+    if let Some(error) = error.lock().expect("query error lock").take() {
+        Err(error)
+    } else {
+        Ok(())
+    }
+}
+fn query_hash(bytes: &[u8], error: &Mutex<Option<Error>>) -> Option<packed::Byte32> {
+    match packed::Byte32::from_slice(bytes) {
+        Ok(hash) => Some(hash),
+        Err(_) => {
+            *error.lock().expect("query error lock") =
+                Some(Error::runtime("invalid watched transaction hash"));
+            None
+        }
+    }
+}
+fn query_output(
+    tx: &packed::Transaction,
+    index: usize,
+    error: &Mutex<Option<Error>>,
+) -> Option<(packed::CellOutput, packed::Bytes)> {
+    match (
+        tx.raw().outputs().get(index),
+        tx.raw().outputs_data().get(index),
+    ) {
+        (Some(output), Some(data)) => Some((output, data)),
+        _ => {
+            *error.lock().expect("query error lock") =
+                Some(Error::runtime("invalid watched output index"));
+            None
+        }
+    }
+}
 
 /// Unified Service struct that works with any storage backend
 pub struct LightClientService<S: LightClientStorage> {
@@ -45,6 +128,9 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Cell>> {
+        let context = canonical::query_context(self.storage.as_ref())?;
+        let query_error = Arc::new(Mutex::new(None));
+        let query_cache = Arc::new(Mutex::new(None));
         let (prefix, iter_start, iter_direction) = build_query_options(
             &search_key,
             KeyPrefix::CellLockScript,
@@ -76,19 +162,25 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         let take_while_fn = Box::new(move |key: &[u8]| key.starts_with(&prefix));
 
         let storage_clone = Arc::clone(&self.storage);
+        let error_clone = query_error.clone();
+        let cache_clone = query_cache.clone();
         let filter_map_fn = Box::new(move |key: &[u8], value: &[u8]| -> Option<Vec<u8>> {
-            let tx_hash = packed::Byte32::from_slice(value).ok()?;
+            let tx_hash = query_hash(value, &error_clone)?;
             let output_index = u32::from_be_bytes(key[key.len() - 4..].try_into().ok()?);
-            let _tx_index = u32::from_be_bytes(key[key.len() - 8..key.len() - 4].try_into().ok()?);
+            let tx_index = u32::from_be_bytes(key[key.len() - 8..key.len() - 4].try_into().ok()?);
             let block_number =
                 u64::from_be_bytes(key[key.len() - 16..key.len() - 8].try_into().ok()?);
 
-            // Get transaction from storage
-            let tx_data = storage_clone.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-            let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
+            let tx = query_transaction(
+                storage_clone.as_ref(),
+                &tx_hash,
+                block_number,
+                tx_index,
+                &cache_clone,
+                &error_clone,
+            )?;
 
-            let output = tx.raw().outputs().get(output_index as usize)?;
-            let output_data = tx.raw().outputs_data().get(output_index as usize)?;
+            let (output, output_data) = query_output(&tx, output_index as usize, &error_clone)?;
 
             // Apply filters
             if let Some(prefix) = filter_prefix.as_ref() {
@@ -157,13 +249,13 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             Some(value.to_vec())
         });
 
-        let results = self.storage.collect_iterator(
+        let results = self.storage.try_collect_iterator(
             iter_start,
             iter_direction,
             take_while_fn,
             filter_map_fn,
             limit,
-        );
+        )?;
 
         // Convert results to Cell objects
         let mut last_key = Vec::new();
@@ -173,17 +265,22 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 let key = kv_pair.key;
                 let value = kv_pair.value;
 
-                let tx_hash = packed::Byte32::from_slice(&value).ok()?;
+                let tx_hash = query_hash(&value, &query_error)?;
                 let output_index = u32::from_be_bytes(key[key.len() - 4..].try_into().ok()?);
                 let tx_index =
                     u32::from_be_bytes(key[key.len() - 8..key.len() - 4].try_into().ok()?);
                 let block_number =
                     u64::from_be_bytes(key[key.len() - 16..key.len() - 8].try_into().ok()?);
 
-                let tx_data = self.storage.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-                let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
-                let output = tx.raw().outputs().get(output_index as usize)?;
-                let output_data = tx.raw().outputs_data().get(output_index as usize)?;
+                let tx = query_transaction(
+                    self.storage.as_ref(),
+                    &tx_hash,
+                    block_number,
+                    tx_index,
+                    &query_cache,
+                    &query_error,
+                )?;
+                let (output, output_data) = query_output(&tx, output_index as usize, &query_error)?;
 
                 last_key = key;
 
@@ -201,6 +298,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             })
             .collect();
 
+        query_result(&query_error)?;
+        canonical::check_query_context(self.storage.as_ref(), &context)?;
         Ok(Pagination {
             objects: cells,
             last_cursor: JsonBytes::from_vec(last_key),
@@ -219,6 +318,9 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         limit: Uint32,
         after_cursor: Option<JsonBytes>,
     ) -> Result<Pagination<Tx>> {
+        let context = canonical::query_context(self.storage.as_ref())?;
+        let query_error = Arc::new(Mutex::new(None));
+        let query_cache = Arc::new(Mutex::new(None));
         let (prefix, iter_start, iter_direction) = build_query_options(
             &search_key,
             KeyPrefix::TxLockScript,
@@ -262,12 +364,22 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         let storage_clone = Arc::clone(&self.storage);
         let filter_script_clone = filter_script.clone();
 
+        let error_clone = query_error.clone();
+        let cache_clone = query_cache.clone();
         let filter_map_fn = Box::new(move |key: &[u8], value: &[u8]| -> Option<Vec<u8>> {
-            let _tx_hash = packed::Byte32::from_slice(value).ok()?;
+            let tx_hash = query_hash(value, &error_clone)?;
             let block_number =
                 u64::from_be_bytes(key[key.len() - 17..key.len() - 9].try_into().ok()?);
             let tx_index = u32::from_be_bytes(key[key.len() - 9..key.len() - 5].try_into().ok()?);
             let io_index = u32::from_be_bytes(key[key.len() - 5..key.len() - 1].try_into().ok()?);
+            query_transaction(
+                storage_clone.as_ref(),
+                &tx_hash,
+                block_number,
+                tx_index,
+                &cache_clone,
+                &error_clone,
+            )?;
             let io_type = if *key.last()? == 0 {
                 crate::storage::CellType::Input
             } else {
@@ -318,14 +430,16 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             Some(value.to_vec())
         });
 
-        let results = self.storage.collect_iterator(
+        let results = self.storage.try_collect_iterator(
             iter_start,
             iter_direction,
             take_while_fn,
             filter_map_fn,
             usize::MAX, // Don't limit at iterator level for grouping
-        );
+        )?;
 
+        query_result(&query_error)?;
+        canonical::check_query_context(self.storage.as_ref(), &context)?;
         if search_key.group_by_transaction.unwrap_or_default() {
             let mut tx_with_cells: Vec<TxWithCells> = Vec::new();
             let mut last_key = Vec::new();
@@ -344,22 +458,19 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
 
                 last_key = key.clone();
 
-                let tx_data = self
-                    .storage
-                    .get(Key::TxHash(&tx_hash).into_vec())
-                    .ok()
-                    .unwrap()
-                    .unwrap();
-                let tx = packed::Transaction::from_slice(&tx_data[12..])
-                    .ok()
-                    .unwrap();
-
                 let block_number =
                     u64::from_be_bytes(key[key.len() - 17..key.len() - 9].try_into().unwrap());
                 let tx_index =
                     u32::from_be_bytes(key[key.len() - 9..key.len() - 5].try_into().unwrap());
                 let io_index =
                     u32::from_be_bytes(key[key.len() - 5..key.len() - 1].try_into().unwrap());
+                let tx = read_indexed_transaction(
+                    self.storage.as_ref(),
+                    &tx_hash,
+                    block_number,
+                    tx_index,
+                    &query_cache,
+                )?;
                 let io_type = if *key.last().unwrap() == 0 {
                     CellType::Input
                 } else {
@@ -388,6 +499,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 }
             }
 
+            canonical::check_query_context(self.storage.as_ref(), &context)?;
             Ok(Pagination {
                 objects: tx_with_cells.into_iter().map(Tx::Grouped).collect(),
                 last_cursor: JsonBytes::from_vec(last_key),
@@ -400,9 +512,7 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                     let key = kv_pair.key;
                     let value = kv_pair.value;
 
-                    let tx_hash = packed::Byte32::from_slice(&value).ok()?;
-                    let tx_data = self.storage.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-                    let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
+                    let tx_hash = query_hash(&value, &query_error)?;
 
                     let block_number =
                         u64::from_be_bytes(key[key.len() - 17..key.len() - 9].try_into().ok()?);
@@ -410,6 +520,14 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                         u32::from_be_bytes(key[key.len() - 9..key.len() - 5].try_into().ok()?);
                     let io_index =
                         u32::from_be_bytes(key[key.len() - 5..key.len() - 1].try_into().ok()?);
+                    let tx = query_transaction(
+                        self.storage.as_ref(),
+                        &tx_hash,
+                        block_number,
+                        tx_index,
+                        &query_cache,
+                        &query_error,
+                    )?;
                     let io_type = if *key.last()? == 0 {
                         CellType::Input
                     } else {
@@ -428,6 +546,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
                 .take(limit)
                 .collect::<Vec<_>>();
 
+            query_result(&query_error)?;
+            canonical::check_query_context(self.storage.as_ref(), &context)?;
             Ok(Pagination {
                 objects: txs,
                 last_cursor: JsonBytes::from_vec(last_key),
@@ -440,6 +560,9 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
     /// This method calculates the sum of capacities for all cells matching
     /// the search criteria and returns the total along with current tip block info.
     pub fn get_cells_capacity(&self, search_key: SearchKey) -> Result<CellsCapacity> {
+        let context = canonical::query_context(self.storage.as_ref())?;
+        let query_error = Arc::new(Mutex::new(None));
+        let query_cache = Arc::new(Mutex::new(None));
         let (prefix, iter_start, iter_direction) = build_query_options(
             &search_key,
             KeyPrefix::CellLockScript,
@@ -464,16 +587,24 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
         let take_while_fn = Box::new(move |key: &[u8]| key.starts_with(&prefix));
 
         let storage_clone = Arc::clone(&self.storage);
+        let error_clone = query_error.clone();
+        let cache_clone = query_cache.clone();
         let filter_map_fn = Box::new(move |key: &[u8], value: &[u8]| -> Option<Vec<u8>> {
-            let tx_hash = packed::Byte32::from_slice(value).ok()?;
+            let tx_hash = query_hash(value, &error_clone)?;
             let output_index = u32::from_be_bytes(key[key.len() - 4..].try_into().ok()?);
             let block_number =
                 u64::from_be_bytes(key[key.len() - 16..key.len() - 8].try_into().ok()?);
 
-            let tx_data = storage_clone.get(Key::TxHash(&tx_hash).into_vec()).ok()??;
-            let tx = packed::Transaction::from_slice(&tx_data[12..]).ok()?;
-            let output = tx.raw().outputs().get(output_index as usize)?;
-            let output_data = tx.raw().outputs_data().get(output_index as usize)?;
+            let tx_index = u32::from_be_bytes(key[key.len() - 8..key.len() - 4].try_into().ok()?);
+            let tx = query_transaction(
+                storage_clone.as_ref(),
+                &tx_hash,
+                block_number,
+                tx_index,
+                &cache_clone,
+                &error_clone,
+            )?;
+            let (output, output_data) = query_output(&tx, output_index as usize, &error_clone)?;
 
             // Apply filters
             if let Some(prefix) = filter_prefix.as_ref() {
@@ -547,14 +678,16 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             )
         });
 
-        let results = self.storage.collect_iterator(
+        let results = self.storage.try_collect_iterator(
             iter_start,
             iter_direction,
             take_while_fn,
             filter_map_fn,
             usize::MAX,
-        );
+        )?;
 
+        query_result(&query_error)?;
+        canonical::check_query_context(self.storage.as_ref(), &context)?;
         let capacity: u64 = results
             .into_iter()
             .filter_map(|kv_pair| {
@@ -563,12 +696,8 @@ impl<S: LightClientStorage + 'static> LightClientService<S> {
             })
             .sum();
 
-        let key = Key::Meta(LAST_STATE_KEY).into_vec();
-        let tip_header = self
-            .storage
-            .get(key)?
-            .map(|data| packed::HeaderReader::from_slice_should_be_ok(&data[32..]).to_entity())
-            .ok_or_else(|| Error::config("tip header should be inited".to_string()))?;
+        let tip_header = packed::Header::from_slice(&context[32..32 + packed::Header::TOTAL_SIZE])
+            .map_err(|_| Error::runtime("invalid accepted state"))?;
 
         Ok(CellsCapacity {
             capacity: capacity.into(),
@@ -609,12 +738,14 @@ impl LightClientChainService {
 
     /// Get header by block hash
     pub fn get_header(&self, block_hash: &H256) -> Option<ckb_jsonrpc_types::HeaderView> {
-        self.swc.get_header(&block_hash.pack()).map(Into::into)
+        self.swc
+            .get_cached_header(&block_hash.pack())
+            .map(Into::into)
     }
 
     /// Fetch header by block hash (with fetch status tracking)
     pub fn fetch_header(&self, block_hash: &H256) -> FetchStatus<ckb_jsonrpc_types::HeaderView> {
-        if let Some(value) = self.swc.get_header(&block_hash.pack()) {
+        if let Some(value) = self.swc.get_cached_header(&block_hash.pack()) {
             return FetchStatus::Fetched { data: value.into() };
         }
 
@@ -709,9 +840,13 @@ impl LightClientChainService {
             };
         }
 
-        // Not found
+        // Historical/legacy bytes remain available without a membership assertion.
         TransactionWithStatus {
-            transaction: None,
+            transaction: self
+                .swc
+                .storage()
+                .get_transaction(&tx_hash.pack())
+                .map(|(_, _, tx)| tx.into_view().into()),
             cycles: None,
             tx_status: TxStatus {
                 block_hash: None,
@@ -723,7 +858,7 @@ impl LightClientChainService {
     /// Fetch transaction by tx hash (with fetch status tracking)
     pub fn fetch_transaction(&self, tx_hash: &H256) -> FetchStatus<TransactionWithStatus> {
         let tws = self.get_transaction(tx_hash);
-        if tws.transaction.is_some() {
+        if matches!(tws.tx_status.status, Status::Committed | Status::Pending) {
             return FetchStatus::Fetched { data: tws };
         }
 

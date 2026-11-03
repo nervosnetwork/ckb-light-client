@@ -29,6 +29,7 @@ use crate::{
 pub type BadMessageRateLimiter<T> = RateLimiter<T, DefaultKeyedStateStore<T>, DefaultClock>;
 
 pub struct Peers {
+    pending_continuity: DashMap<PeerIndex, (Byte32, ProveState)>,
     inner: DashMap<PeerIndex, Peer>,
     // The headers are fetching, the value is:
     fetching_headers: DashMap<Byte32, FetchInfo>,
@@ -72,6 +73,7 @@ pub struct Peer {
     // requests off it until the accepted tip changes; do not retry in a loop.
     unavailable_proof_anchor: Option<Byte32>,
     txs_proof_request: Option<TransactionsProofRequest>,
+    matched_misses: HashMap<H256, (Byte32, u64)>,
     check_points: CheckPoints,
     latest_block_filter_hashes: LatestBlockFilterHashes,
 }
@@ -159,6 +161,8 @@ pub struct ProveRequest {
 
 #[derive(Clone)]
 pub struct ProveState {
+    pub(crate) proved_headers: Vec<HeaderView>,
+    pub(crate) needs_genesis_bridge: bool,
     last_state: LastState,
     reorg_last_headers: Vec<HeaderView>,
     last_headers: Vec<HeaderView>,
@@ -323,10 +327,6 @@ impl ProveRequest {
         self.skip_check_tau = true;
     }
 
-    pub(crate) fn if_long_fork_detected(&self) -> bool {
-        self.long_fork_detected
-    }
-
     pub(crate) fn long_fork_detected(&mut self) {
         self.long_fork_detected = true;
     }
@@ -371,11 +371,17 @@ impl ProveState {
         reorg_last_headers: Vec<HeaderView>,
         last_headers: Vec<HeaderView>,
     ) -> Self {
-        let ProveRequest { last_state, .. } = request;
+        let ProveRequest {
+            last_state,
+            long_fork_detected,
+            ..
+        } = request;
         Self {
             last_state,
             reorg_last_headers,
             last_headers,
+            proved_headers: Vec::new(),
+            needs_genesis_bridge: long_fork_detected,
         }
     }
 
@@ -452,6 +458,9 @@ impl BlocksProofRequest {
 }
 
 impl BlocksRequest {
+    pub(crate) fn contains(&self, hash: &Byte32) -> bool {
+        self.hashes.contains_key(&hash.unpack())
+    }
     fn new(hashes: Vec<Byte32>, when_sent: u64) -> Self {
         let hashes = hashes
             .into_iter()
@@ -1101,6 +1110,7 @@ impl Peer {
             blocks_request: None,
             unavailable_proof_anchor: None,
             txs_proof_request: None,
+            matched_misses: HashMap::new(),
             check_points,
             latest_block_filter_hashes,
         }
@@ -1154,6 +1164,7 @@ impl Peers {
 
         Self {
             inner: Default::default(),
+            pending_continuity: DashMap::new(),
             fetching_headers: DashMap::new(),
             fetching_txs: DashMap::new(),
             matched_blocks: Default::default(),
@@ -1338,6 +1349,24 @@ impl Peers {
         *self.max_outbound_peers.write().expect("poisoned") = max_outbound_peers;
     }
 
+    pub(crate) fn queue_continuity(&self, peer: PeerIndex, previous: Byte32, state: ProveState) {
+        self.pending_continuity.insert(peer, (previous, state));
+    }
+    pub(crate) fn pending_continuity(&self, peer: PeerIndex) -> Option<(Byte32, ProveState)> {
+        self.pending_continuity
+            .get(&peer)
+            .map(|entry| entry.value().clone())
+    }
+    pub(crate) fn clear_continuity(&self, peer: PeerIndex) {
+        self.pending_continuity.remove(&peer);
+    }
+    pub(crate) fn continuity_peers(&self) -> Vec<PeerIndex> {
+        self.pending_continuity
+            .iter()
+            .map(|entry| *entry.key())
+            .collect()
+    }
+
     pub fn add_peer(&self, index: PeerIndex) {
         let peer = Peer::new(self.check_point_interval, self.start_check_point.clone());
         self.inner.insert(index, peer);
@@ -1347,6 +1376,7 @@ impl Peers {
         self.mark_fetching_headers_timeout(index);
         self.mark_fetching_txs_timeout(index);
         self.inner.remove(&index);
+        self.pending_continuity.remove(&index);
         mutex_lock!(self.rate_limiter).retain_recent();
     }
 
@@ -1454,6 +1484,12 @@ impl Peers {
         })
     }
 
+    pub(crate) fn finish_ordinal_download(&self, hash: &Byte32) {
+        for mut peer in self.inner.iter_mut() {
+            peer.value_mut().add_block(hash);
+        }
+    }
+
     pub(crate) fn remove_fetching_header(&self, block_hash: &Byte32) -> bool {
         self.fetching_headers.remove(block_hash).is_some()
     }
@@ -1516,6 +1552,32 @@ impl Peers {
         }
     }
 
+    // A filter's hash is not committed by its GCS bytes. If no currently
+    // eligible peer can prove a required hash, recheck the filter positions;
+    // this is a retry hint, never evidence of completed coverage or a fork.
+    pub(crate) fn matched_hash_unavailable(
+        &self,
+        best_tip: &packed::Header,
+        matched: &HashMap<H256, (bool, Option<packed::Block>)>,
+    ) -> bool {
+        let peers = self.get_best_proved_peers(best_tip);
+        !peers.is_empty()
+            && matched.iter().any(|(hash, (proved, _))| {
+                !proved
+                    && peers.iter().all(|index| {
+                        let Some(peer) = self.get_peer(index) else {
+                            return false;
+                        };
+                        let Some(state) = peer.state.get_prove_state() else {
+                            return false;
+                        };
+                        let anchor = state.get_last_header().header().hash();
+                        self.matched_blocks_for_peer(*index, &anchor, vec![hash.pack()])
+                            .is_empty()
+                    })
+            })
+    }
+
     // get matched blocks which not yet downloaded and not in any BlocksRequest
     pub(crate) fn get_matched_blocks_to_prove(
         &self,
@@ -1542,21 +1604,56 @@ impl Peers {
                 if value.0 {
                     return None;
                 }
-                // Skip if marked as missing by peers (e.g., uncle blocks)
-                if let Some(fetch_info) = self.fetching_headers.get(&key.pack()) {
-                    if fetch_info.missing {
-                        log::warn!(
-                            "Skipping matched block {:#x} - marked as missing by peers (likely an uncle block)",
-                            key.pack()
-                        );
-                        return None;
-                    }
-                }
                 Some(key.pack())
             })
             .take(limit)
             .collect()
     }
+    // Peer availability is advisory, bounded to the pending set and current anchor.
+    pub(crate) fn note_matched_misses(
+        &self,
+        index: PeerIndex,
+        request: &BlocksProofRequest,
+        hashes: &[Byte32],
+    ) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            if !peer
+                .blocks_proof_request
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.owner, &request.owner))
+            {
+                return;
+            }
+            let now = unix_time_as_millis();
+            peer.matched_misses.retain(|_, (anchor, time)| {
+                *anchor == request.last_hash() && now.saturating_sub(*time) < MESSAGE_TIMEOUT
+            });
+            for hash in hashes {
+                peer.matched_misses
+                    .insert(hash.unpack(), (request.last_hash(), now));
+            }
+        }
+    }
+
+    pub(crate) fn matched_blocks_for_peer(
+        &self,
+        index: PeerIndex,
+        anchor: &Byte32,
+        hashes: Vec<Byte32>,
+    ) -> Vec<Byte32> {
+        let Some(mut peer) = self.inner.get_mut(&index) else {
+            return Vec::new();
+        };
+        let now = unix_time_as_millis();
+        peer.matched_misses.retain(|_, (previous, time)| {
+            previous == anchor && now.saturating_sub(*time) < MESSAGE_TIMEOUT
+        });
+        hashes
+            .into_iter()
+            .filter(|hash| !peer.matched_misses.contains_key(&hash.unpack()))
+            .collect()
+    }
+
     // get matched blocks which not yet downloaded and not in any BlocksRequest
     pub(crate) fn get_matched_blocks_to_download(
         &self,
@@ -2323,3 +2420,7 @@ mod proof_hash_validation_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "peers/recovery_tests.rs"]
 mod recovery_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "peers/missing_tests.rs"]
+mod missing_tests;

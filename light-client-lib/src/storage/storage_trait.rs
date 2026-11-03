@@ -31,6 +31,22 @@ fn encode_last_n_headers(headers: &[HeaderView]) -> Vec<u8> {
     value
 }
 
+// Keep #301's accepted-state/window writes together in the caller's batch.
+pub(super) fn write_last_state<B: BatchWriter>(
+    batch: &mut B,
+    total_difficulty: &U256,
+    tip_header: &Header,
+    last_n_headers: &[HeaderView],
+) {
+    let mut value = total_difficulty.to_le_bytes().to_vec();
+    value.extend(tip_header.as_slice());
+    batch.put(&Key::Meta(LAST_STATE_KEY).into_vec(), &value);
+    batch.put(
+        &Key::Meta(LAST_N_HEADERS_KEY).into_vec(),
+        &encode_last_n_headers(last_n_headers),
+    );
+}
+
 /// High-level storage trait that provides business logic
 ///
 /// This trait extends `StorageBackend` with higher-level operations.
@@ -42,13 +58,15 @@ pub trait LightClientStorage: StorageBackend {
     /// Check if filter scripts are empty
     fn is_filter_scripts_empty(&self) -> bool {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
-        let results = self.collect_iterator(
-            IteratorStart::From(key_prefix.clone()),
-            IteratorDirection::Forward,
-            Box::new(move |key| key.starts_with(&key_prefix)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            1,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(key_prefix.clone()),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&key_prefix)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                1,
+            )
+            .expect("watched storage scan");
         results.is_empty()
     }
 
@@ -56,13 +74,15 @@ pub trait LightClientStorage: StorageBackend {
     fn get_filter_scripts(&self) -> Vec<ScriptStatus> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(key_prefix.clone()),
-            IteratorDirection::Forward,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            usize::MAX,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(key_prefix.clone()),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                usize::MAX,
+            )
+            .expect("watched storage scan");
 
         results
             .into_iter()
@@ -90,104 +110,23 @@ pub trait LightClientStorage: StorageBackend {
 
     /// Update filter scripts
     fn update_filter_scripts(&self, scripts: Vec<ScriptStatus>, command: SetScriptsCommand) {
-        let mut should_filter_genesis_block = false;
-        let mut batch = self.batch();
-        let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
-
-        match command {
-            SetScriptsCommand::All => {
-                should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
-
-                // Delete all existing filter scripts
-                let key_prefix_clone = key_prefix.clone();
-                let existing_keys = self.collect_iterator(
-                    IteratorStart::From(key_prefix.clone()),
-                    IteratorDirection::Forward,
-                    Box::new(move |key| key.starts_with(&key_prefix_clone)),
-                    Box::new(|_key, value| Some(value.to_vec())),
-                    usize::MAX,
-                );
-
-                for kv in existing_keys {
-                    batch.delete(&kv.key);
-                }
-
-                // Insert new scripts
-                for ss in scripts {
-                    let key = [
-                        key_prefix.as_ref(),
-                        ss.script.as_slice(),
-                        match ss.script_type {
-                            ScriptType::Lock => &[0],
-                            ScriptType::Type => &[1],
-                        },
-                    ]
-                    .concat();
-                    batch.put(&key, &ss.block_number.to_be_bytes());
-                }
-            }
-            SetScriptsCommand::Partial => {
-                if scripts.is_empty() {
-                    return;
-                }
-                let min_script_block_number = scripts.iter().map(|ss| ss.block_number).min();
-                should_filter_genesis_block = min_script_block_number == Some(0);
-
-                for ss in scripts {
-                    let key = [
-                        key_prefix.as_ref(),
-                        ss.script.as_slice(),
-                        match ss.script_type {
-                            ScriptType::Lock => &[0],
-                            ScriptType::Type => &[1],
-                        },
-                    ]
-                    .concat();
-                    batch.put(&key, &ss.block_number.to_be_bytes());
-                }
-            }
-            SetScriptsCommand::Delete => {
-                if scripts.is_empty() {
-                    return;
-                }
-
-                for ss in scripts {
-                    let key = [
-                        key_prefix.as_ref(),
-                        ss.script.as_slice(),
-                        match ss.script_type {
-                            ScriptType::Lock => &[0],
-                            ScriptType::Type => &[1],
-                        },
-                    ]
-                    .concat();
-                    batch.delete(&key);
-                }
-            }
-        }
-
-        batch.commit().expect("batch commit should be ok");
-
-        self.update_min_filtered_block_number_by_scripts();
-        self.clear_matched_blocks();
-
-        if should_filter_genesis_block {
-            let block = self.get_genesis_block();
-            self.filter_block(block);
-        }
+        super::canonical::register(self, scripts, command)
+            .expect("recover and register watched scripts");
     }
 
     /// Get scripts hash by block number
     fn get_scripts_hash(&self, block_number: BlockNumber) -> Vec<Byte32> {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(key_prefix.clone()),
-            IteratorDirection::Forward,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            usize::MAX,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(key_prefix.clone()),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                usize::MAX,
+            )
+            .expect("watched storage scan");
 
         results
             .into_iter()
@@ -208,15 +147,20 @@ pub trait LightClientStorage: StorageBackend {
 
     /// Update block number for filter scripts
     fn update_block_number(&self, block_number: BlockNumber) {
+        if self.get_earliest_matched_blocks().is_some() {
+            return;
+        }
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(key_prefix),
-            IteratorDirection::Forward,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            usize::MAX,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(key_prefix),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                usize::MAX,
+            )
+            .expect("watched storage scan");
 
         let mut batch = self.batch();
         for kv in results {
@@ -228,6 +172,7 @@ pub trait LightClientStorage: StorageBackend {
             }
         }
         batch.commit().expect("batch commit should be ok");
+        super::canonical::complete_repair(self).expect("complete watched coverage repair");
     }
 
     // ========== Matched blocks management ==========
@@ -268,52 +213,21 @@ pub trait LightClientStorage: StorageBackend {
         StorageBackend::delete(self, &key).expect("delete matched blocks");
     }
 
-    /// Cleanup invalid matched blocks
-    fn cleanup_invalid_matched_blocks(&self) {
-        use ckb_types::prelude::Unpack;
-        use log::warn;
+    /// Cache absence, age and a peer miss cannot invalidate watched coverage.
+    /// Verified accepted-chain changes perform rollback in the protocol handler.
+    fn cleanup_invalid_matched_blocks(&self) {}
 
-        let tip_number: u64 = self.get_tip_header().raw().number().unpack();
+    /// Publish cursor progress and remove its retained range in one atomic batch.
+    fn finish_matched_blocks(&self, start: u64, end: u64) {
+        super::canonical::finish_index(self, start, end).expect("complete verified coverage");
+    }
 
-        loop {
-            let entry = self.get_earliest_matched_blocks();
-            if entry.is_none() {
-                break;
-            }
-
-            let matched_blocks = entry.unwrap();
-            let start_number = matched_blocks.start_number;
-            let blocks_count = matched_blocks.blocks_count;
-            let mut should_remove = false;
-
-            for block in &matched_blocks.blocks {
-                if let Some(header) = self.get_header(&block.hash) {
-                    let stored_number: u64 = header.number();
-                    if stored_number < start_number || stored_number >= start_number + blocks_count
-                    {
-                        warn!(
-                            "Invalid matched block {:#x} at number {} outside expected range [{}, {}), removing entry at start_number={}",
-                            block.hash, stored_number, start_number, start_number + blocks_count, start_number
-                        );
-                        should_remove = true;
-                        break;
-                    }
-                } else if start_number + 1000 < tip_number {
-                    warn!(
-                        "Matched block {:#x} not found in storage, entry at start_number={} is {} blocks behind tip, removing",
-                        block.hash, start_number, tip_number - start_number
-                    );
-                    should_remove = true;
-                    break;
-                }
-            }
-
-            if should_remove {
-                self.remove_matched_blocks(start_number);
-            } else {
-                break;
-            }
-        }
+    /// Save exact match positions after validating the filter hash chain.
+    /// A true proof flag is never inferred from these caller-supplied hashes.
+    fn add_positioned_matched_blocks(&self, start: u64, count: u64, matches: Vec<(u64, Byte32)>) {
+        let revision = super::canonical::coverage::scripts_revision(self).expect("script revision");
+        super::canonical::coverage::save_filters(self, start, count, matches, revision)
+            .expect("persist filter positions");
     }
 
     // ========== Check points management ==========
@@ -322,13 +236,15 @@ pub trait LightClientStorage: StorageBackend {
     fn get_check_points(&self, start_index: CpIndex, limit: usize) -> Vec<Byte32> {
         let start_key = Key::CheckPointIndex(start_index).into_vec();
         let key_prefix = [KeyPrefix::CheckPointIndex as u8];
-        let results = self.collect_iterator(
-            IteratorStart::From(start_key),
-            IteratorDirection::Forward,
-            Box::new(move |key| key.starts_with(&key_prefix)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            limit,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(start_key),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&key_prefix)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                limit,
+            )
+            .expect("watched storage scan");
 
         results
             .into_iter()
@@ -390,18 +306,36 @@ pub trait LightClientStorage: StorageBackend {
                     stored_genesis_hash, genesis_hash
                 );
             }
+            // The configured genesis is the one association recoverable without
+            // a peer proof, including when reopening a height-only legacy store.
+            let mut batch = self.batch();
+            super::canonical::member(&mut batch, &block.header());
+            for (index, tx) in block.transactions().into_iter().enumerate() {
+                let value: Vec<u8> = Value::Transaction(0, index as TxIndex, &tx).into();
+                batch.put(&Key::TxHash(&tx.calc_tx_hash()).into_vec(), &value);
+                super::canonical::bind(&mut batch, &tx, &block.header(), true, index as u32);
+            }
+            batch
+                .commit()
+                .expect("restore configured genesis associations");
         } else {
             let mut batch = self.batch();
             let block_hash = block.calc_header_hash();
             batch.put(
                 &Key::Meta(LAST_STATE_KEY).into_vec(),
-                block.header().as_slice(),
+                &[
+                    U256::zero().to_le_bytes().as_slice(),
+                    block.header().as_slice(),
+                ]
+                .concat(),
             );
             batch.put(
                 &Key::BlockHash(&block_hash).into_vec(),
                 block.header().as_slice(),
             );
             batch.put(&Key::BlockNumber(0).into_vec(), block_hash.as_slice());
+            super::canonical::member(&mut batch, &block.header());
+            super::canonical::initialize_index_format(&mut batch);
             let mut genesis_hash_and_txs_hash = genesis_hash.as_slice().to_vec();
             block
                 .transactions()
@@ -413,6 +347,7 @@ pub trait LightClientStorage: StorageBackend {
                     let key = Key::TxHash(&tx_hash).into_vec();
                     let value: Vec<u8> = Value::Transaction(0, tx_index as TxIndex, &tx).into();
                     batch.put(&key, &value);
+                    super::canonical::bind(&mut batch, &tx, &block.header(), true, tx_index as u32);
                 });
             batch.put(&genesis_block_key, &genesis_hash_and_txs_hash);
             batch.commit().expect("batch commit should be ok");
@@ -433,6 +368,7 @@ pub trait LightClientStorage: StorageBackend {
             self.update_check_points(0, &[genesis_block_filter_hash]);
             self.update_min_filtered_block_number(0);
         }
+        super::canonical::recover(self).expect("resume database recovery");
     }
 
     /// Get genesis block
@@ -501,6 +437,7 @@ pub trait LightClientStorage: StorageBackend {
         let key = Key::TxHash(&tx_hash).into_vec();
         let value: Vec<u8> = Value::Transaction(block_number, tx_index as TxIndex, tx).into();
         batch.put(&key, &value);
+        super::canonical::bind(&mut batch, tx, &hwe.header, false, u32::MAX);
         batch.commit().expect("batch commit should be ok");
     }
 
@@ -513,14 +450,27 @@ pub trait LightClientStorage: StorageBackend {
     /// - Records transaction history for matched scripts
     /// - Stores the matched transactions
     fn filter_block(&self, block: Block) {
+        assert!(
+            super::canonical::anchor_current(self, &block.header()).unwrap_or(false),
+            "block membership must be proved before indexing"
+        );
+        // Genesis is configured locally and may be indexed while registration is fenced.
+        if Unpack::<u64>::unpack(&block.header().raw().number()) != 0 {
+            super::canonical::index_ready(self).expect("index context must be ready");
+        }
+        let block_number: BlockNumber = block.header().raw().number().unpack();
         let scripts: HashSet<(packed::Script, ScriptType)> = self
             .get_filter_scripts()
             .into_iter()
+            .filter(|ss| {
+                ss.block_number < block_number || (block_number == 0 && ss.block_number == 0)
+            })
             .map(|ss| (ss.script, ss.script_type))
             .collect();
         let block_number: BlockNumber = block.header().raw().number().unpack();
         let mut filter_matched = false;
         let mut batch = self.batch();
+        let block_header = block.header();
         let mut txs: HashMap<Byte32, (u32, Transaction)> = HashMap::new();
 
         for (tx_index, tx) in block.transactions().into_iter().enumerate() {
@@ -528,9 +478,12 @@ pub trait LightClientStorage: StorageBackend {
             for (input_index, input) in tx.raw().inputs().into_iter().enumerate() {
                 let previous_tx_hash = input.previous_output().tx_hash();
                 if let Some((generated_by_block_number, generated_by_tx_index, previous_tx)) =
-                    self.get_transaction(&previous_tx_hash).or(txs
-                        .get(&previous_tx_hash)
-                        .map(|(tx_idx, tx)| (block_number, *tx_idx, tx.clone())))
+                    super::canonical::transaction(self, &previous_tx_hash)
+                        .expect("input association read")
+                        .map(|tx| (tx.number, tx.index, tx.transaction))
+                        .or(txs
+                            .get(&previous_tx_hash)
+                            .map(|(tx_idx, tx)| (block_number, *tx_idx, tx.clone())))
                 {
                     let previous_output_index: u32 = input.previous_output().index().unpack();
                     if let Some(previous_output) = previous_tx
@@ -567,6 +520,13 @@ pub trait LightClientStorage: StorageBackend {
                             let value: Vec<u8> =
                                 Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
                             batch.put(&key, &value);
+                            super::canonical::bind(
+                                &mut batch,
+                                &tx,
+                                &block_header,
+                                true,
+                                tx_index as u32,
+                            );
                         }
                         // Check type script
                         if let Some(type_script) = previous_output.type_().to_opt() {
@@ -598,6 +558,13 @@ pub trait LightClientStorage: StorageBackend {
                                     Value::Transaction(block_number, tx_index as TxIndex, &tx)
                                         .into();
                                 batch.put(&key, &value);
+                                super::canonical::bind(
+                                    &mut batch,
+                                    &tx,
+                                    &block_header,
+                                    true,
+                                    tx_index as u32,
+                                );
                             }
                         }
                     }
@@ -634,6 +601,7 @@ pub trait LightClientStorage: StorageBackend {
                     let value: Vec<u8> =
                         Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
                     batch.put(&key, &value);
+                    super::canonical::bind(&mut batch, &tx, &block_header, true, tx_index as u32);
                 }
                 if let Some(type_script) = output.type_().to_opt() {
                     if scripts.contains(&(type_script.clone(), ScriptType::Type)) {
@@ -663,6 +631,13 @@ pub trait LightClientStorage: StorageBackend {
                         let value: Vec<u8> =
                             Value::Transaction(block_number, tx_index as TxIndex, &tx).into();
                         batch.put(&key, &value);
+                        super::canonical::bind(
+                            &mut batch,
+                            &tx,
+                            &block_header,
+                            true,
+                            tx_index as u32,
+                        );
                     }
                 }
             }
@@ -670,8 +645,11 @@ pub trait LightClientStorage: StorageBackend {
             txs.insert(tx.calc_tx_hash(), (tx_index as u32, tx));
         }
 
+        super::canonical::coverage::mark_indexed(self, &mut batch, &block)
+            .expect("index verified filter position");
         // If any transaction matched, store the block header
         if filter_matched {
+            super::canonical::member(&mut batch, &block.header());
             let block_hash = block.calc_header_hash();
             let hwe = HeaderWithExtension {
                 header: block.header(),
@@ -708,20 +686,22 @@ pub trait LightClientStorage: StorageBackend {
                 let key_prefix_len = key_prefix.len();
 
                 let key_prefix_clone = key_prefix.clone();
-                let results = self.collect_iterator(
-                    IteratorStart::From(start_key),
-                    IteratorDirection::Reverse,
-                    Box::new(move |key| {
-                        key.starts_with(&key_prefix_clone)
-                            && BlockNumber::from_be_bytes(
-                                key[key_prefix_len..key_prefix_len + 8]
-                                    .try_into()
-                                    .expect("stored BlockNumber"),
-                            ) >= to_number
-                    }),
-                    Box::new(|_key, value| Some(value.to_vec())),
-                    usize::MAX,
-                );
+                let results = self
+                    .try_collect_iterator(
+                        IteratorStart::From(start_key),
+                        IteratorDirection::Reverse,
+                        Box::new(move |key| {
+                            key.starts_with(&key_prefix_clone)
+                                && BlockNumber::from_be_bytes(
+                                    key[key_prefix_len..key_prefix_len + 8]
+                                        .try_into()
+                                        .expect("stored BlockNumber"),
+                                ) >= to_number
+                        }),
+                        Box::new(|_key, value| Some(value.to_vec())),
+                        usize::MAX,
+                    )
+                    .expect("rollback history scan");
 
                 for kv in results {
                     let key = &kv.key;
@@ -835,7 +815,7 @@ pub trait LightClientStorage: StorageBackend {
                         ScriptType::Lock => &[0],
                         ScriptType::Type => &[1],
                     });
-                    let value = to_number.to_be_bytes().to_vec();
+                    let value = to_number.saturating_sub(1).to_be_bytes().to_vec();
                     batch.put(&key, &value);
                 }
             }
@@ -849,28 +829,17 @@ pub trait LightClientStorage: StorageBackend {
             );
         }
 
+        super::canonical::invalidate(self, &mut batch, to_number)
+            .expect("membership invalidation scan");
         batch.commit().expect("batch commit should be ok");
     }
 
     /// Get transaction with header by transaction hash
     fn get_transaction_with_header(&self, tx_hash: &Byte32) -> Option<(Transaction, Header)> {
-        self.get_transaction(tx_hash)
-            .map(|(block_number, _tx_index, tx)| {
-                let block_hash = Byte32::from_slice(
-                    &StorageBackend::get(self, Key::BlockNumber(block_number).into_vec())
-                        .expect("db get should be ok")
-                        .expect("stored block number / hash mapping"),
-                )
-                .expect("stored block hash should be OK");
-
-                let header = Header::from_slice(
-                    &StorageBackend::get(self, Key::BlockHash(&block_hash).into_vec())
-                        .expect("db get should be ok")
-                        .expect("stored block hash / header mapping")[..Header::TOTAL_SIZE],
-                )
-                .expect("stored header should be OK");
-                (tx, header)
-            })
+        super::canonical::transaction(self, tx_hash)
+            .ok()
+            .flatten()
+            .map(|tx| (tx.transaction, tx.header))
     }
 
     // ========== Chain state management ==========
@@ -882,17 +851,7 @@ pub trait LightClientStorage: StorageBackend {
         tip_header: &Header,
         last_n_headers: &[HeaderView],
     ) {
-        let key = Key::Meta(LAST_STATE_KEY).into_vec();
-        let mut value = total_difficulty.to_le_bytes().to_vec();
-        value.extend(tip_header.as_slice());
-        let mut batch = self.batch();
-        batch.put(&key, &value);
-        batch.put(
-            &Key::Meta(LAST_N_HEADERS_KEY).into_vec(),
-            &encode_last_n_headers(last_n_headers),
-        );
-        batch
-            .commit()
+        super::canonical::update_state(self, total_difficulty, tip_header, last_n_headers, None)
             .expect("batch commit last state should be ok");
     }
 
@@ -953,40 +912,31 @@ pub trait LightClientStorage: StorageBackend {
 
     // ========== Additional methods ==========
 
-    /// Get block hash by number
+    /// Read the legacy historical height cache; this is not accepted-chain membership.
     fn get_block_hash(&self, block_number: BlockNumber) -> Option<Byte32> {
         StorageBackend::get(self, Key::BlockNumber(block_number).into_vec())
             .ok()
             .flatten()
-            .map(|v| Byte32::from_slice(&v).expect("stored block hash"))
+            .and_then(|v| Byte32::from_slice(&v).ok())
     }
 
-    /// Get transaction
+    /// Read historical bytes and position metadata without asserting chain membership.
+    /// A compact proof may leave the transaction ordinal unknown (u32::MAX).
     fn get_transaction(&self, tx_hash: &Byte32) -> Option<(BlockNumber, u32, Transaction)> {
-        StorageBackend::get(self, Key::TxHash(tx_hash).into_vec())
-            .map(|v| {
-                v.map(|v| {
-                    (
-                        BlockNumber::from_be_bytes(v[0..8].try_into().expect("stored BlockNumber")),
-                        TxIndex::from_be_bytes(v[8..12].try_into().expect("stored TxIndex")),
-                        Transaction::from_slice(&v[12..]).expect("stored Transaction"),
-                    )
-                })
-            })
-            .expect("db get should be ok")
+        let bytes = StorageBackend::get(self, Key::TxHash(tx_hash).into_vec()).ok()??;
+        let number = u64::from_be_bytes(bytes.get(..8)?.try_into().ok()?);
+        let index = u32::from_be_bytes(bytes.get(8..12)?.try_into().ok()?);
+        let tx = Transaction::from_slice(bytes.get(12..)?).ok()?;
+        (tx.calc_tx_hash() == *tx_hash).then_some((number, index, tx))
     }
 
     /// Get header by hash
     fn get_header(&self, hash: &Byte32) -> Option<HeaderView> {
-        StorageBackend::get(self, Key::BlockHash(hash).into_vec())
-            .map(|v| {
-                v.map(|v| {
-                    Header::from_slice(&v[..Header::TOTAL_SIZE])
-                        .expect("stored Header")
-                        .into_view()
-                })
-            })
-            .expect("db get should be ok")
+        let bytes = StorageBackend::get(self, Key::BlockHash(hash).into_vec()).ok()??;
+        let header = Header::from_slice(bytes.get(..Header::TOTAL_SIZE)?)
+            .ok()?
+            .into_view();
+        (header.hash() == *hash).then_some(header)
     }
 
     // ========== Private helper methods ==========
@@ -995,20 +945,26 @@ pub trait LightClientStorage: StorageBackend {
     fn update_last_n_headers(&self, headers: &[HeaderView]) {
         let key = Key::Meta(LAST_N_HEADERS_KEY).into_vec();
         let value = encode_last_n_headers(headers);
-        StorageBackend::put(self, key, value).expect("db put last n headers should be ok");
+        let mut batch = self.batch();
+        batch.put(&key, &value);
+        // A separately written window is not bound to the accepted tip.
+        batch.delete(&Key::Meta("CHAIN_CONTEXT_V1").into_vec());
+        batch.commit().expect("db put last n headers should be ok");
     }
 
     /// Update min filtered block number by scripts
     fn update_min_filtered_block_number_by_scripts(&self) {
         let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(key_prefix),
-            IteratorDirection::Forward,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            usize::MAX,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(key_prefix),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                usize::MAX,
+            )
+            .expect("watched storage scan");
 
         let min_block_number = results
             .into_iter()
@@ -1028,13 +984,15 @@ pub trait LightClientStorage: StorageBackend {
     fn clear_matched_blocks(&self) {
         let key_prefix = Key::Meta(MATCHED_FILTER_BLOCKS_KEY).into_vec();
         let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(key_prefix),
-            IteratorDirection::Forward,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            usize::MAX,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(key_prefix),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                usize::MAX,
+            )
+            .expect("watched storage scan");
 
         let mut batch = self.batch();
         for kv in results {
@@ -1056,13 +1014,15 @@ pub trait LightClientStorage: StorageBackend {
         };
 
         let key_prefix_clone = key_prefix.clone();
-        let results = self.collect_iterator(
-            IteratorStart::From(iter_from),
-            direction,
-            Box::new(move |key| key.starts_with(&key_prefix_clone)),
-            Box::new(|_key, value| Some(value.to_vec())),
-            1,
-        );
+        let results = self
+            .try_collect_iterator(
+                IteratorStart::From(iter_from),
+                direction,
+                Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                Box::new(|_key, value| Some(value.to_vec())),
+                1,
+            )
+            .expect("watched storage scan");
 
         results.into_iter().next().map(|kv| {
             let key = &kv.key;
@@ -1082,4 +1042,96 @@ pub trait LightClientStorage: StorageBackend {
             }
         })
     }
+}
+
+pub(super) fn apply_filter_scripts<S: LightClientStorage + ?Sized>(
+    storage: &S,
+    scripts: Vec<ScriptStatus>,
+    command: SetScriptsCommand,
+) {
+    let can_filter_genesis =
+        super::canonical::begin_registration(storage).expect("begin watched registration");
+    let mut should_filter_genesis_block = false;
+    let mut batch = storage.batch();
+    let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+
+    match command {
+        SetScriptsCommand::All => {
+            should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
+
+            // Delete all existing filter scripts
+            let key_prefix_clone = key_prefix.clone();
+            let existing_keys = storage
+                .try_collect_iterator(
+                    IteratorStart::From(key_prefix.clone()),
+                    IteratorDirection::Forward,
+                    Box::new(move |key| key.starts_with(&key_prefix_clone)),
+                    Box::new(|_key, value| Some(value.to_vec())),
+                    usize::MAX,
+                )
+                .expect("registration script scan");
+
+            for kv in existing_keys {
+                batch.delete(&kv.key);
+            }
+
+            // Insert new scripts
+            for ss in scripts {
+                let key = [
+                    key_prefix.as_ref(),
+                    ss.script.as_slice(),
+                    match ss.script_type {
+                        ScriptType::Lock => &[0],
+                        ScriptType::Type => &[1],
+                    },
+                ]
+                .concat();
+                batch.put(&key, &ss.block_number.to_be_bytes());
+            }
+        }
+        SetScriptsCommand::Partial => {
+            let min_script_block_number = scripts.iter().map(|ss| ss.block_number).min();
+            should_filter_genesis_block = min_script_block_number == Some(0);
+
+            for ss in scripts {
+                let key = [
+                    key_prefix.as_ref(),
+                    ss.script.as_slice(),
+                    match ss.script_type {
+                        ScriptType::Lock => &[0],
+                        ScriptType::Type => &[1],
+                    },
+                ]
+                .concat();
+                batch.put(&key, &ss.block_number.to_be_bytes());
+            }
+        }
+        SetScriptsCommand::Delete => {
+            for ss in scripts {
+                let key = [
+                    key_prefix.as_ref(),
+                    ss.script.as_slice(),
+                    match ss.script_type {
+                        ScriptType::Lock => &[0],
+                        ScriptType::Type => &[1],
+                    },
+                ]
+                .concat();
+                batch.delete(&key);
+            }
+        }
+    }
+
+    batch.commit().expect("batch commit should be ok");
+
+    storage.update_min_filtered_block_number_by_scripts();
+    storage.clear_matched_blocks();
+
+    // Interrupted rollback fences every membership read, including genesis.
+    // Keep the registration and uncertainty without attempting fenced indexing.
+    if should_filter_genesis_block && can_filter_genesis {
+        let block = storage.get_genesis_block();
+        storage.filter_block(block);
+    }
+    super::canonical::finish_registration(storage).expect("finish watched registration");
 }
