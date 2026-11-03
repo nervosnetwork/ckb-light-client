@@ -286,7 +286,11 @@ async fn replacement_slot(header: bool, empty: bool) {
         } else if header {
             assert!(f.service.get_header(&block_hash.unpack()).is_some());
         } else {
-            assert_eq!(status(&f)["status"], "committed");
+            assert_eq!(
+                status(&f)["status"],
+                "committed",
+                "same_anchor={same_anchor}, header={header}, negative={negative}"
+            );
         }
         // Deliver the old response again after the matching current operation completed.
         f.protocol
@@ -2611,6 +2615,224 @@ fn register_using(storage: &impl LightClientStorage) {
         }],
         SetScriptsCommand::All,
     );
+}
+
+fn clear_legacy_derived_index(storage: &Storage) {
+    for prefix in [
+        vec![32],
+        vec![64],
+        vec![96],
+        vec![128],
+        Key::Meta("TX_BLOCK_V1:").into_vec(),
+        Key::Meta("CHAIN_BLOCK_V1:").into_vec(),
+        Key::Meta("MATCHED_BLOCKS").into_vec(),
+    ] {
+        let select = prefix.clone();
+        let rows = storage
+            .try_collect_iterator(
+                IteratorStart::From(prefix),
+                IteratorDirection::Forward,
+                Box::new(move |key| key.starts_with(&select)),
+                Box::new(|key, _| Some(key.to_vec())),
+                usize::MAX,
+            )
+            .unwrap();
+        for row in rows {
+            storage.delete(&row.value).unwrap();
+        }
+    }
+    for name in [
+        "INDEX_ASSOCIATIONS_V1",
+        "INDEX_RECOVERY_V2",
+        "INDEX_REVISION_V1",
+        "FILTER_SCRIPT_REVISION_V1",
+        "CHAIN_CONTEXT_V1",
+        "INDEX_WRITING_V1",
+        "INDEX_UNCERTAIN_V1",
+        "CHAIN_TRANSITION_V1",
+        "INDEX_REPAIR_V2",
+        "INDEX_REGISTRATION_V2",
+    ] {
+        storage.delete(&Key::Meta(name).into_vec()).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn recovery_empty_legacy_database_without_scripts_is_usable() {
+    let mut f = Fixture::new(false, false).await;
+    let genesis = f.storage.get_genesis_block();
+    clear_legacy_derived_index(&f.storage);
+    f = f.reopen();
+    f.storage.init_genesis_block(genesis.clone());
+    assert_eq!(
+        f.storage
+            .get(Key::Meta("INDEX_ASSOCIATIONS_V1").into_vec())
+            .unwrap(),
+        Some(vec![1])
+    );
+    assert_eq!(
+        queries(&f)
+            .get_cells_capacity(key())
+            .unwrap()
+            .capacity
+            .value(),
+        0
+    );
+    f = f.reopen();
+    f.storage.init_genesis_block(genesis);
+    assert_eq!(
+        queries(&f)
+            .get_cells_capacity(key())
+            .unwrap()
+            .capacity
+            .value(),
+        0
+    );
+}
+
+#[tokio::test]
+async fn recovery_empty_legacy_index_with_registered_no_match_resumes_after_reopen() {
+    let mut f = Fixture::new(false, false).await;
+    f.receive().await;
+    let genesis = f.storage.get_genesis_block();
+    let tx_key = Key::TxHash(&f.hash.pack()).into_vec();
+    let header_key = Key::BlockHash(&f.containing_block.hash()).into_vec();
+    let primary_tx = f.storage.get(tx_key.clone()).unwrap().unwrap();
+    let primary_header = f.storage.get(header_key.clone()).unwrap().unwrap();
+    let user_key = Key::Meta("wo35-preserved-user-data").into_vec();
+    f.storage
+        .put(user_key.clone(), b"preserve".to_vec())
+        .unwrap();
+
+    let unmatched = packed::Script::new_builder()
+        .args(b"WO35-unmatched-legacy-script".pack())
+        .build();
+    f.storage.update_filter_scripts(
+        vec![ScriptStatus {
+            script: unmatched.clone(),
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }],
+        SetScriptsCommand::All,
+    );
+    // The previous writer recorded coverage through height 1 with no matching
+    // block; the migration must revisit that range before restoring readiness.
+    f.storage.update_block_number(1);
+    assert_eq!(f.storage.get_filter_scripts()[0].block_number, 1);
+    clear_legacy_derived_index(&f.storage);
+    f = f.reopen();
+    f.storage.init_genesis_block(genesis.clone());
+
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_ASSOCIATIONS_V1").into_vec())
+        .unwrap()
+        .is_none());
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_REPAIR_V2").into_vec())
+        .unwrap()
+        .is_some());
+    assert!(f.storage.get_earliest_matched_blocks().is_none());
+    assert!(
+        queries(&f)
+            .get_cells_capacity(SearchKey {
+                script: unmatched.clone().into(),
+                ..SearchKey::default()
+            })
+            .is_err(),
+        "legacy rows cannot be reported as verified before coverage recovery"
+    );
+    assert_eq!(
+        f.storage.get(tx_key.clone()).unwrap(),
+        Some(primary_tx.clone())
+    );
+    assert_eq!(
+        f.storage.get(header_key.clone()).unwrap(),
+        Some(primary_header.clone())
+    );
+    assert_eq!(
+        f.storage.get(user_key.clone()).unwrap(),
+        Some(b"preserve".to_vec())
+    );
+
+    // Restart while the old saved target is still outstanding. Recovery must
+    // remain fenced rather than treating an empty derived index as complete.
+    f = f.reopen();
+    f.storage.init_genesis_block(genesis.clone());
+    assert!(queries(&f)
+        .get_cells_capacity(SearchKey {
+            script: unmatched.clone().into(),
+            ..SearchKey::default()
+        })
+        .is_err());
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_ASSOCIATIONS_V1").into_vec())
+        .unwrap()
+        .is_none());
+
+    // update_block_number is called only after the validated empty filter page
+    // is accepted by the production filter handler.
+    f.storage.update_block_number(1);
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_REPAIR_V2").into_vec())
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        f.storage
+            .get(Key::Meta("INDEX_ASSOCIATIONS_V1").into_vec())
+            .unwrap(),
+        Some(vec![1])
+    );
+    let empty_cells = SearchKey {
+        script: unmatched.into(),
+        ..SearchKey::default()
+    };
+    assert_eq!(
+        queries(&f)
+            .get_cells_capacity(empty_cells)
+            .unwrap()
+            .capacity
+            .value(),
+        0
+    );
+    let empty_history = SearchKey {
+        script: f.storage.get_filter_scripts()[0].script.clone().into(),
+        ..SearchKey::default()
+    };
+    assert!(queries(&f)
+        .get_transactions(empty_history, Order::Asc, 100u32.into(), None)
+        .unwrap()
+        .objects
+        .is_empty());
+    assert_eq!(
+        f.storage.get(tx_key.clone()).unwrap(),
+        Some(primary_tx.clone())
+    );
+    assert_eq!(
+        f.storage.get(header_key.clone()).unwrap(),
+        Some(primary_header.clone())
+    );
+    assert_eq!(f.storage.get(user_key).unwrap(), Some(b"preserve".to_vec()));
+
+    f = f.reopen();
+    f.storage.init_genesis_block(genesis);
+    let empty = SearchKey {
+        script: f.storage.get_filter_scripts()[0].script.clone().into(),
+        ..SearchKey::default()
+    };
+    assert_eq!(
+        queries(&f)
+            .get_cells_capacity(empty)
+            .unwrap()
+            .capacity
+            .value(),
+        0
+    );
+    assert_eq!(f.storage.get(tx_key).unwrap(), Some(primary_tx));
+    assert_eq!(f.storage.get(header_key).unwrap(), Some(primary_header));
 }
 
 #[tokio::test]

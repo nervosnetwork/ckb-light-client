@@ -404,6 +404,8 @@ impl LightClientProtocol {
                     fork,
                 )
                 .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?;
+                self.peers()
+                    .retire_proof_requests_anchored_at(&previous_view.hash());
                 matched_blocks.clear();
             } else {
                 crate::storage::canonical::update_state(

@@ -78,6 +78,42 @@ try{
  check(await raw('INDEX_REPAIR_V2')===undefined,'completed repair journal removed');
  await start();check(equal(await snapshot(),baseline),'second reopen does not resurrect spent genesis outputs');await stop();
 
+ await seed('empty-legacy-index');
+ await start();
+ script={codeHash:`0x${'ff'.repeat(32)}`,hashType:'data',args:'0x574f3335'};
+ await client.setScripts([{script,scriptType:'lock',blockNumber:0n}],LightClientSetScriptsCommand.All);
+ const noMatch=await snapshot();
+ check(noMatch.capacity==='0'&&noMatch.cells.cells.length===0&&noMatch.transactions.transactions.length===0,
+  'registered legacy script has no matching history');
+ await stop();
+ const emptyLegacyRows=await rows();
+ const emptyLegacyPrimary=emptyLegacyRows.filter(row=>[0,160,192].includes(row.key[0]));
+ const emptyLegacyDerived=emptyLegacyRows.filter(row=>[32,64,96,128].includes(row.key[0]));
+ const emptyLegacyMeta=emptyLegacyRows.filter(row=>row.key[0]===224&&
+  ['TX_BLOCK_V1:','CHAIN_BLOCK_V1:','MATCHED_BLOCKS'].some(prefix=>
+   new TextDecoder().decode(new Uint8Array(row.key.slice(1))).startsWith(prefix)));
+ check(emptyLegacyPrimary.length>0,'empty derived index fixture retains valid primary records');
+ await mutate([
+  ...emptyLegacyDerived.map(row=>['delete',row.key]),
+  ...emptyLegacyMeta.map(row=>['delete',row.key]),
+  ...['INDEX_ASSOCIATIONS_V1','INDEX_RECOVERY_V2','INDEX_REVISION_V1','FILTER_SCRIPT_REVISION_V1',
+      'CHAIN_CONTEXT_V1','INDEX_WRITING_V1','INDEX_UNCERTAIN_V1','CHAIN_TRANSITION_V1',
+      'INDEX_REPAIR_V2','INDEX_REGISTRATION_V2'].map(name=>['delete',meta(name)])
+ ]);
+ check(await raw('INDEX_ASSOCIATIONS_V1')===undefined,'legacy empty index has no association-format marker');
+ await start();
+ const emptyLegacyRecovered=await snapshot();
+ check(equal(emptyLegacyRecovered,noMatch),'IndexedDB legacy recovery does not invent watched matches');
+ check((await raw('INDEX_ASSOCIATIONS_V1'))?.[0]===1,'empty legacy recovery publishes the format marker after startup recovery');
+ check(await raw('INDEX_REPAIR_V2')===undefined,'empty legacy recovery removes its completed repair journal');
+ const emptyLegacyAfter=await rows();
+ check(emptyLegacyPrimary.every(row=>emptyLegacyAfter.some(current=>equal(current,row))),
+  'empty legacy recovery preserves every primary transaction/header/height record');
+ await stop();
+ await start();
+ check(equal(await snapshot(),emptyLegacyRecovered),'empty legacy result is stable after another worker restart');
+ await stop();
+
  await seed('earlier-associations');
  const earlierRows=await rows();
  await mutate([['delete',meta('INDEX_RECOVERY_V2')],...earlierRows.filter(r=>[32,64,96,128].includes(r.key[0])).map(r=>['delete',r.key])]);

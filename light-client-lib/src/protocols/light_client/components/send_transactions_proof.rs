@@ -107,14 +107,7 @@ impl<'a> SendTransactionsProofProcess<'a> {
                 return_if_failed!(self
                     .protocol
                     .process_last_state(self.peer_index, last_header));
-                // The header is authenticated, but is not an accepted chain tip.
-                // Retire only this owner and avoid retrying its unavailable anchor.
-                self.protocol.peers().finish_txs_proof_request(
-                    self.peer_index,
-                    original_request,
-                    true,
-                    true,
-                );
+                // This hint carries no request identity; an accepted reorg retires old anchors.
                 return Status::ok();
             } else {
                 // Since the last state is different, then no data should be contained.

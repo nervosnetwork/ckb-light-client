@@ -1740,6 +1740,38 @@ impl Peers {
             .is_some_and(|peer| peer.unavailable_proof_anchor.as_ref() != Some(anchor))
     }
 
+    pub(crate) fn retire_proof_requests_anchored_at(&self, anchor: &Byte32) {
+        for mut item in self.inner.iter_mut() {
+            let peer = item.value_mut();
+            if let Some(request) = peer
+                .blocks_proof_request
+                .as_ref()
+                .filter(|request| request.last_hash().as_slice() == anchor.as_slice())
+                .cloned()
+            {
+                for hash in request.block_hashes() {
+                    if let Some(mut info) = self.fetching_headers.get_mut(&hash.pack()) {
+                        info.timeout = true;
+                    }
+                }
+                peer.blocks_proof_request = None;
+            }
+            if let Some(request) = peer
+                .txs_proof_request
+                .as_ref()
+                .filter(|request| request.last_hash().as_slice() == anchor.as_slice())
+                .cloned()
+            {
+                for hash in request.tx_hashes() {
+                    if let Some(mut info) = self.fetching_txs.get_mut(&hash.pack()) {
+                        info.timeout = true;
+                    }
+                }
+                peer.txs_proof_request = None;
+            }
+        }
+    }
+
     /// Retire only the locally captured operation, including across handler awaits.
     /// Retry eligibility is recorded before its hash list is removed.
     pub(crate) fn finish_blocks_proof_request(
