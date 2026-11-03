@@ -297,6 +297,16 @@ class LightClient {
         return transformFetchResponse<any, ClientTransactionResponse>(await this.invokeLightClientCommand("fetch_transaction", [hexFrom(txHash)]), JsonRpcTransformers.transactionResponseTo);
     }
 
+    /** Observe locally stored inclusion evidence. This does not establish unspentness or network freshness. */
+    async getTransactionEvidence(txHash: HexLike): Promise<import("./types.ts").TransactionEvidence> {
+        return this.invokeLightClientCommand("get_transaction_evidence", [hexFrom(txHash)]);
+    }
+
+    /** Poll for inclusion evidence at the runtime's exact accepted anchor. */
+    async fetchTransactionEvidence(txHash: HexLike): Promise<import("./types.ts").TransactionEvidenceFetchResponse> {
+        return this.invokeLightClientCommand("fetch_transaction_evidence", [hexFrom(txHash)]);
+    }
+
 }
 
 export { LightClient };

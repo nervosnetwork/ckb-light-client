@@ -18,6 +18,7 @@ use ckb_types::{
 mod backend;
 mod db;
 mod storage_trait;
+pub(crate) mod transaction_evidence;
 
 // Re-export storage backend trait (low-level KV operations)
 pub use backend::{BatchWriter, FilterMapFn, StorageBackend, TakeWhileFn};

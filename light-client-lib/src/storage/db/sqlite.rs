@@ -161,6 +161,29 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
+        use rusqlite::OptionalExtension;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| crate::error::Error::runtime("poisoned database lock"))?;
+        let tx = conn.unchecked_transaction()?;
+        let values = keys
+            .iter()
+            .map(|key| {
+                tx.query_row(
+                    "SELECT value FROM kv_store WHERE key = ?",
+                    rusqlite::params![key],
+                    |row| row.get(0),
+                )
+                .optional()
+                .map_err(Into::into)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        tx.commit()?;
+        Ok(values)
+    }
+
     fn get(&self, key: Vec<u8>) -> Result<Option<Vec<u8>>> {
         Storage::get(self, key)
     }

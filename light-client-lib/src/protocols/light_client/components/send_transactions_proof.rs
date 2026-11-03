@@ -8,7 +8,7 @@ use log::{debug, error};
 
 use crate::{
     protocols::light_client::components::{verify_extra_hash, verify_legacy_extra_hash},
-    storage::{HeaderWithExtension, LightClientStorage},
+    storage::HeaderWithExtension,
 };
 
 use super::{
@@ -224,13 +224,21 @@ impl<'a> SendTransactionsProofProcess<'a> {
                         .peers()
                         .remove_fetching_transaction(&tx.calc_tx_hash(), &header.hash())
                     {
-                        self.protocol.storage().add_fetched_tx(
-                            &tx,
-                            &HeaderWithExtension {
-                                header: header.data(),
-                                extension: extension.as_ref().cloned(),
-                            },
-                        );
+                        if let Err(error) =
+                            crate::storage::transaction_evidence::store_fetched_transaction(
+                                self.protocol.storage(),
+                                &tx,
+                                &HeaderWithExtension {
+                                    header: header.data(),
+                                    extension: extension.as_ref().cloned(),
+                                },
+                                Some(&last_header.header().data()),
+                            )
+                        {
+                            return StatusCode::InternalError.with_context(format!(
+                                "failed to store transaction evidence: {error}"
+                            ));
+                        }
                     }
                 }
             }
