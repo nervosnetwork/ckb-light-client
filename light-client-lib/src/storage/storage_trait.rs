@@ -497,7 +497,17 @@ pub trait LightClientStorage: StorageBackend {
             block_hash.as_slice(),
         );
         let tx_hash = tx.calc_tx_hash();
-        let tx_index = u32::MAX;
+        // A proof can complete after body indexing. Preserve the known ordinal
+        // only when it belongs to this same block; input indexing uses it to
+        // delete the corresponding live-cell key.
+        let tx_index = self
+            .get_transaction(&tx_hash)
+            .filter(|(number, _, _)| {
+                *number == block_number
+                    && self.get_block_hash(*number).as_ref() == Some(&block_hash)
+            })
+            .map(|(_, index, _)| index)
+            .unwrap_or(u32::MAX);
         let key = Key::TxHash(&tx_hash).into_vec();
         let value: Vec<u8> = Value::Transaction(block_number, tx_index as TxIndex, tx).into();
         batch.put(&key, &value);
@@ -513,12 +523,17 @@ pub trait LightClientStorage: StorageBackend {
     /// - Records transaction history for matched scripts
     /// - Stores the matched transactions
     fn filter_block(&self, block: Block) {
+        let block_number: BlockNumber = block.header().raw().number().unpack();
         let scripts: HashSet<(packed::Script, ScriptType)> = self
             .get_filter_scripts()
             .into_iter()
+            // A block replayed for a new subscription must not modify an index
+            // that has already processed this block, including spent outputs.
+            .filter(|ss| {
+                ss.block_number < block_number || (block_number == 0 && ss.block_number == 0)
+            })
             .map(|ss| (ss.script, ss.script_type))
             .collect();
-        let block_number: BlockNumber = block.header().raw().number().unpack();
         let mut filter_matched = false;
         let mut batch = self.batch();
         let mut txs: HashMap<Byte32, (u32, Transaction)> = HashMap::new();
