@@ -1,6 +1,14 @@
-use ckb_types::packed::Script;
+use ckb_types::{
+    bytes::Bytes,
+    core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
+    packed::{self, Script},
+    prelude::{Builder, Entity, Pack},
+};
 
-use crate::storage::{self, LightClientStorage};
+use crate::storage::{
+    self, CellType, HeaderWithExtension, Key, LightClientStorage, ScriptStatus, ScriptType,
+    SetScriptsCommand,
+};
 use crate::tests::utils::new_storage;
 
 #[test]
@@ -24,14 +32,6 @@ fn test_forget_update_min_filtred_number() {
     );
     assert_eq!(storage.get_min_filtered_block_number(), 33);
 }
-
-use crate::storage::{HeaderWithExtension, Key, ScriptStatus, ScriptType, SetScriptsCommand};
-use ckb_types::{
-    bytes::Bytes,
-    core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
-    packed,
-    prelude::*,
-};
 
 fn replay_fixture() -> (
     Script,
@@ -240,4 +240,82 @@ fn zero_cursor_still_indexes_configured_genesis_outputs() {
         .get(Key::CellLockScript(&wallet, 0, 0, 1).into_vec())
         .unwrap()
         .is_some());
+}
+
+fn assert_rollback_reindexes_removed_blocks(to_number: u64) {
+    let (storage, _tmp) = new_storage("rollback-replay-boundary");
+    storage.init_genesis_block(BlockBuilder::default().build().data());
+    let (wallet, cluster, first, second, created) = replay_fixture();
+    storage.update_filter_scripts(
+        vec![
+            ScriptStatus {
+                script: wallet.clone(),
+                script_type: ScriptType::Lock,
+                block_number: 0,
+            },
+            ScriptStatus {
+                script: cluster.clone(),
+                script_type: ScriptType::Type,
+                block_number: 0,
+            },
+        ],
+        SetScriptsCommand::Partial,
+    );
+    storage.filter_block(first.clone());
+    storage.update_block_number(1);
+    storage.filter_block(second.clone());
+    storage.update_block_number(2);
+
+    storage.rollback_to_block(to_number);
+    for script in storage.get_filter_scripts() {
+        assert_eq!(script.block_number, to_number.saturating_sub(1));
+    }
+    let spent_change = Key::CellLockScript(&wallet, 1, 0, 1).into_vec();
+    let new_change = Key::CellLockScript(&wallet, 2, 0, 0).into_vec();
+    let spend_history = Key::TxLockScript(&wallet, 2, 0, 0, CellType::Input).into_vec();
+    assert!(storage.get(new_change.clone()).unwrap().is_none());
+    assert!(storage.get(spend_history.clone()).unwrap().is_none());
+    if to_number <= 1 {
+        // The first removed block must restore both lock and type indexes.
+        let cluster_cell = Key::CellTypeScript(&cluster, 1, 0, 0).into_vec();
+        let cluster_history = Key::TxTypeScript(&cluster, 1, 0, 0, CellType::Output).into_vec();
+        assert!(storage.get(cluster_cell.clone()).unwrap().is_none());
+        assert!(storage.get(cluster_history.clone()).unwrap().is_none());
+        storage.filter_block(first);
+        storage.update_block_number(1);
+        let created_hash = created.calc_tx_hash().as_slice().to_vec();
+        assert_eq!(
+            storage.get(cluster_cell).unwrap(),
+            Some(created_hash.clone())
+        );
+        assert_eq!(storage.get(cluster_history).unwrap(), Some(created_hash));
+    }
+    assert!(storage.get(spent_change.clone()).unwrap().is_some());
+    storage.filter_block(second.clone());
+    storage.update_block_number(2);
+    assert!(storage.get(spent_change).unwrap().is_none());
+    let spent_hash = second
+        .transactions()
+        .get(0)
+        .unwrap()
+        .calc_tx_hash()
+        .as_slice()
+        .to_vec();
+    assert_eq!(storage.get(new_change).unwrap(), Some(spent_hash.clone()));
+    assert_eq!(storage.get(spend_history).unwrap(), Some(spent_hash));
+}
+
+#[test]
+fn rollback_reindexes_first_removed_block() {
+    assert_rollback_reindexes_removed_blocks(2);
+}
+
+#[test]
+fn rollback_to_one_reindexes_first_non_genesis_block() {
+    assert_rollback_reindexes_removed_blocks(1);
+}
+
+#[test]
+fn rollback_to_zero_does_not_underflow_script_cursor() {
+    assert_rollback_reindexes_removed_blocks(0);
 }

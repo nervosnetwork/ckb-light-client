@@ -703,7 +703,8 @@ pub trait LightClientStorage: StorageBackend {
 
     /// Rollback to specified block number
     ///
-    /// N.B. The specified block will be removed.
+    /// N.B. The specified block will be removed. Affected script cursors are
+    /// rewound to the preceding block so the removed range can be re-indexed.
     fn rollback_to_block(&self, to_number: BlockNumber) {
         use super::extract_raw_data;
 
@@ -850,7 +851,8 @@ pub trait LightClientStorage: StorageBackend {
                         ScriptType::Lock => &[0],
                         ScriptType::Type => &[1],
                     });
-                    let value = to_number.to_be_bytes().to_vec();
+                    // The boundary block was removed, so it is not processed yet.
+                    let value = to_number.saturating_sub(1).to_be_bytes().to_vec();
                     batch.put(&key, &value);
                 }
             }
