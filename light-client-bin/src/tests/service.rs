@@ -871,9 +871,9 @@ fn rpc() {
 
     let scripts = storage.get_filter_scripts();
     assert_eq!(
-        total_blocks - 2,
+        total_blocks - 3,
         scripts.into_iter().map(|s| s.block_number).max().unwrap(),
-        "rollback should update script filter block number"
+        "rollback should leave the cursor before the first removed block"
     );
 
     let rpc = create_block_filter_rpc(storage.clone(), create_peers());
