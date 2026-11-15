@@ -28,7 +28,7 @@ fn test_forget_update_min_filtred_number() {
 use crate::storage::{HeaderWithExtension, Key, ScriptStatus, ScriptType, SetScriptsCommand};
 use ckb_types::{
     bytes::Bytes,
-    core::{BlockBuilder, TransactionBuilder},
+    core::{BlockBuilder, EpochNumberWithFraction, TransactionBuilder},
     packed,
     prelude::*,
 };
@@ -84,10 +84,12 @@ fn replay_fixture() -> (
         .build();
     let first = BlockBuilder::default()
         .number(1u64)
+        .epoch(EpochNumberWithFraction::new(0, 1, 10).pack())
         .transaction(created.clone())
         .build();
     let second = BlockBuilder::default()
         .number(2u64)
+        .epoch(EpochNumberWithFraction::new(0, 2, 10).pack())
         .transaction(spent)
         .build();
     (wallet, cluster, first.data(), second.data(), created.data())
@@ -213,7 +215,15 @@ fn zero_cursor_still_indexes_configured_genesis_outputs() {
             first
                 .header()
                 .as_builder()
-                .raw(first.header().raw().as_builder().number(0u64).build())
+                .raw(
+                    first
+                        .header()
+                        .raw()
+                        .as_builder()
+                        .number(0u64)
+                        .epoch(0u64)
+                        .build(),
+                )
                 .build(),
         )
         .build();
