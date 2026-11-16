@@ -2812,7 +2812,7 @@ async fn recovery_empty_legacy_database_without_scripts_is_usable() {
 }
 
 #[tokio::test]
-async fn recovery_empty_legacy_index_with_registered_no_match_resumes_after_reopen() {
+async fn recovery_empty_legacy_index_without_membership_stays_fenced_after_reopen() {
     let mut f = Fixture::new(false, false).await;
     f.receive().await;
     let genesis = f.storage.get_genesis_block();
@@ -2893,39 +2893,39 @@ async fn recovery_empty_legacy_index_with_registered_no_match_resumes_after_reop
         .unwrap()
         .is_none());
 
-    // update_block_number is called only after the validated empty filter page
-    // is accepted by the production filter handler.
-    f.storage.update_block_number(1);
+    assert!(f
+        .storage
+        .get_filter_scripts()
+        .iter()
+        .any(|s| { s.script.as_slice() == unmatched.as_slice() && s.block_number == 0 }));
     assert!(f
         .storage
         .get(Key::Meta("INDEX_REPAIR_V2").into_vec())
         .unwrap()
-        .is_none());
-    assert_eq!(
-        f.storage
-            .get(Key::Meta("INDEX_ASSOCIATIONS_V1").into_vec())
-            .unwrap(),
-        Some(vec![1])
-    );
-    let empty_cells = SearchKey {
-        script: unmatched.into(),
-        ..SearchKey::default()
-    };
-    assert_eq!(
-        queries(&f)
-            .get_cells_capacity(empty_cells)
-            .unwrap()
-            .capacity
-            .value(),
-        0
-    );
-    let empty_history = SearchKey {
-        script: f.storage.get_filter_scripts()[0].script.clone().into(),
-        ..SearchKey::default()
-    };
+        .is_some());
+    assert!(f.storage.get_earliest_matched_blocks().is_none());
     assert!(queries(&f)
-        .get_transactions(empty_history, Order::Asc, 100u32.into(), None)
+        .get_cells_capacity(SearchKey {
+            script: unmatched.clone().into(),
+            ..SearchKey::default()
+        })
         .is_err());
+    assert!(queries(&f)
+        .get_transactions(
+            SearchKey {
+                script: unmatched.clone().into(),
+                ..SearchKey::default()
+            },
+            Order::Asc,
+            100u32.into(),
+            None
+        )
+        .is_err());
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_ASSOCIATIONS_V1").into_vec())
+        .unwrap()
+        .is_none());
     assert_eq!(
         f.storage.get(tx_key.clone()).unwrap(),
         Some(primary_tx.clone())
@@ -2934,24 +2934,39 @@ async fn recovery_empty_legacy_index_with_registered_no_match_resumes_after_reop
         f.storage.get(header_key.clone()).unwrap(),
         Some(primary_header.clone())
     );
-    assert_eq!(f.storage.get(user_key).unwrap(), Some(b"preserve".to_vec()));
+    assert_eq!(
+        f.storage.get(user_key.clone()).unwrap(),
+        Some(b"preserve".to_vec())
+    );
 
     f = f.reopen();
     f.storage.init_genesis_block(genesis);
-    let empty = SearchKey {
-        script: f.storage.get_filter_scripts()[0].script.clone().into(),
-        ..SearchKey::default()
-    };
-    assert_eq!(
-        queries(&f)
-            .get_cells_capacity(empty)
-            .unwrap()
-            .capacity
-            .value(),
-        0
-    );
+    assert_eq!(f.storage.get_filter_scripts()[0].block_number, 0);
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_REPAIR_V2").into_vec())
+        .unwrap()
+        .is_some());
+    assert!(queries(&f)
+        .get_cells_capacity(SearchKey {
+            script: unmatched.clone().into(),
+            ..SearchKey::default()
+        })
+        .is_err());
+    assert!(queries(&f)
+        .get_transactions(
+            SearchKey {
+                script: unmatched.into(),
+                ..SearchKey::default()
+            },
+            Order::Asc,
+            100u32.into(),
+            None
+        )
+        .is_err());
     assert_eq!(f.storage.get(tx_key).unwrap(), Some(primary_tx));
     assert_eq!(f.storage.get(header_key).unwrap(), Some(primary_header));
+    assert_eq!(f.storage.get(user_key).unwrap(), Some(b"preserve".to_vec()));
 }
 
 #[tokio::test]
@@ -3212,10 +3227,13 @@ async fn recovery_upgrade_physical_legacy_wallet() {
 }
 
 #[tokio::test]
-async fn recovery_script_rewind_keeps_other_cursors_and_replays_behind_fence() {
+async fn recovery_script_rewind_restores_only_its_authenticated_capacity_prefix() {
     let mut f = Fixture::new(false, false).await;
     f.receive().await;
     index_fixture(&f);
+    let genesis = f.storage.get_genesis_block();
+    let accepted_tip = f.storage.get_tip_header().into_view();
+    assert_eq!(accepted_tip.number(), 2);
     let other = packed::Script::new_builder()
         .args(b"other-birthday".as_slice().pack())
         .build();
@@ -3242,25 +3260,85 @@ async fn recovery_script_rewind_keeps_other_cursors_and_replays_behind_fence() {
             .any(|s| s.script.as_slice() == other.as_slice() && s.block_number == 5),
         "ordinary rewind must not reset another script's progress"
     );
+    assert!(f
+        .storage
+        .get_filter_scripts()
+        .iter()
+        .any(|s| { s.script.as_slice() == watched_script().as_slice() && s.block_number == 0 }));
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_REPAIR_V2").into_vec())
+        .unwrap()
+        .is_some());
     assert!(
         queries(&f).get_cells_capacity(key()).is_err(),
         "replayed old outputs are hidden until the previous saved coverage is restored"
     );
+    assert!(queries(&f)
+        .get_transactions(key(), Order::Asc, 100u32.into(), None)
+        .is_err());
     let block = f.containing_block.clone();
+    let block_hash = block.hash().unpack();
+    let block_number = block.number();
     f.storage
         .add_positioned_matched_blocks(1, 1, vec![(1, block.hash())]);
     recovery_drive_range(&mut f, vec![block]).await;
-    assert_eq!(
+    assert!(f.storage.get_earliest_matched_blocks().is_none());
+    assert!(f
+        .storage
+        .get(Key::Meta("INDEX_REPAIR_V2").into_vec())
+        .unwrap()
+        .is_none());
+    let scripts = f.storage.get_filter_scripts();
+    assert!(scripts
+        .iter()
+        .any(|s| s.script.as_slice() == watched_script().as_slice() && s.block_number == 1));
+    assert!(scripts
+        .iter()
+        .any(|s| s.script.as_slice() == other.as_slice() && s.block_number == 5));
+    let capacity = queries(&f).get_cells_capacity(key()).unwrap();
+    assert_eq!(capacity.capacity.value(), 100);
+    assert_eq!(capacity.block_number.value(), block_number);
+    assert_eq!(capacity.block_hash, block_hash);
+    assert!(
         queries(&f)
-            .get_cells_capacity(key())
-            .unwrap()
-            .capacity
-            .value(),
-        100
+            .get_transactions(key(), Order::Asc, 100u32.into(), None)
+            .is_err(),
+        "capacity prefix does not make incomplete history complete"
     );
+    let other_search = SearchKey {
+        script: other.clone().into(),
+        ..SearchKey::default()
+    };
+    assert!(
+        queries(&f)
+            .get_transactions(other_search.clone(), Order::Asc, 100u32.into(), None)
+            .is_err(),
+        "a future start height is not authenticated coverage"
+    );
+    assert!(queries(&f)
+        .get_cells_capacity(other_search.clone())
+        .is_err());
+
+    // A pending recheck that reaches A's prefix still fences its snapshot.
+    f.storage
+        .add_positioned_matched_blocks(1, 1, vec![(1, f.containing_block.hash())]);
+    assert!(queries(&f).get_cells_capacity(key()).is_err());
+
+    f = f.reopen();
+    f.storage.init_genesis_block(genesis);
+    let scripts = f.storage.get_filter_scripts();
+    assert!(scripts
+        .iter()
+        .any(|s| s.script.as_slice() == watched_script().as_slice() && s.block_number == 1));
     assert!(f
         .storage
         .get_filter_scripts()
         .iter()
         .any(|s| s.script.as_slice() == other.as_slice() && s.block_number == 5));
+    assert!(queries(&f).get_cells_capacity(key()).is_err());
+    assert!(queries(&f)
+        .get_transactions(other_search, Order::Asc, 100u32.into(), None)
+        .is_err());
+    assert!(f.storage.get_earliest_matched_blocks().is_some());
 }

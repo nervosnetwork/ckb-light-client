@@ -443,9 +443,9 @@ pub(crate) fn affects_scope<S: StorageBackend + ?Sized>(
     Ok(false)
 }
 
-/// A capacity snapshot may describe the last fully indexed prefix while
-/// forward filter work is pending, provided every watched cursor is aligned
-/// and no saved range reaches back into that prefix.
+/// A capacity snapshot may describe this script's last fully indexed prefix
+/// while forward filter work is pending, provided no saved range reaches back
+/// into that prefix. Other scripts' cursors do not certify or invalidate it.
 pub(crate) fn prefix_available<S: StorageBackend + ?Sized>(
     storage: &S,
     scope: &[u8],
@@ -455,11 +455,6 @@ pub(crate) fn prefix_available<S: StorageBackend + ?Sized>(
         return Ok(false);
     };
     if cursor >= accepted_tip {
-        return Ok(false);
-    }
-
-    let cursors = script_cursors(storage)?;
-    if cursors.is_empty() || cursors.iter().any(|(_, number)| *number != cursor) {
         return Ok(false);
     }
 
