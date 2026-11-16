@@ -1312,6 +1312,9 @@ fn positional_recheck_pages_are_atomic_resumable_and_preserve_saved_targets() {
             "spent output must not resurrect"
         );
         assert!(!repair_pending(&storage).unwrap());
+        // The accepted fixture tip is 6; certify its final all-unmatched
+        // page before asserting a complete history query at that tip.
+        storage.update_block_number(6);
         let history = crate::service::LightClientService::new(Arc::new(storage.clone()))
             .get_transactions(
                 crate::service::SearchKey {
