@@ -807,13 +807,11 @@ async fn watched_spend_case(_fail_finish: bool, multi: bool) {
             .value(),
         0
     );
-    assert_eq!(
+    assert!(
         queries(&f)
             .get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .unwrap()
-            .objects
-            .len(),
-        2
+            .is_err(),
+        "unrestricted history remains fenced while the accepted-tip suffix is uncovered"
     );
     let spending_hash = block.transactions()[0].hash().unpack();
     assert_eq!(
@@ -1174,29 +1172,15 @@ async fn watched_queries_require_bound_history_and_rollback_removes_cells() {
     f.receive().await;
     index_fixture(&f);
     let q = queries(&f);
-    assert_eq!(
-        q.get_cells(key(), Order::Asc, 100u32.into(), None)
-            .unwrap()
-            .objects
-            .len(),
-        1
-    );
-    assert_eq!(
-        q.get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .unwrap()
-            .objects
-            .len(),
-        1
-    );
+    assert!(q.get_cells(key(), Order::Asc, 100u32.into(), None).is_err());
+    assert!(q
+        .get_transactions(key(), Order::Asc, 100u32.into(), None)
+        .is_err());
     let mut grouped = key();
     grouped.group_by_transaction = Some(true);
-    assert_eq!(
-        q.get_transactions(grouped, Order::Asc, 100u32.into(), None)
-            .unwrap()
-            .objects
-            .len(),
-        1
-    );
+    assert!(q
+        .get_transactions(grouped, Order::Asc, 100u32.into(), None)
+        .is_err());
     assert_eq!(q.get_cells_capacity(key()).unwrap().capacity.value(), 100);
     f.storage.rollback_to_block(1);
     assert!(q
@@ -2544,13 +2528,11 @@ async fn recovery_watched_spend_case(_fail_finish: bool, multi: bool) {
             .value(),
         0
     );
-    assert_eq!(
+    assert!(
         queries(&f)
             .get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .unwrap()
-            .objects
-            .len(),
-        2
+            .is_err(),
+        "unrestricted history remains fenced while the accepted-tip suffix is uncovered"
     );
     let spending_hash = block.transactions()[0].hash().unpack();
     assert_eq!(
@@ -2943,9 +2925,7 @@ async fn recovery_empty_legacy_index_with_registered_no_match_resumes_after_reop
     };
     assert!(queries(&f)
         .get_transactions(empty_history, Order::Asc, 100u32.into(), None)
-        .unwrap()
-        .objects
-        .is_empty());
+        .is_err());
     assert_eq!(
         f.storage.get(tx_key.clone()).unwrap(),
         Some(primary_tx.clone())
@@ -3086,13 +3066,11 @@ async fn recovery_missing_rows_case(keep_old_format: bool) {
             .value(),
         0
     );
-    assert_eq!(
+    assert!(
         queries(&f)
             .get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .unwrap()
-            .objects
-            .len(),
-        2
+            .is_err(),
+        "unrestricted history remains fenced while the accepted-tip suffix is uncovered"
     );
     assert!(f
         .storage
