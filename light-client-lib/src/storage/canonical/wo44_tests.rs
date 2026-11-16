@@ -272,32 +272,24 @@ impl StorageBackend for Reads {
 }
 impl LightClientStorage for Reads {}
 
-fn replay_history_coverage_to_tip(storage: &Storage, parent: &core::BlockView) {
-    let tip_match = core::BlockBuilder::default()
-        .number(6u64)
-        .epoch(core::EpochNumberWithFraction::new(0, 6, 100))
-        .parent_hash(parent.hash())
-        .build();
-    assert_eq!(
-        tip_match.hash(),
-        storage.get_tip_header().calc_header_hash()
-    );
-    replay_target_page(storage, 3, 4, &[tip_match]);
-}
-
 #[test]
 fn wo44_history_page_does_not_validate_2000_irrelevant_tail_transactions() {
     use crate::service::{LightClientService, Order, SearchKey};
-    let (_directory, storage, blocks) = positional_fixture();
-    replay_target_page(&storage, 1, 1, &blocks[..1]);
-    replay_target_page(&storage, 2, 1, &blocks[1..2]);
-    replay_history_coverage_to_tip(&storage, &blocks[2]);
+    let directory = tempfile::tempdir().unwrap();
+    let (storage, blocks) = positional_fixture_at(directory.path(), true);
+    replay_target_page(&storage, 1, 2, &blocks[..2]);
     let script = storage.get_filter_scripts().remove(0).script;
-    for number in 3..2003 {
+    for transaction_index in 2..2002 {
         storage
             .put(
-                Key::TxLockScript(&script, number, 1, 0, crate::storage::CellType::Output)
-                    .into_vec(),
+                Key::TxLockScript(
+                    &script,
+                    2,
+                    transaction_index,
+                    0,
+                    crate::storage::CellType::Output,
+                )
+                .into_vec(),
                 vec![0; 32],
             )
             .unwrap();
@@ -338,9 +330,9 @@ fn wo44_history_page_does_not_validate_2000_irrelevant_tail_transactions() {
 #[test]
 fn wo44_history_filters_and_page_continuation_preserve_canonical_results() {
     use crate::service::{LightClientService, Order, SearchKey, SearchKeyFilter};
-    let (_directory, storage, blocks) = positional_fixture();
+    let directory = tempfile::tempdir().unwrap();
+    let (storage, blocks) = positional_fixture_at(directory.path(), true);
     replay_target_page(&storage, 1, 2, &blocks[..2]);
-    replay_history_coverage_to_tip(&storage, &blocks[2]);
     let script = storage.get_filter_scripts().remove(0).script;
     let service = LightClientService::new(Arc::new(storage));
     let key = |grouped| SearchKey {
