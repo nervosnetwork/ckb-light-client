@@ -3306,19 +3306,17 @@ async fn recovery_script_rewind_restores_only_its_authenticated_capacity_prefix(
             .is_err(),
         "capacity prefix does not make incomplete history complete"
     );
-    let other_search = SearchKey {
+    let other_search = || SearchKey {
         script: other.clone().into(),
         ..SearchKey::default()
     };
     assert!(
         queries(&f)
-            .get_transactions(other_search.clone(), Order::Asc, 100u32.into(), None)
+            .get_transactions(other_search(), Order::Asc, 100u32.into(), None)
             .is_err(),
         "a future start height is not authenticated coverage"
     );
-    assert!(queries(&f)
-        .get_cells_capacity(other_search.clone())
-        .is_err());
+    assert!(queries(&f).get_cells_capacity(other_search()).is_err());
 
     // A pending recheck that reaches A's prefix still fences its snapshot.
     f.storage
@@ -3338,7 +3336,7 @@ async fn recovery_script_rewind_restores_only_its_authenticated_capacity_prefix(
         .any(|s| s.script.as_slice() == other.as_slice() && s.block_number == 5));
     assert!(queries(&f).get_cells_capacity(key()).is_err());
     assert!(queries(&f)
-        .get_transactions(other_search, Order::Asc, 100u32.into(), None)
+        .get_transactions(other_search(), Order::Asc, 100u32.into(), None)
         .is_err());
     assert!(f.storage.get_earliest_matched_blocks().is_some());
 }
