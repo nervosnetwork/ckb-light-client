@@ -10,9 +10,9 @@ use super::{
     db::{IteratorDirection, IteratorStart},
     parse_matched_blocks, BlockNumber, Byte32, CellIndex, CellType, CpIndex, HeaderWithExtension,
     Key, KeyPrefix, MatchedBlock, MatchedBlocks, OutputIndex, Script, ScriptStatus, ScriptType,
-    SetScriptsCommand, TxIndex, Value, WrappedBlockView, FILTER_SCRIPTS_KEY, GENESIS_BLOCK_KEY,
-    LAST_N_HEADERS_KEY, LAST_STATE_KEY, MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX,
-    MIN_FILTERED_BLOCK_NUMBER,
+    SetScriptsCommand, TxIndex, Value, WrappedBlockView, FILTER_SCRIPTS_KEY,
+    FILTER_SCRIPT_STARTS_KEY, GENESIS_BLOCK_KEY, LAST_N_HEADERS_KEY, LAST_STATE_KEY,
+    MATCHED_FILTER_BLOCKS_KEY, MAX_CHECK_POINT_INDEX, MIN_FILTERED_BLOCK_NUMBER,
 };
 use ckb_types::{
     core::HeaderView,
@@ -1054,25 +1054,62 @@ pub(super) fn apply_filter_scripts<S: LightClientStorage + ?Sized>(
     let mut should_filter_genesis_block = false;
     let mut batch = storage.batch();
     let key_prefix = Key::Meta(FILTER_SCRIPTS_KEY).into_vec();
+    let script_start_prefix = Key::Meta(FILTER_SCRIPT_STARTS_KEY).into_vec();
+    let key_prefix_for_scan = key_prefix.clone();
+    let existing_rows = storage
+        .try_collect_iterator(
+            IteratorStart::From(key_prefix.clone()),
+            IteratorDirection::Forward,
+            Box::new(move |key| key.starts_with(&key_prefix_for_scan)),
+            Box::new(|_, value| Some(value.to_vec())),
+            usize::MAX,
+        )
+        .expect("registration script scan");
+    let mut existing_starts = HashMap::new();
+    for row in &existing_rows {
+        let scope = row.key[key_prefix.len()..].to_vec();
+        let mut start_key = script_start_prefix.clone();
+        start_key.extend_from_slice(&scope);
+        let start = storage
+            .get(start_key)
+            .expect("registration height read")
+            .and_then(|bytes| {
+                <[u8; 8]>::try_from(bytes.as_slice())
+                    .ok()
+                    .map(u64::from_be_bytes)
+            });
+        existing_starts.insert(scope, start);
+    }
+    let mut start_updates = HashMap::new();
+    if !matches!(&command, SetScriptsCommand::Delete) {
+        for script in &scripts {
+            let mut scope = script.script.as_slice().to_vec();
+            scope.push(u8::from(matches!(script.script_type, ScriptType::Type)));
+            let start = match existing_starts.get(&scope) {
+                Some(Some(start)) => Some((*start).min(script.block_number)),
+                Some(None) => None,
+                None => Some(script.block_number),
+            };
+            if let Some(start) = start {
+                start_updates
+                    .entry(scope)
+                    .and_modify(|old: &mut u64| *old = (*old).min(start))
+                    .or_insert(start);
+            }
+        }
+    }
 
     match command {
         SetScriptsCommand::All => {
             should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
 
             // Delete all existing filter scripts
-            let key_prefix_clone = key_prefix.clone();
-            let existing_keys = storage
-                .try_collect_iterator(
-                    IteratorStart::From(key_prefix.clone()),
-                    IteratorDirection::Forward,
-                    Box::new(move |key| key.starts_with(&key_prefix_clone)),
-                    Box::new(|_key, value| Some(value.to_vec())),
-                    usize::MAX,
-                )
-                .expect("registration script scan");
-
-            for kv in existing_keys {
-                batch.delete(&kv.key);
+            for row in existing_rows {
+                let scope = &row.key[key_prefix.len()..];
+                let mut start_key = script_start_prefix.clone();
+                start_key.extend_from_slice(scope);
+                batch.delete(&row.key);
+                batch.delete(&start_key);
             }
 
             // Insert new scripts
@@ -1108,8 +1145,7 @@ pub(super) fn apply_filter_scripts<S: LightClientStorage + ?Sized>(
         }
         SetScriptsCommand::Delete => {
             for ss in scripts {
-                let key = [
-                    key_prefix.as_ref(),
+                let scope = [
                     ss.script.as_slice(),
                     match ss.script_type {
                         ScriptType::Lock => &[0],
@@ -1117,9 +1153,17 @@ pub(super) fn apply_filter_scripts<S: LightClientStorage + ?Sized>(
                     },
                 ]
                 .concat();
+                let key = [key_prefix.as_ref(), scope.as_slice()].concat();
+                let start_key = [script_start_prefix.as_ref(), scope.as_slice()].concat();
                 batch.delete(&key);
+                batch.delete(&start_key);
             }
         }
+    }
+
+    for (scope, start) in start_updates {
+        let key = [script_start_prefix.as_ref(), scope.as_slice()].concat();
+        batch.put(&key, &start.to_be_bytes());
     }
 
     batch.commit().expect("batch commit should be ok");

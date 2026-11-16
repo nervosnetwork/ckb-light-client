@@ -390,6 +390,24 @@ pub(crate) fn script_cursor<S: StorageBackend + ?Sized>(
         .transpose()
 }
 
+pub(crate) fn script_start<S: StorageBackend + ?Sized>(
+    storage: &S,
+    scope: &[u8],
+) -> Result<Option<u64>> {
+    let mut key = meta(super::super::FILTER_SCRIPT_STARTS_KEY);
+    key.extend_from_slice(scope);
+    storage
+        .get(key)?
+        .map(|value| {
+            value
+                .as_slice()
+                .try_into()
+                .map(u64::from_be_bytes)
+                .map_err(|_| Error::runtime("invalid watched registration height"))
+        })
+        .transpose()
+}
+
 /// A lagging script cannot claim a complete current-tip result while another
 /// script is ahead. A current pending range still fences a scope it reaches;
 /// invalid ranges and aligned-cursor queries retain the existing conservative
@@ -455,6 +473,12 @@ pub(crate) fn prefix_available<S: StorageBackend + ?Sized>(
         return Ok(false);
     };
     if cursor >= accepted_tip {
+        return Ok(false);
+    }
+    let Some(start) = script_start(storage, scope)? else {
+        return Ok(false);
+    };
+    if start > cursor {
         return Ok(false);
     }
 

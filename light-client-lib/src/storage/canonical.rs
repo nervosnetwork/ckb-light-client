@@ -651,6 +651,18 @@ fn indexed_header_at_or_before<S: StorageBackend + ?Sized>(
             "canonical_state:retry: indexed header is not current",
         ));
     }
+    if let Some(scope) = scope {
+        let Some(start) = coverage::script_start(storage, scope)? else {
+            return Err(Error::runtime(
+                "canonical_state:retry: watched registration height is unavailable",
+            ));
+        };
+        if header_number < start {
+            return Err(Error::runtime(
+                "canonical_state:retry: indexed header predates watched registration",
+            ));
+        }
+    }
     if header_number < number {
         let Some(scope) = scope else {
             return Err(Error::runtime(

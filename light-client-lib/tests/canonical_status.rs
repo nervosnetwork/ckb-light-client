@@ -1204,6 +1204,9 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
             let script_b = packed::Script::new_builder()
                 .args(b"new-script-birthday-40".to_vec().pack())
                 .build();
+            let script_c = packed::Script::new_builder()
+                .args(b"sparse-header-after-birthday-0".to_vec().pack())
+                .build();
 
             // Model accepted, consecutively linked ordinary extension and the
             // completed no-match filter pages that leave A certified at 100.
@@ -1244,10 +1247,32 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
                 f.storage
                     .update_filter_scripts(vec![script_b_status], SetScriptsCommand::Partial);
             }
+            f.storage.update_filter_scripts(
+                vec![ScriptStatus {
+                    script: script_c.clone(),
+                    script_type: ScriptType::Lock,
+                    block_number: 0,
+                }],
+                SetScriptsCommand::Partial,
+            );
+            let mut script_b_start_key = Key::Meta("FILTER_SCRIPT_STARTS_V1:").into_vec();
+            script_b_start_key.extend_from_slice(script_b.as_slice());
+            script_b_start_key.push(0);
+            let mut script_c_start_key = Key::Meta("FILTER_SCRIPT_STARTS_V1:").into_vec();
+            script_c_start_key.extend_from_slice(script_c.as_slice());
+            script_c_start_key.push(0);
 
             // B's ordinary unmatched pages have reached the block before the
             // pending match. A's already-certified cursor must not be rewound.
             f.storage.update_block_number(54);
+            assert_eq!(
+                f.storage.get(script_b_start_key.clone()).unwrap(),
+                Some(40u64.to_be_bytes().to_vec())
+            );
+            assert_eq!(
+                f.storage.get(script_c_start_key.clone()).unwrap(),
+                Some(0u64.to_be_bytes().to_vec())
+            );
 
             let matched_hash = packed::Byte32::new([55; 32]);
             f.storage.add_positioned_matched_blocks(
@@ -1299,17 +1324,34 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
                     .is_err());
                 assert!(service.get_cells_capacity(search(&script_b)).is_err());
             };
+            let sparse_header_hash = f.containing_block.hash().unpack();
+            let assert_sparse_snapshot = |service: &LightClientService<Storage>| {
+                let capacity = service.get_cells_capacity(search(&script_c)).unwrap();
+                assert_eq!(capacity.capacity.value(), 0);
+                assert_eq!(capacity.block_number.value(), 1);
+                assert_eq!(capacity.block_hash, sparse_header_hash);
+            };
 
             assert_a_available(&service);
             assert_b_fenced(&service);
+            assert_sparse_snapshot(&service);
 
             // The unproved page survives a restart. All-unmatched pages are
             // already reflected in the cursor, but B remains behind the tip.
             drop(service);
             f = f.reopen();
             let service = queries(&f);
+            assert_eq!(
+                f.storage.get(script_b_start_key).unwrap(),
+                Some(40u64.to_be_bytes().to_vec())
+            );
+            assert_eq!(
+                f.storage.get(script_c_start_key).unwrap(),
+                Some(0u64.to_be_bytes().to_vec())
+            );
             assert_a_available(&service);
             assert_b_fenced(&service);
+            assert_sparse_snapshot(&service);
             if !matched {
                 f.storage.update_block_number(100);
                 let service = queries(&f);
@@ -1326,6 +1368,9 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
                 let capacity = service.get_cells_capacity(search(&script_b)).unwrap();
                 assert_eq!(capacity.capacity.value(), 0);
                 assert_eq!(capacity.block_number.value(), 100);
+                let sparse_capacity = service.get_cells_capacity(search(&script_c)).unwrap();
+                assert_eq!(sparse_capacity.capacity.value(), 0);
+                assert_eq!(sparse_capacity.block_number.value(), 100);
             }
         }
     }
@@ -2747,6 +2792,7 @@ fn clear_legacy_derived_index(storage: &Storage) {
         Key::Meta("TX_BLOCK_V1:").into_vec(),
         Key::Meta("CHAIN_BLOCK_V1:").into_vec(),
         Key::Meta("MATCHED_BLOCKS").into_vec(),
+        Key::Meta("FILTER_SCRIPT_STARTS_V1:").into_vec(),
     ] {
         let select = prefix.clone();
         let rows = storage
