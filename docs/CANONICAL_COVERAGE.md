@@ -33,16 +33,31 @@ cache identities differ. Startup republishes verified no-match progress if its
 page commit preceded the cursor update; neither a new block nor another reply
 is required to discharge that already verified obligation.
 
-Watched queries retain the certified prefix while ordinary pending forward
-ranges lie above every published script cursor. A pending range at or below a
-published cursor, any repair, or an interrupted write remains fenced. This
-global check is conservative when different scripts have different cursors.
-During forward pending work, capacity results identify the common indexed cursor
-and its authenticated header. If cursors differ or that header is unavailable,
-capacity remains fenced; an older balance is never labeled with a newer tip.
-Query observations include the accepted state and index
-revision and are checked again before returning results. Header/transaction
-availability alone does not establish complete watched coverage.
+Watched cell and transaction queries are scoped to the queried script. With
+different script cursors, a current pending range can fence a script whose
+cursor is behind that range while leaving a script whose cursor already covers
+the range available. A script cursor alone does not establish coverage: stale
+or ambiguous ranges, ranges beyond that script's cursor, repairs, interrupted
+transitions, uncertainty, and index writes keep the affected query fenced.
+When all cursors are aligned at the accepted tip, the conservative global
+pending-range check applies. A cursor difference by itself does not make every
+query safe or unsafe.
+
+During forward work, `get_cells_capacity` may report a snapshot for the queried
+script at its own indexed prefix, even when other scripts have different
+cursors. This requires saved registration-start metadata with a start no later
+than that script's cursor, a cursor behind the accepted tip, and every pending
+range to be current for the accepted chain and start after that cursor. The
+query must also pass the global repair, transition, uncertainty, and index-write
+fences. The returned height uses an indexed header at or before the script's
+cursor; that header must still belong to the accepted chain and cover the
+script's indexed activity through the reported height. If the required start,
+range, or header evidence is missing or inconsistent, capacity remains fenced.
+This prefix snapshot does not establish complete history through the accepted
+tip. Query observations include the accepted state, index revision, script
+scope, and cursor, and are checked again before results are returned.
+Header/transaction availability alone does not establish complete watched
+coverage.
 
 ## Older or inconsistent pending ranges
 
@@ -111,14 +126,22 @@ magic bytes. Rollback and saved-goal readers retain the same count prefix.
 `INDEX_RECOVERY_V2 = [2]` identifies readiness under the positional coverage
 policy. Older association-only or `[1]` recovery readiness receives an in-place
 derived rescan before readiness is restored; existing rows alone cannot prove
-that no watched row is missing. Legacy script records retain their latest cursor,
-not the original registration birthday. Without a separately certified lower
-bound, genesis replay is deliberately retained; substituting that cursor would
-skip historical watched data. Primary bytes and saved completion goals survive
-this replay, but watched queries remain unavailable until it completes.
-The IndexedDB object-store schema and primary
-record encodings are unchanged. Downgrading a database with new pending records
-to an older binary is unsupported.
+that no watched row is missing. Legacy `get_scripts` records retain the latest
+filtered cursor, not the original `set_scripts` registration start. That cursor
+cannot safely be used as a replay floor: doing so could skip watched history.
+Current legacy recovery has no bounded start-height fast path. It rewinds
+watched cursors to genesis, saves prior completion goals, and rebuilds derived
+coverage through those goals. The restartable repair preserves primary
+transaction/header data and user keys, but watched queries may return errors
+until it completes.
+This can require re-filtering from genesis and proving/indexing each matched
+block up to the saved progress. Network, proof, and indexing work grows with
+that history, and query unavailability can last for the entire replay;
+representative production duration has not been established. This remains a
+compatibility concern for existing wallets and requires migration acceptance;
+passing CI does not remove it. The IndexedDB
+object-store schema and primary record encodings are unchanged. Downgrading a
+database with new pending records to an older binary is unsupported.
 
 `StorageBackend` gains no further required methods. Its snapshot reads and
 checked scans from PR #304 are required by these consumers; unsupported defaults
