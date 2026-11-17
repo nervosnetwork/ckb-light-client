@@ -112,6 +112,15 @@ fn index_fixture(f: &Fixture) {
     f.storage.filter_block(f.containing_block.data());
     f.storage.update_block_number(1);
 }
+fn complete_empty_filter_page(f: &Fixture, start: u64, count: u64) {
+    let tip: u64 = f.storage.get_tip_header().raw().number().unpack();
+    assert_eq!(start + count - 1, tip);
+    // Model the storage handoff after the filter hash chain was validated.
+    f.storage
+        .add_positioned_matched_blocks(start, count, vec![]);
+    f.storage.update_block_number(tip);
+    assert_eq!(f.storage.get_min_filtered_block_number(), tip);
+}
 
 #[tokio::test]
 async fn delayed_transaction_reply_cannot_drain_a_newer_request_slot() {
@@ -1183,11 +1192,12 @@ async fn watched_queries_require_bound_history_and_rollback_removes_cells() {
         .is_err());
     assert_eq!(q.get_cells_capacity(key()).unwrap().capacity.value(), 100);
     f.storage.rollback_to_block(1);
-    assert!(q
-        .get_cells(key(), Order::Asc, 100u32.into(), None)
+    assert!(f
+        .storage
+        .get(Key::CellLockScript(&watched_script(), 1, 0, 0).into_vec())
         .unwrap()
-        .objects
-        .is_empty());
+        .is_none());
+    assert!(q.get_cells(key(), Order::Asc, 100u32.into(), None).is_err());
     assert_eq!(q.get_cells_capacity(key()).unwrap().capacity.value(), 0);
     assert_eq!(status(&f)["status"], "unknown");
 }
@@ -2082,6 +2092,7 @@ async fn watched_transaction_reuse_is_bounded_to_one_public_query() {
     let mut f = Fixture::new(false, false).await;
     f.receive().await;
     index_fixture(&f);
+    complete_empty_filter_page(&f, 2, 1);
     let probe = Arc::new(WatchedReadProbe {
         storage: f.storage.clone(),
         hash: f.hash.pack(),
@@ -2117,6 +2128,7 @@ async fn watched_transaction_reuse_cannot_mask_a_concurrent_index_revision() {
     let mut f = Fixture::new(false, false).await;
     f.receive().await;
     index_fixture(&f);
+    complete_empty_filter_page(&f, 2, 1);
     let probe = Arc::new(WatchedReadProbe {
         storage: f.storage.clone(),
         hash: f.hash.pack(),
