@@ -10,15 +10,30 @@ async fn maintainer_matched_block_reorg_reaches_idle_scheduler_and_download() {
     clock.set_faketime(START);
     let mut f = Fixture::new();
     let hash = f.block.hash();
-    f.peers
-        .matched_blocks()
-        .write()
-        .await
-        .insert(hash.unpack(), (false, None));
+    // The integrated scheduler restores this cache from validated durable
+    // coverage, so seed the fixture through the same production writer.
+    let revision = crate::storage::canonical::coverage::scripts_revision(&f.storage).unwrap();
+    crate::storage::canonical::coverage::save_filters(
+        &f.storage,
+        1,
+        1,
+        vec![(1, hash.clone())],
+        revision,
+    )
+    .unwrap();
     f.protocol
         .notify(f.context.context(), GET_IDLE_BLOCKS_TOKEN)
         .await;
     assert!(!slot_is_empty(&f, Kind::Header, f.peer));
+    let old_request = Captured::get(&f, Kind::Header, f.peer);
+    let matched = f.peers.matched_blocks().read().await;
+    assert_eq!(
+        f.peers.get_matched_blocks_to_prove(&matched, 10),
+        Vec::<packed::Byte32>::new(),
+        "an active request must prevent duplicate scheduling"
+    );
+    assert_eq!(matched.get(&hash.unpack()), Some(&(false, None)));
+    drop(matched);
     assert!(f
         .peers
         .get_peer(&f.peer)
@@ -28,17 +43,27 @@ async fn maintainer_matched_block_reorg_reaches_idle_scheduler_and_download() {
         .should_get_blocks());
     f.receive(f.negative(Kind::Header, changed_hint(&f, 907), vec![]))
         .await;
-    assert!(slot_is_empty(&f, Kind::Header, f.peer));
+    old_request.assert_same(&Captured::get(&f, Kind::Header, f.peer));
     let matched = f.peers.matched_blocks().read().await;
     assert_eq!(
         f.peers.get_matched_blocks_to_prove(&matched, 10),
-        vec![hash.clone()]
+        Vec::<packed::Byte32>::new(),
+        "an active request must prevent duplicate scheduling"
     );
+    assert_eq!(matched.get(&hash.unpack()), Some(&(false, None)));
     drop(matched);
     f.protocol
         .notify(f.context.context(), GET_IDLE_BLOCKS_TOKEN)
         .await;
-    assert!(slot_is_empty(&f, Kind::Header, f.peer));
+    old_request.assert_same(&Captured::get(&f, Kind::Header, f.peer));
+
+    clock.set_faketime(START + MESSAGE_TIMEOUT + 1);
+    f.protocol
+        .notify(f.context.context(), REFRESH_PEERS_TOKEN)
+        .await;
+    let expired_peer = f.peer;
+    deliver_disconnects(&mut f, expired_peer).await;
+
     let survivor = PeerIndex::new(2);
     connect_proved(&mut f, survivor).await;
     f.protocol
@@ -169,11 +194,14 @@ async fn single_peer_reorg(kind: Kind) {
         .update_last_state(&difficulty, &old_tip, &[f.block.header()]);
     let hash = f.hash(kind);
     f.arm(kind, &hash).await;
+    let old_request = Captured::get(&f, kind, f.peer);
+    let old_fetch = fetch_state(&f, kind);
     f.receive(f.negative(kind, new_wire.clone(), vec![])).await;
-    assert!(slot_is_empty(&f, kind, f.peer));
-    assert_eligible(&f, kind, true);
+    old_request.assert_same(&Captured::get(&f, kind, f.peer));
+    assert_eq!(fetch_state(&f, kind), old_fetch);
+    assert_eligible(&f, kind, false);
     f.tick().await;
-    assert!(slot_is_empty(&f, kind, f.peer));
+    old_request.assert_same(&Captured::get(&f, kind, f.peer));
     f.protocol
         .notify(f.context.context(), REFRESH_PEERS_TOKEN)
         .await;
@@ -204,6 +232,8 @@ async fn single_peer_reorg(kind: Kind) {
         new_wire.header().as_slice(),
         "last-state proof did not accept reorg"
     );
+    assert!(slot_is_empty(&f, kind, f.peer));
+    assert_eligible(&f, kind, true);
     f.wire = new_wire;
     f.proof = mmr
         .gen_proof(vec![leaf_index_to_pos(1)])
@@ -275,7 +305,7 @@ async fn maintainer_block_handler_rechecks_owner_after_lock_await() {
     assert!(!slot_is_empty(&f, Kind::Header, peer));
 }
 
-async fn prompt_reorg(kind: Kind) {
+async fn reorg_request_recovers_after_bounded_timeout(kind: Kind) {
     let clock = faketime();
     clock.set_faketime(START);
     let mut f = Fixture::new();
@@ -287,42 +317,119 @@ async fn prompt_reorg(kind: Kind) {
     f.receive(f.negative(kind, hint.clone(), vec![])).await;
     assert_eq!(observed(&f), hint.header().as_slice());
     assert_eq!(accepted_state(&f), accepted);
-    assert!(
-        slot_is_empty(&f, kind, f.peer),
-        "honest reorg left request busy"
-    );
-    assert_eligible(&f, kind, true);
+    old.assert_same(&Captured::get(&f, kind, f.peer));
+    assert_eligible(&f, kind, false);
     assert!(f.context.not_banned(f.peer));
     assert!(f.context.take_disconnects().is_empty());
-    // No repeated requests for an anchor the peer just reported unavailable.
+    let before_hint_replay = fetch_state(&f, kind);
     f.context.sent_messages().borrow_mut().clear();
     for _ in 0..3 {
-        f.tick().await;
-        assert!(slot_is_empty(&f, kind, f.peer));
-        assert_eligible(&f, kind, true);
+        f.receive(f.negative(kind, hint.clone(), vec![])).await;
+        old.assert_same(&Captured::get(&f, kind, f.peer));
+        assert_eq!(fetch_state(&f, kind), before_hint_replay);
+        assert_eq!(accepted_state(&f), accepted);
     }
+    clock.set_faketime(START + MESSAGE_TIMEOUT);
+    f.protocol
+        .notify(f.context.context(), REFRESH_PEERS_TOKEN)
+        .await;
+    assert!(f.context.take_disconnects().is_empty());
+    assert_eligible(&f, kind, false);
+    clock.set_faketime(START + MESSAGE_TIMEOUT + 1);
     let survivor = PeerIndex::new(2);
     connect_proved(&mut f, survivor).await;
+    f.protocol
+        .notify(f.context.context(), REFRESH_PEERS_TOKEN)
+        .await;
+    assert_eligible(&f, kind, true);
+    let expired_peer = f.peer;
+    deliver_disconnects(&mut f, expired_peer).await;
     retry_and_complete(&mut f, kind, survivor).await;
-    assert!(f.context.not_banned(f.peer));
     assert!(f.context.take_disconnects().is_empty());
-    // An old asynchronous completion cannot affect an identical replacement.
     assert!(!old.finish(&f, f.peer, true));
 }
 
 #[tokio::test]
-async fn maintainer_block_reorg_recovers_promptly() {
-    prompt_reorg(Kind::Header).await;
+async fn maintainer_block_reorg_recovers_after_bounded_timeout() {
+    reorg_request_recovers_after_bounded_timeout(Kind::Header).await;
 }
 #[tokio::test]
-async fn maintainer_transaction_reorg_recovers_promptly() {
-    prompt_reorg(Kind::Transaction).await;
+async fn maintainer_transaction_reorg_recovers_after_bounded_timeout() {
+    reorg_request_recovers_after_bounded_timeout(Kind::Transaction).await;
+}
+
+async fn reorg_request_recovers_after_timeout_with_reconnected_peer(kind: Kind) {
+    let clock = faketime();
+    clock.set_faketime(START);
+    let mut f = Fixture::new();
+    let hash = f.hash(kind);
+    f.arm(kind, &hash).await;
+    let old = Captured::get(&f, kind, f.peer);
+    let hint = changed_hint(&f, 909);
+    f.receive(f.negative(kind, hint.clone(), vec![])).await;
+    old.assert_same(&Captured::get(&f, kind, f.peer));
+
+    clock.set_faketime(START + MESSAGE_TIMEOUT + 1);
+    f.protocol
+        .notify(f.context.context(), REFRESH_PEERS_TOKEN)
+        .await;
+    let peer = f.peer;
+    deliver_disconnects(&mut f, peer).await;
+    assert_eligible(&f, kind, true);
+
+    connect_proved(&mut f, peer).await;
+    f.context.sent_messages().borrow_mut().clear();
+    f.tick().await;
+    assert!(f
+        .context
+        .sent_messages()
+        .borrow()
+        .iter()
+        .any(|(_, index, bytes)| {
+            if *index != peer {
+                return false;
+            }
+            match (
+                kind,
+                packed::LightClientMessageReader::from_compatible_slice(bytes)
+                    .unwrap()
+                    .to_enum(),
+            ) {
+                (Kind::Header, packed::LightClientMessageUnionReader::GetBlocksProof(request)) => {
+                    request.block_hashes().as_slice() == vec![hash.clone()].pack().as_slice()
+                }
+                (
+                    Kind::Transaction,
+                    packed::LightClientMessageUnionReader::GetTransactionsProof(request),
+                ) => request.tx_hashes().as_slice() == vec![hash.clone()].pack().as_slice(),
+                _ => false,
+            }
+        }));
+    assert!(!old.finish(&f, peer, true));
+    assert!(!slot_is_empty(&f, kind, peer));
+    let reply = f.positive(kind, f.wire.clone(), false);
+    f.protocol
+        .received(f.context.context(), peer, reply.as_bytes())
+        .await;
+    assert!(slot_is_empty(&f, kind, peer));
+    assert!(f.present(kind));
+    assert!(f.context.not_banned(peer));
+    assert!(f.context.take_disconnects().is_empty());
+}
+
+#[tokio::test]
+async fn maintainer_block_reorg_recovers_after_timeout_and_reconnect() {
+    reorg_request_recovers_after_timeout_with_reconnected_peer(Kind::Header).await;
+}
+
+#[tokio::test]
+async fn maintainer_transaction_reorg_recovers_after_timeout_and_reconnect() {
+    reorg_request_recovers_after_timeout_with_reconnected_peer(Kind::Transaction).await;
 }
 
 #[derive(Clone, Copy, Debug)]
 enum Bad {
     ExtraData,
-    ReplayedHint,
     InvalidHint,
     Extra,
     Subset,
@@ -377,7 +484,6 @@ fn unwanted(f: &Fixture, kind: Kind, bad: Bad) -> packed::LightClientMessage {
             }
             _ => unreachable!(),
         },
-        Bad::ReplayedHint => f.negative(kind, changed_hint(f, 905), vec![]),
         Bad::InvalidHint => f.negative(
             kind,
             changed_hint(f, 906)
@@ -466,11 +572,6 @@ async fn rejection(kind: Kind, cases: &[Bad]) {
         let mut f = Fixture::new();
         let hash = f.hash(kind);
         f.arm(kind, &hash).await;
-        if matches!(bad, Bad::ReplayedHint) {
-            f.receive(unwanted(&f, kind, bad)).await;
-            assert!(slot_is_empty(&f, kind, f.peer));
-            assert_eligible(&f, kind, true);
-        }
         if matches!(bad, Bad::Unsolicited) {
             f.receive(f.positive(kind, f.wire.clone(), false)).await;
             assert!(slot_is_empty(&f, kind, f.peer));
@@ -478,12 +579,11 @@ async fn rejection(kind: Kind, cases: &[Bad]) {
             let survivor = PeerIndex::new(2);
             connect_proved(&mut f, survivor).await;
         }
-        let owner = (!matches!(bad, Bad::Unsolicited | Bad::ReplayedHint))
-            .then(|| Captured::get(&f, kind, f.peer));
+        let owner = (!matches!(bad, Bad::Unsolicited)).then(|| Captured::get(&f, kind, f.peer));
         let accepted = accepted_state(&f);
         let observed_before = observed(&f);
         let expected = match bad {
-            Bad::Unsolicited | Bad::ReplayedHint => StatusCode::PeerIsNotOnProcess,
+            Bad::Unsolicited => StatusCode::PeerIsNotOnProcess,
             Bad::InvalidHint => StatusCode::InvalidChainRoot,
             _ => StatusCode::UnexpectedResponse,
         };
@@ -514,7 +614,7 @@ async fn rejection(kind: Kind, cases: &[Bad]) {
         );
         deliver_ban(&mut f).await;
         let survivor = PeerIndex::new(2);
-        if owner.is_some() || matches!(bad, Bad::ReplayedHint) {
+        if owner.is_some() {
             assert_eligible(&f, kind, true);
             connect_proved(&mut f, survivor).await;
             retry_and_complete(&mut f, kind, survivor).await;
@@ -587,6 +687,126 @@ async fn maintainer_transaction_different_anchor_data_is_penalized() {
 #[tokio::test]
 async fn maintainer_forged_and_replayed_hints_are_bounded() {
     for kind in KINDS {
-        rejection(kind, &[Bad::InvalidHint, Bad::ReplayedHint]).await;
+        rejection(kind, &[Bad::InvalidHint]).await;
+        let clock = faketime();
+        clock.set_faketime(START);
+        let mut f = Fixture::new();
+        let hash = f.hash(kind);
+        f.arm(kind, &hash).await;
+        let owner = Captured::get(&f, kind, f.peer);
+        let before_fetch = fetch_state(&f, kind);
+        let before_accepted = accepted_state(&f);
+        let hint = changed_hint(&f, 905);
+        for _ in 0..11 {
+            f.receive(f.negative(kind, hint.clone(), vec![])).await;
+            owner.assert_same(&Captured::get(&f, kind, f.peer));
+            assert_eq!(fetch_state(&f, kind), before_fetch);
+            assert_eq!(accepted_state(&f), before_accepted);
+            assert!(f.context.not_banned(f.peer));
+            assert!(f.context.take_disconnects().is_empty());
+        }
+    }
+}
+
+#[tokio::test]
+async fn maintainer_hashless_hint_after_replacement_preserves_current_owner() {
+    let clock = faketime();
+    clock.set_faketime(START);
+    for kind in KINDS {
+        // Exercise an identical replacement, an unrelated anchor, and a
+        // replacement whose anchor equals the delayed hint's tip.
+        for replacement_mode in 0..3 {
+            let mut f = Fixture::new();
+            let hash = f.hash(kind);
+            f.arm(kind, &hash).await;
+            let old = Captured::get(&f, kind, f.peer);
+            let hint = changed_hint(&f, 908);
+            assert_eq!(
+                hint.header().into_view().number(),
+                f.wire.header().into_view().number(),
+                "competing hint must have the same height"
+            );
+            assert_eq!(
+                hint.parent_chain_root().as_slice(),
+                f.wire.parent_chain_root().as_slice(),
+                "competing hint must share the same parent-chain work"
+            );
+            assert_eq!(
+                hint.header().into_view().compact_target(),
+                f.wire.header().into_view().compact_target(),
+                "competing hint must have the same work"
+            );
+            assert_ne!(
+                hint.header().calc_header_hash(),
+                f.wire.header().calc_header_hash()
+            );
+            let hint_anchor = hint.header().calc_header_hash();
+            let delayed_hint = f.negative(kind, hint, vec![]);
+            match kind {
+                Kind::Header => {
+                    let original = match &old {
+                        Captured::Header(request) => request.content.clone(),
+                        _ => unreachable!(),
+                    };
+                    let replacement = match replacement_mode {
+                        0 => original,
+                        1 | 2 => {
+                            let anchor = if replacement_mode == 1 {
+                                packed::Byte32::new([255; 32])
+                            } else {
+                                hint_anchor.clone()
+                            };
+                            packed::GetBlocksProof::new_builder()
+                                .last_hash(anchor)
+                                .block_hashes(vec![hash].pack())
+                                .build()
+                        }
+                        _ => unreachable!(),
+                    };
+                    f.peers
+                        .update_blocks_proof_request(f.peer, Some(replacement), false);
+                }
+                Kind::Transaction => {
+                    let original = match &old {
+                        Captured::Transaction(request) => request.content.clone(),
+                        _ => unreachable!(),
+                    };
+                    let replacement = match replacement_mode {
+                        0 => original,
+                        1 | 2 => {
+                            let anchor = if replacement_mode == 1 {
+                                packed::Byte32::new([255; 32])
+                            } else {
+                                hint_anchor.clone()
+                            };
+                            packed::GetTransactionsProof::new_builder()
+                                .last_hash(anchor)
+                                .tx_hashes(vec![hash].pack())
+                                .build()
+                        }
+                        _ => unreachable!(),
+                    };
+                    f.peers.update_txs_proof_request(f.peer, Some(replacement));
+                }
+            }
+            let current = Captured::get(&f, kind, f.peer);
+            match (&old, &current) {
+                (Captured::Header(old), Captured::Header(current)) => {
+                    assert!(!Arc::ptr_eq(&old.owner, &current.owner));
+                }
+                (Captured::Transaction(old), Captured::Transaction(current)) => {
+                    assert!(!Arc::ptr_eq(&old.owner, &current.owner));
+                }
+                _ => unreachable!(),
+            }
+            let before_fetch = fetch_state(&f, kind);
+            let before_accepted = accepted_state(&f);
+            f.receive(delayed_hint).await;
+            current.assert_same(&Captured::get(&f, kind, f.peer));
+            assert_eq!(fetch_state(&f, kind), before_fetch);
+            assert_eq!(accepted_state(&f), before_accepted);
+            assert!(f.context.not_banned(f.peer));
+            assert!(f.context.take_disconnects().is_empty());
+        }
     }
 }

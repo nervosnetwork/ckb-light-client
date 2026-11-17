@@ -302,27 +302,21 @@ impl<'a> SendLastStateProofProcess<'a> {
             };
 
             // Commit the status if all checks are passed.
-            let prove_state = ProveState::new_from_request(
+            let mut prove_state = ProveState::new_from_request(
                 original_request.to_owned(),
                 reorg_last_headers,
                 last_headers,
             );
 
-            if original_request.if_long_fork_detected() {
-                error!(
-                    "Long fork detected, please check if ckb-light-client is connected to \
-                     the same network ckb node. If you connected ckb-light-client to a dev \
-                     chain for testing purpose you should remove the storage of \
-                     ckb-light-client to recover."
-                );
-                panic!("long fork detected");
-            }
+            prove_state.proved_headers = headers.clone();
 
             let long_fork_detected = !return_if_failed!(
                 self.protocol
                     .commit_prove_state(self.peer_index, prove_state.clone())
                     .await
             );
+
+            self.protocol.request_continuity(self.nc);
 
             if long_fork_detected {
                 let last_header = prove_state.get_last_header();

@@ -67,7 +67,7 @@ async fn unsolicited_reply_without_a_request_is_penalized() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn changed_last_state_hint_releases_request() {
+async fn changed_last_state_hint_preserves_unattributed_request() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -156,7 +156,8 @@ async fn changed_last_state_hint_releases_request() {
         assert!(nc.not_banned(peer_index));
 
         let peer = protocol.get_peer(&peer_index).expect("has peer");
-        assert!(peer.get_blocks_proof_request().is_none());
+        assert!(peer.get_blocks_proof_request().is_some());
+        assert!(nc.sent_messages().borrow().is_empty());
     }
 }
 

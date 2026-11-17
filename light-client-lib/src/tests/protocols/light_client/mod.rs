@@ -1,5 +1,5 @@
 use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};
-use ckb_systemtime::{faketime, unix_time_as_millis};
+use ckb_systemtime::unix_time_as_millis;
 use ckb_types::{
     core::{BlockNumber, EpochNumberWithFraction, HeaderBuilder},
     packed,
@@ -18,7 +18,7 @@ use crate::{
     storage::LightClientStorage,
     tests::{
         prelude::*,
-        utils::{setup, MockChain, MockNetworkContext},
+        utils::{faketime, setup, MockChain, MockNetworkContext},
     },
 };
 
@@ -172,6 +172,10 @@ async fn test_light_client_get_idle_matched_blocks() {
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
     let peer_index = PeerIndex::new(3);
+    let proved_header = HeaderBuilder::default()
+        .number(2u64)
+        .epoch(EpochNumberWithFraction::new(0, 2, 100))
+        .build();
     let tip_header = VerifiableHeader::new(
         HeaderBuilder::default()
             .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
@@ -192,7 +196,26 @@ async fn test_light_client_get_idle_matched_blocks() {
         peers
     };
     let unproved_block_hash = H256(rand::random()).pack();
-    let proved_block_hash = H256(rand::random()).pack();
+    let proved_block_hash = proved_header.hash();
+    // Explicit trusted scheduler checkpoint. A cached boolean alone is not
+    // authenticated membership or a durable watched coverage obligation.
+    crate::storage::canonical::store_proved_header(
+        chain.client_storage(),
+        &crate::storage::HeaderWithExtension {
+            header: proved_header.data(),
+            extension: None,
+        },
+        &chain.client_storage().get_tip_header(),
+    )
+    .unwrap();
+    chain.client_storage().add_positioned_matched_blocks(
+        1,
+        2,
+        vec![
+            (1, unproved_block_hash.clone()),
+            (2, proved_block_hash.clone()),
+        ],
+    );
     let blocks = vec![
         (unproved_block_hash.clone(), false),
         (proved_block_hash.clone(), true),
@@ -239,6 +262,7 @@ async fn test_light_client_get_idle_matched_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn refresh_all_peers() {
+    let faketime_guard = faketime();
     setup();
 
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
@@ -304,7 +328,6 @@ async fn refresh_all_peers() {
     {
         let start_ts = unix_time_as_millis();
         let timeout_ts = start_ts + REFRESH_PEERS_DURATION.as_millis() as u64 + 1;
-        let faketime_guard = faketime();
         faketime_guard.set_faketime(timeout_ts);
 
         protocol.notify(nc.context(), REFRESH_PEERS_TOKEN).await;

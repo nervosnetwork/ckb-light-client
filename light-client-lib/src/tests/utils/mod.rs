@@ -10,6 +10,30 @@ pub(crate) use network_context::MockNetworkContext;
 
 use crate::storage::Storage;
 
+static CLOCK_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// ckb-systemtime's fake clock and enable flag are process-global. Keep every
+/// test that changes them exclusive, including under cargo test's parallel runner.
+pub(crate) struct TestClock {
+    // Drop the fake clock before releasing the lock to the next test.
+    clock: ckb_systemtime::FaketimeGuard,
+    _lock: std::sync::MutexGuard<'static, ()>,
+}
+
+pub(crate) fn faketime() -> TestClock {
+    let lock = CLOCK_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+    TestClock {
+        clock: ckb_systemtime::faketime(),
+        _lock: lock,
+    }
+}
+
+impl TestClock {
+    pub(crate) fn set_faketime(&self, time: u64) {
+        self.clock.set_faketime(time);
+    }
+}
+
 pub(crate) fn setup() {
     let _ = Builder::new()
         .filter_module("ckb_stop_handler", LevelFilter::Off)

@@ -151,6 +151,13 @@ async fn test_send_txs_proof_ok() {
             )
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -306,6 +313,13 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
             .tx_hashes(tx_hashes.clone().pack())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -461,6 +475,13 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
             .tx_hashes(tx_hashes.clone().pack())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -572,6 +593,13 @@ async fn legacy_txs_proof_for_extension_block_is_rejected() {
             .tx_hashes(vec![tx_hash.clone()].pack())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -646,6 +674,13 @@ async fn test_empty_txs_proof(with_unexpected_extension: bool, last_state_change
             })
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -722,6 +757,13 @@ async fn rejects_malformed_v1_extra_fields() {
             .last_hash(last_header.header().calc_header_hash())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();

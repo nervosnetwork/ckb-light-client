@@ -14,11 +14,29 @@ import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { once } from 'node:events';
 
+// Retention is an intentional evidence policy, independent of correctness.
+// A PASS label alone must not hide incomplete execution or process failures.
+export function resultExitCode(result) {
+    return result.executionCompleted === true
+        && result.outcome === 'INVARIANTS_PASS'
+        && !result.error
+        && !result.browserFailure
+        && !result.browserErrors?.length
+        && Array.isArray(result.assertions)
+        && result.assertions.length > 0
+        && result.assertions.every(assertion => assertion.passed === true)
+        && result.chromeExit?.code === 0
+        && result.chromeExit.signal === null
+        && (result.profileRetained === true || result.profileRemoved === true)
+        ? 0 : 1;
+}
+
+async function run() {
 const options = {};
 for (let i = 2; i < process.argv.length; i += 2) {
     const key = process.argv[i];
-    if (!['--runtime', '--browser', '--output'].includes(key) || !process.argv[i + 1]) {
-        throw new Error('Usage: node repro/run.mjs --runtime path/to/dist/index.js [--browser path/to/chrome] [--output NEW-directory]');
+    if (!['--runtime', '--browser', '--output', '--case', '--checkpoint'].includes(key) || !process.argv[i + 1]) {
+        throw new Error('Usage: node repro/run.mjs --runtime path/to/dist/index.js [--browser path/to/chrome] [--output NEW-directory] [--case path/to/test.mjs --checkpoint path/to/native-checkpoint.json]');
     }
     options[key.slice(2)] = process.argv[i + 1];
 }
@@ -55,11 +73,15 @@ const output = resolve(options.output ?? `ckb-repro-${Date.now()}`);
 await mkdir(output); // Refuse any existing output path, including old evidence.
 const profile = await mkdtemp(join(output, 'profile-'));
 const source = dirname(fileURLToPath(import.meta.url));
+const caseBytes=await readFile(options.case ? resolve(options.case) : join(source,'test.mjs'));
 const routes = new Map([
     ['/', { type: 'text/html', data: await readFile(join(source, 'index.html')) }],
-    ['/test.mjs', { type: 'text/javascript', data: await readFile(join(source, 'test.mjs')) }],
+    ['/test.mjs', { type: 'text/javascript', data: caseBytes }],
     ['/runtime.js', { type: 'text/javascript', data: bundle }],
 ]);
+const checkpoint = options.checkpoint ? await readFile(resolve(options.checkpoint)) : null;
+if (checkpoint) routes.set('/rollback-checkpoint.json',{type:'application/json',data:checkpoint});
+const timeoutMs=options.case ? 600000 : 120000;
 const headers = {
     'Cross-Origin-Opener-Policy': 'same-origin',
     'Cross-Origin-Embedder-Policy': 'require-corp',
@@ -75,12 +97,17 @@ const server = createServer((request, response) => {
     response.end(resource?.data);
 });
 let browser, socket;
+let closingBrowser = false;
+let diagnosticSession;
 let chromeStderr = '';
 let result = {
     outcome: 'EXECUTION_ERROR',
     node: process.version,
     platform: process.platform,
     runtimeSha256: digest,
+    testCase: options.case ?? 'test.mjs',
+    testCaseSha256:createHash('sha256').update(caseBytes).digest('hex'),
+    ...(checkpoint ? {checkpointSha256:createHash('sha256').update(checkpoint).digest('hex')} : {}),
 };
 const pending = new Map();
 const browserErrors = [];
@@ -149,6 +176,7 @@ try {
         });
         browser.once('exit', (code, signal) => {
             result.chromeExit = { code, signal };
+            if (!closingBrowser) result.browserFailure = 'Browser exited before runner shutdown';
             clearTimeout(timer);
             reject(new Error(`Chrome exited before debugger startup (code=${code}, signal=${signal})`));
         });
@@ -156,6 +184,9 @@ try {
     socket = new WebSocket(endpoint);
     socket.onmessage = event => {
         const message = JSON.parse(event.data);
+        if (message.method === 'Target.targetCrashed' || message.method === 'Inspector.targetCrashed') {
+            browserErrors.push(`Browser target crashed: ${message.method}`);
+        }
         if (message.method === 'Runtime.exceptionThrown') {
             browserErrors.push(
                 message.params.exceptionDetails.exception?.description
@@ -183,16 +214,29 @@ try {
         socket.onerror = () => reject(new Error('CDP connection failed'));
     });
     const version = await send('Browser.getVersion');
+    await send('Target.setDiscoverTargets', { discover: true });
     result.version = version;
     const { targetId } = await send('Target.createTarget', { url: 'about:blank' });
     const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true });
+    diagnosticSession = sessionId;
     await send('Page.enable', {}, sessionId);
     await send('Runtime.enable', {}, sessionId);
+    await send('Page.addScriptToEvaluateOnNewDocument', { source: `
+        const OriginalWorker = globalThis.Worker;
+        globalThis.Worker = class extends OriginalWorker {
+            constructor(...args) {
+                super(...args);
+                this.addEventListener('error', event => console.error('Worker failed: ' + event.message));
+                this.addEventListener('messageerror', () => console.error('Worker message decoding failed'));
+            }
+        };
+    ` }, sessionId);
     await send('Page.navigate', { url: origin }, sessionId);
     const start = Date.now();
     let observed;
-    while (Date.now() - start < 120000) {
+    while (Date.now() - start < timeoutMs) {
         await new Promise(resolve => setTimeout(resolve, 250));
+        if(browserErrors.length) throw new Error(`Uncaught browser error: ${browserErrors.join('; ')}`);
         const reply = await send('Runtime.evaluate', {
             expression: 'globalThis.repro?.done ? globalThis.repro.results : null',
             returnByValue: true,
@@ -207,12 +251,21 @@ try {
             expression: 'globalThis.repro',
             returnByValue: true,
         }, sessionId)).result.value;
-        throw new Error('Browser test timeout (120 seconds); no correctness verdict');
+        throw new Error(`Browser test timeout (${timeoutMs} ms); no correctness verdict`);
     }
-    result = { ...result, version, headers, ...observed };
+    result = { ...result, version, headers, ...observed, executionCompleted: true };
 } catch (error) {
     result.error = String(error);
+    if (!result.partial && diagnosticSession && socket?.readyState === WebSocket.OPEN) {
+        try {
+            result.partial = (await send('Runtime.evaluate', {
+                expression: '({done:globalThis.repro?.done,startedAt:globalThis.repro?.results?.startedAt,assertions:globalThis.repro?.results?.assertions})',
+                returnByValue: true,
+            }, diagnosticSession)).result.value;
+        } catch {}
+    }
 } finally {
+    closingBrowser = true;
     if (browserErrors.length) {
         result.browserErrors = browserErrors;
     }
@@ -243,6 +296,10 @@ try {
     if (server.listening) {
         await new Promise(resolve => server.close(resolve));
     }
+    if(options.case) {
+        result.profileRetained=true;
+        result.profilePath=profile;
+    } else {
     // Only this mkdtemp-created directory may be removed; never a supplied profile.
     if (dirname(profile) !== output || !profile.startsWith(join(output, 'profile-'))) {
         throw new Error('Cleanup path invariant failed');
@@ -254,7 +311,10 @@ try {
         result.profileRemoved = false;
         result.cleanupNote = 'Browser profile remains inside this new output directory; close diagnostic Chrome and remove that directory manually.';
     }
+    }
     result.chromeStderr = chromeStderr;
+    if (browserErrors.length) result.browserErrors = browserErrors;
+    result.exitCode = resultExitCode(result);
     await writeFile(join(output, 'result.json'), JSON.stringify(result, null, 2));
 }
 console.log(`Runtime: ${result.package ?? 'local source build'}; SHA-256 ${digest}`);
@@ -278,4 +338,9 @@ if (result.error && result.chromeStderr) {
 }
 console.log(`Result saved in newly created directory: ${output}`);
 console.log(`Disposable profile removed: ${result.profileRemoved}`);
-process.exitCode = result.outcome === 'INVARIANTS_PASS' && result.profileRemoved ? 0 : 1;
+process.exitCode = result.exitCode;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+    await run();
+}
