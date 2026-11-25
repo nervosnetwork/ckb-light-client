@@ -76,12 +76,12 @@ class LightClient {
             networkConfigIsJSObject
         } as LightClientWorkerInitializeOptions);
         await new Promise<void>((res, rej) => {
-            this.dbWorker.onmessage = () => res();
-            this.dbWorker.onerror = (evt) => rej(evt);
+            this.dbWorker.on("message",() => res())  ;
+            this.dbWorker.on("error",(evt) => rej(evt));
         });
         await new Promise<void>((res, rej) => {
-            this.lightClientWorker.onmessage = () => res();
-            this.lightClientWorker.onerror = (evt) => rej(evt);
+            this.lightClientWorker.on("message",() => res());
+            this.lightClientWorker.on("error",(evt) => rej(evt));
         });
         (async () => {
             while (!this.stopping) {
@@ -119,14 +119,14 @@ class LightClient {
             });
             return await new Promise((resolve, reject) => {
                 const clean = () => {
-                    this.lightClientWorker.removeEventListener("message", resolveFn);
-                    this.lightClientWorker.removeEventListener("error", errorFn);
+                    this.lightClientWorker.removeListener("message", resolveFn);
+                    this.lightClientWorker.removeListener("error", errorFn);
                 }
-                const resolveFn = (evt: MessageEvent<{ ok: true; data: any } | { ok: false; error: string; }>) => {
-                    if (evt.data.ok === true) {
-                        resolve(evt.data.data);
+                const resolveFn = (evt: { ok: true; data: any } | { ok: false; error: string; }) => {
+                    if (evt.ok === true) {
+                        resolve(evt.data);
                     } else {
-                        reject(evt.data.error);
+                        reject(evt.error);
                     }
                     clean();
 
@@ -136,8 +136,8 @@ class LightClient {
                     clean();
 
                 };
-                this.lightClientWorker.addEventListener("message", resolveFn);
-                this.lightClientWorker.addEventListener("error", errorFn);
+                this.lightClientWorker.on("message", resolveFn);
+                this.lightClientWorker.on("error", errorFn);
             })
         })
 

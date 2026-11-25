@@ -2,10 +2,10 @@
   "compilerOptions": {
     "outDir": "./dist/",
     "noImplicitAny": true,
-    "module": "es6",
+    "module": "nodenext",
     "target": "ES2015",
     "allowJs": true,
-    "moduleResolution": "node",
+    "moduleResolution": "nodenext",
     "sourceMap": true,
     "declaration": true,
     "declarationDir": "dist",
