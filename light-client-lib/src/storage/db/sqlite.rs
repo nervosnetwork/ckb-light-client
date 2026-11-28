@@ -160,6 +160,37 @@ impl BatchWriter for Batch {
 impl StorageBackend for Storage {
     type Batch = Batch;
 
+    fn try_collect_prefix_page(&self, prefix: Vec<u8>, limit: usize) -> Result<Vec<KVPair>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let mut upper = prefix.clone();
+        while let Some(last) = upper.pop() {
+            if last != u8::MAX {
+                upper.push(last + 1);
+                break;
+            }
+        }
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|_| crate::error::Error::runtime("poisoned database lock"))?;
+        let mut statement = conn.prepare(
+            "SELECT key, value FROM kv_store WHERE key >= ? AND key < ? ORDER BY key ASC LIMIT ?",
+        )?;
+        let rows = statement.query_map(
+            rusqlite::params![prefix, upper, i64::try_from(limit).unwrap_or(i64::MAX)],
+            |row| {
+                Ok(KVPair {
+                    key: row.get(0)?,
+                    value: row.get(1)?,
+                })
+            },
+        )?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
     fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>> {
         use rusqlite::OptionalExtension;
         let conn = self
@@ -381,5 +412,39 @@ mod checked_read_tests {
                 1
             )
             .is_err());
+    }
+
+    #[test]
+    fn prefix_page_is_ordered_bounded_and_excludes_neighboring_prefixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        for key in [
+            b"p/1".to_vec(),
+            b"p/2".to_vec(),
+            b"p/3".to_vec(),
+            b"q/1".to_vec(),
+        ] {
+            storage.put(key.clone(), key).unwrap();
+        }
+        let page = storage.try_collect_prefix_page(b"p/".to_vec(), 2).unwrap();
+        assert_eq!(
+            page.iter()
+                .map(|row| row.key.as_slice())
+                .collect::<Vec<_>>(),
+            vec![b"p/1".as_slice(), b"p/2".as_slice()]
+        );
+        let mut batch = storage.batch();
+        for row in page {
+            batch.delete(&row.key);
+        }
+        batch.commit().unwrap();
+        let remaining = storage.try_collect_prefix_page(b"p/".to_vec(), 2).unwrap();
+        assert_eq!(
+            remaining
+                .iter()
+                .map(|row| row.key.as_slice())
+                .collect::<Vec<_>>(),
+            vec![b"p/3".as_slice()]
+        );
     }
 }

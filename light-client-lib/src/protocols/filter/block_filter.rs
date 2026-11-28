@@ -233,6 +233,7 @@ impl FilterProtocol {
                     let tip_header = self.storage.get_tip_header();
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.peers),
+                        &self.storage,
                         &tip_header,
                         &matched_blocks,
                         nc.as_ref(),

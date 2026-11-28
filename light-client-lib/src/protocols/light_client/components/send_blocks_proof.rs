@@ -49,6 +49,9 @@ impl<'a> SendBlocksProofProcess<'a> {
                 false,
             );
         }
+        if status.is_ok() {
+            self.protocol.request_continuity(self.nc);
+        }
         status
     }
 
@@ -148,17 +151,9 @@ impl<'a> SendBlocksProofProcess<'a> {
             .pending_continuity(self.peer_index)
             .filter(|(previous, state)| {
                 *previous == self.protocol.storage().get_tip_header().calc_header_hash()
+                    && !state.needs_genesis_bridge
                     && state.get_last_header().header().hash() == last_header.header().hash()
-                    && original_request.block_hashes()
-                        == vec![if state.needs_genesis_bridge {
-                            self.protocol
-                                .storage()
-                                .get_genesis_block()
-                                .calc_header_hash()
-                                .unpack()
-                        } else {
-                            previous.unpack()
-                        }]
+                    && original_request.block_hashes() == vec![previous.unpack()]
             });
         if pending_bridge.is_none() {
             // The original request slot is retained until this response is drained.
@@ -190,6 +185,30 @@ impl<'a> SendBlocksProofProcess<'a> {
                     self.peer_index
                 );
                 return StatusCode::UnexpectedResponse.into();
+            }
+            if let Some((previous, mut candidate)) = pending_bridge.clone() {
+                if !self
+                    .protocol
+                    .peers()
+                    .owns_blocks_proof_request(self.peer_index, original_request)
+                {
+                    return Status::ok();
+                }
+                if candidate.needs_genesis_bridge {
+                    self.protocol.peers().clear_continuity(self.peer_index);
+                } else if candidate.continuity_retries == 0 {
+                    candidate.continuity_retries = 1;
+                    self.protocol
+                        .peers()
+                        .queue_continuity(self.peer_index, previous, candidate);
+                } else {
+                    candidate.continuity_retries = 0;
+                    candidate.needs_genesis_bridge = true;
+                    self.protocol
+                        .peers()
+                        .queue_continuity(self.peer_index, previous, candidate);
+                }
+                return Status::ok();
             }
         } else {
             // Check PoW for blocks
@@ -229,15 +248,7 @@ impl<'a> SendBlocksProofProcess<'a> {
             ));
 
             if let Some((previous, mut candidate)) = pending_bridge.clone() {
-                let expected = if candidate.needs_genesis_bridge {
-                    self.protocol
-                        .storage()
-                        .get_genesis_block()
-                        .calc_header_hash()
-                } else {
-                    previous
-                };
-                if headers.len() != 1 || headers[0].hash() != expected {
+                if headers.len() != 1 || headers[0].hash() != previous {
                     return StatusCode::InvalidProof.into();
                 }
                 if !self
@@ -270,6 +281,30 @@ impl<'a> SendBlocksProofProcess<'a> {
                 return Status::ok();
             }
             if original_request.should_get_blocks() {
+                let range =
+                    match crate::storage::canonical::coverage::earliest(self.protocol.storage()) {
+                        Ok(range) => range,
+                        Err(error) => {
+                            return StatusCode::InternalError.with_context(error.to_string())
+                        }
+                    };
+                let still_owns_range = match range {
+                    Some(range) => crate::storage::canonical::coverage::scripts_revision(
+                        self.protocol.storage(),
+                    )
+                    .is_ok_and(|revision| original_request.owns_saved_range(&range, revision)),
+                    None => !original_request.has_saved_range_binding(),
+                };
+                if !still_owns_range {
+                    self.protocol.peers().finish_blocks_proof_request(
+                        self.peer_index,
+                        original_request,
+                        false,
+                        false,
+                    );
+                    *retire_request = None;
+                    return Status::ok();
+                }
                 match crate::storage::canonical::coverage::check_headers(
                     self.protocol.storage(),
                     &headers,
@@ -294,7 +329,14 @@ impl<'a> SendBlocksProofProcess<'a> {
                             .clear_matched_blocks(&mut matched_blocks);
                         return match error {
                             crate::storage::canonical::coverage::HeaderCheckError::Mismatch => {
-                                StatusCode::InvalidProof.with_context(error.to_string())
+                                self.protocol.peers().finish_blocks_proof_request(
+                                    self.peer_index,
+                                    original_request,
+                                    true,
+                                    false,
+                                );
+                                *retire_request = None;
+                                Status::ok()
                             }
                             crate::storage::canonical::coverage::HeaderCheckError::Storage(
                                 error,

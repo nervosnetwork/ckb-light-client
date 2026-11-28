@@ -1,13 +1,34 @@
 //! Failure boundaries use real backend batches and reopen the preserved database.
-#[path = "wo44_tests.rs"]
-mod wo44_tests;
-use super::*;
-use crate::storage::{FilterMapFn, KVPair, Storage, TakeWhileFn};
-use ckb_chain_spec::consensus::ConsensusBuilder;
-use ckb_types::core;
+#[path = "coverage_and_ancestry_tests.rs"]
+mod coverage_and_ancestry_tests;
+#[path = "watched_coverage_tests.rs"]
+mod watched_coverage_tests;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
+};
+
+use ckb_chain_spec::consensus::ConsensusBuilder;
+use ckb_types::{
+    core, packed,
+    prelude::{Builder, Entity, IntoBlockView, IntoHeaderView, Pack, Unpack},
+    U256,
+};
+
+use super::super::{
+    accept_with_rollback, anchor_current, begin_index, check_query_context, finish_index, member,
+    member_key, meta, query_context, recover, store_proved_header, store_proved_transaction,
+    transaction, update_state, INDEX_FORMAT, INDEX_UNCERTAIN, INDEX_WRITING, LAST_STATE_KEY,
+    TRANSITION,
+};
+use super::{
+    decode, encode, repair_pending, scan, start_repair, Registration, Repair, ACCEPT, REGISTRATION,
+    REPAIR,
+};
+use crate::error::{Error, Result};
+use crate::storage::{
+    BatchWriter, FilterMapFn, HeaderWithExtension, IteratorDirection, IteratorStart, KVPair, Key,
+    LightClientStorage, ScriptStatus, SetScriptsCommand, Storage, StorageBackend, TakeWhileFn,
 };
 
 struct Fault {
@@ -1752,4 +1773,111 @@ fn positional_no_match_page_commit_before_cursor_publication_recovers_on_reopen(
     assert_eq!(storage.get_filter_scripts()[0].block_number, 2);
     assert!(storage.get(meta(REPAIR)).unwrap().is_none());
     assert_eq!(positional_capacity(&storage).unwrap(), 0);
+}
+
+#[test]
+fn deleted_and_omitted_repair_targets_stay_deleted_after_registration_reopen() {
+    for command in [2u8, 0] {
+        let directory = tempfile::tempdir().unwrap();
+        let storage = Storage::new(directory.path());
+        let consensus = ConsensusBuilder::default().build();
+        let genesis = consensus.genesis_block();
+        storage.init_genesis_block(genesis.data());
+        let script_a = packed::Script::new_builder()
+            .args(b"repair-target-a".as_slice().pack())
+            .build();
+        let script_b = packed::Script::new_builder()
+            .args(b"repair-target-b".as_slice().pack())
+            .build();
+        let status = |script: packed::Script| ScriptStatus {
+            script,
+            script_type: crate::storage::ScriptType::Lock,
+            block_number: 0,
+        };
+        storage.update_filter_scripts(
+            vec![status(script_a.clone()), status(script_b.clone())],
+            SetScriptsCommand::All,
+        );
+        start_repair(&storage, false).unwrap();
+        let bytes = storage.get(meta(REPAIR)).unwrap().unwrap();
+        let mut repair: Repair = decode(&bytes).unwrap();
+        let deleted_key = [
+            meta(super::super::super::FILTER_SCRIPTS_KEY).as_slice(),
+            script_a.as_slice(),
+            &[0],
+        ]
+        .concat();
+        let retained_key = [
+            meta(super::super::super::FILTER_SCRIPTS_KEY).as_slice(),
+            script_b.as_slice(),
+            &[0],
+        ]
+        .concat();
+        let omitted = &deleted_key;
+        repair.targets.retain(|(key, _)| key != omitted);
+        let intent = Registration {
+            scripts: if command == 2 {
+                vec![(script_a.as_slice().to_vec(), 0, 0)]
+            } else {
+                vec![(script_b.as_slice().to_vec(), 0, 0)]
+            },
+            command,
+        };
+        let mut batch = storage.batch();
+        batch.put(&meta(REGISTRATION), &encode(&intent).unwrap());
+        batch.put(&meta(INDEX_WRITING), &[2]);
+        batch.put(&meta(REPAIR), &encode(&repair).unwrap());
+        batch.commit().unwrap();
+        drop(storage);
+
+        let reopened = Storage::new(directory.path());
+        reopened.init_genesis_block(genesis.data());
+        let registered: std::collections::HashSet<_> = reopened
+            .get_filter_scripts()
+            .into_iter()
+            .map(|status| {
+                [
+                    meta(super::super::super::FILTER_SCRIPTS_KEY).as_slice(),
+                    status.script.as_slice(),
+                    &[0],
+                ]
+                .concat()
+            })
+            .collect();
+        assert!(!registered.contains(&deleted_key));
+        if let Some(bytes) = reopened.get(meta(REPAIR)).unwrap() {
+            let repair: Repair = decode(&bytes).unwrap();
+            assert!(repair
+                .targets
+                .iter()
+                .all(|(key, _)| registered.contains(key)));
+            if registered.contains(&retained_key) {
+                assert!(repair.targets.iter().any(|(key, _)| key == &retained_key));
+            }
+        }
+    }
+}
+
+#[test]
+fn proof_unknown_ordinal_does_not_replace_body_ordinal_after_reopen() {
+    let (directory, storage, blocks) = positional_fixture();
+    replay_target_page(&storage, 1, 1, &blocks[..1]);
+    let tx = blocks[0].transactions()[0].data();
+    let header = blocks[0].header();
+    let anchor = storage.get_tip_header();
+    store_proved_transaction(
+        &storage,
+        &tx,
+        u32::MAX,
+        &HeaderWithExtension {
+            header: header.data(),
+            extension: None,
+        },
+        &anchor,
+    )
+    .unwrap();
+    drop(storage);
+    let storage = Storage::new(directory.path());
+    let saved = transaction(&storage, &tx.calc_tx_hash()).unwrap().unwrap();
+    assert_eq!(saved.index, 0);
 }

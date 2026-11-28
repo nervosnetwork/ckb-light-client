@@ -15,6 +15,7 @@ use crate::protocols::{Status, StatusCode};
 struct MockProtocolContext {
     protocol: SupportProtocols,
     sent_messages: RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>>,
+    send_failures: RefCell<usize>,
     banned_peers: RefCell<Vec<(PeerIndex, Duration, String)>>,
     disconnected_peers: RefCell<Vec<PeerIndex>>,
     connected_peers: RefCell<HashSet<PeerIndex>>,
@@ -33,6 +34,7 @@ impl MockProtocolContext {
         Self {
             protocol,
             sent_messages: Default::default(),
+            send_failures: Default::default(),
             banned_peers: Default::default(),
             disconnected_peers: Default::default(),
             connected_peers: Default::default(),
@@ -49,6 +51,10 @@ impl MockNetworkContext {
 
     pub(crate) fn sent_messages(&self) -> &RefCell<Vec<(ProtocolId, PeerIndex, P2pBytes)>> {
         &self.inner.sent_messages
+    }
+
+    pub(crate) fn fail_next_send(&self) {
+        *self.inner.send_failures.borrow_mut() += 1;
     }
 
     fn banned_peers(&self) -> &RefCell<Vec<(PeerIndex, Duration, String)>> {
@@ -193,6 +199,11 @@ impl CKBProtocolContext for MockProtocolContext {
         peer_index: PeerIndex,
         data: P2pBytes,
     ) -> Result<(), Error> {
+        let mut send_failures = self.send_failures.borrow_mut();
+        if *send_failures != 0 {
+            *send_failures -= 1;
+            return Err(std::io::Error::other("mock send failure").into());
+        }
         self.sent_messages
             .borrow_mut()
             .push((proto_id, peer_index, data));

@@ -1,22 +1,32 @@
 //! Deterministic protocol tests: an explicitly trusted fixture anchor and DummyPoW
 //! consensus, with real response PoW/MMR/Merkle processing. Not a real-chain reorg.
 #![cfg(not(target_arch = "wasm32"))]
+use std::sync::Arc;
+
 use ckb_chain_spec::consensus::{Consensus, ConsensusBuilder};
 pub use ckb_light_client_lib::protocols;
 use ckb_light_client_lib::{
     protocols::{LastState, LightClientProtocol, Peers, PendingTxs, ProveRequest, ProveState},
-    service::{FetchStatus, LightClientChainService},
-    storage::{LightClientStorage, Storage, StorageWithChainData},
+    service::{FetchStatus, LightClientChainService, LightClientService, Order, SearchKey},
+    storage::{
+        BatchWriter, FilterMapFn, HeaderWithExtension, IteratorDirection, IteratorStart, KVPair,
+        Key, LightClientStorage, ScriptStatus, ScriptType, SetScriptsCommand, Storage,
+        StorageBackend, StorageWithChainData, TakeWhileFn,
+    },
 };
 use ckb_merkle_mountain_range::{leaf_index_to_pos, util::MemMMR};
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_types::{
-    core, packed,
-    prelude::*,
+    core,
+    core::cell::{CellProvider, CellStatus},
+    packed,
+    prelude::{
+        Builder, Entity, IntoBlockView, IntoHeaderView, IntoTransactionView, Pack, PackVec, Unpack,
+    },
     utilities::merkle_mountain_range::{MergeHeaderDigest, VerifiableHeader},
     U256,
 };
-use std::sync::Arc;
+
 // Reused transport has helpers for other protocol suites.
 #[allow(dead_code)]
 #[path = "../src/tests/utils/network_context.rs"]
@@ -37,14 +47,6 @@ struct Fixture {
     extra_block: Option<core::BlockView>,
     containing_block: core::BlockView,
 }
-
-use ckb_light_client_lib::{
-    service::{LightClientService, Order, SearchKey},
-    storage::{
-        HeaderWithExtension, Key, ScriptStatus, ScriptType, SetScriptsCommand, StorageBackend,
-    },
-};
-use ckb_types::core::cell::{CellProvider, CellStatus};
 
 fn fetch_info(f: &Fixture, hash: &ckb_types::H256, header: bool) -> (u64, u64, bool) {
     let swc = StorageWithChainData::new(
@@ -651,6 +653,45 @@ async fn accepted_fork_case(unbound_window: bool, interrupted: bool) {
     protocol
         .received(context.context(), peer, response.as_bytes())
         .await;
+    assert_eq!(storage.get_tip_header().calc_header_hash(), old[2].0.hash());
+    let recovery = context
+        .sent_messages()
+        .borrow()
+        .iter()
+        .rev()
+        .find_map(|(_, _, bytes)| {
+            match packed::LightClientMessage::from_slice(bytes)
+                .ok()?
+                .to_enum()
+            {
+                packed::LightClientMessageUnion::GetLastStateProof(request) => Some(request),
+                _ => None,
+            }
+        })
+        .expect("sampled replacement request");
+    assert_eq!(recovery.start_hash(), genesis.hash());
+    assert_eq!(recovery.last_hash(), new[3].0.hash());
+    assert!(recovery.difficulties().is_empty());
+    let genesis_wire = packed::VerifiableHeader::new_builder()
+        .header(genesis.data())
+        .build();
+    let mut headers = vec![genesis_wire];
+    headers.extend(new[..3].iter().map(|(_, header)| wire(header)));
+    let proof = mmr
+        .gen_proof((0..4).map(leaf_index_to_pos).collect())
+        .unwrap();
+    let response = packed::LightClientMessage::new_builder()
+        .set(
+            packed::SendLastStateProof::new_builder()
+                .last_header(wire(&new[3].1))
+                .proof(proof.proof_items().to_vec().pack())
+                .headers(headers.pack())
+                .build(),
+        )
+        .build();
+    protocol
+        .received(context.context(), peer, response.as_bytes())
+        .await;
     assert_eq!(
         storage.get_tip_header().calc_header_hash(),
         new[3].0.hash(),
@@ -816,12 +857,9 @@ async fn watched_spend_case(_fail_finish: bool, multi: bool) {
             .value(),
         0
     );
-    assert!(
-        queries(&f)
-            .get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .is_err(),
-        "unrestricted history remains fenced while the accepted-tip suffix is uncovered"
-    );
+    queries(&f)
+        .get_transactions(key(), Order::Asc, 100u32.into(), None)
+        .expect("completed prefix is queryable");
     let spending_hash = block.transactions()[0].hash().unpack();
     assert_eq!(
         serde_json::to_value(f.service.get_transaction(&spending_hash)).unwrap()["tx_status"]
@@ -1181,15 +1219,29 @@ async fn watched_queries_require_bound_history_and_rollback_removes_cells() {
     f.receive().await;
     index_fixture(&f);
     let q = queries(&f);
-    assert!(q.get_cells(key(), Order::Asc, 100u32.into(), None).is_err());
-    assert!(q
-        .get_transactions(key(), Order::Asc, 100u32.into(), None)
-        .is_err());
+    assert_eq!(
+        q.get_cells(key(), Order::Asc, 100u32.into(), None)
+            .unwrap()
+            .objects
+            .len(),
+        1
+    );
+    assert_eq!(
+        q.get_transactions(key(), Order::Asc, 100u32.into(), None)
+            .unwrap()
+            .objects
+            .len(),
+        1
+    );
     let mut grouped = key();
     grouped.group_by_transaction = Some(true);
-    assert!(q
-        .get_transactions(grouped, Order::Asc, 100u32.into(), None)
-        .is_err());
+    assert_eq!(
+        q.get_transactions(grouped, Order::Asc, 100u32.into(), None)
+            .unwrap()
+            .objects
+            .len(),
+        1
+    );
     assert_eq!(q.get_cells_capacity(key()).unwrap().capacity.value(), 100);
     f.storage.rollback_to_block(1);
     assert!(f
@@ -1212,9 +1264,11 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
 
             let script_a = transaction(&f).raw().outputs().get(0).unwrap().lock();
             let script_b = packed::Script::new_builder()
+                .code_hash(packed::Byte32::new([41; 32]))
                 .args(b"new-script-birthday-40".to_vec().pack())
                 .build();
             let script_c = packed::Script::new_builder()
+                .code_hash(packed::Byte32::new([42; 32]))
                 .args(b"sparse-header-after-birthday-0".to_vec().pack())
                 .build();
 
@@ -1325,14 +1379,17 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
                 assert_eq!(capacity.block_number.value(), 100);
                 assert_eq!(capacity.block_hash, tip.hash().unpack());
             };
-            let assert_b_fenced = |service: &LightClientService<Storage>| {
+            let assert_b_prefix = |service: &LightClientService<Storage>| {
                 assert!(service
                     .get_cells(search(&script_b), Order::Asc, 100u32.into(), None)
-                    .is_err());
+                    .unwrap()
+                    .objects
+                    .is_empty());
                 assert!(service
                     .get_transactions(search(&script_b), Order::Asc, 100u32.into(), None)
-                    .is_err());
-                assert!(service.get_cells_capacity(search(&script_b)).is_err());
+                    .unwrap()
+                    .objects
+                    .is_empty());
             };
             let sparse_header_hash = f.containing_block.hash().unpack();
             let assert_sparse_snapshot = |service: &LightClientService<Storage>| {
@@ -1343,7 +1400,7 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
             };
 
             assert_a_available(&service);
-            assert_b_fenced(&service);
+            assert_b_prefix(&service);
             assert_sparse_snapshot(&service);
 
             // The unproved page survives a restart. All-unmatched pages are
@@ -1360,7 +1417,7 @@ async fn multi_script_pending_coverage_only_fences_the_behind_script() {
                 Some(0u64.to_be_bytes().to_vec())
             );
             assert_a_available(&service);
-            assert_b_fenced(&service);
+            assert_b_prefix(&service);
             assert_sparse_snapshot(&service);
             if !matched {
                 f.storage.update_block_number(100);
@@ -2326,9 +2383,6 @@ async fn matching_invalid_proof_requeues_fetch_before_retiring_request() {
 
 // Faults happen BEFORE the selected atomic write; earlier committed stages survive.
 // This models process loss at those persistence boundaries without changing production code.
-use ckb_light_client_lib::storage::{
-    BatchWriter, FilterMapFn, IteratorDirection, IteratorStart, KVPair, TakeWhileFn,
-};
 struct InvestigationFaultStorage {
     storage: Storage,
     fail_prefix: Vec<u8>,
@@ -2585,12 +2639,9 @@ async fn recovery_watched_spend_case(_fail_finish: bool, multi: bool) {
             .value(),
         0
     );
-    assert!(
-        queries(&f)
-            .get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .is_err(),
-        "unrestricted history remains fenced while the accepted-tip suffix is uncovered"
-    );
+    queries(&f)
+        .get_transactions(key(), Order::Asc, 100u32.into(), None)
+        .expect("completed prefix is queryable");
     let spending_hash = block.transactions()[0].hash().unpack();
     assert_eq!(
         serde_json::to_value(f.service.get_transaction(&spending_hash)).unwrap()["tx_status"]
@@ -3139,12 +3190,9 @@ async fn recovery_missing_rows_case(keep_old_format: bool) {
             .value(),
         0
     );
-    assert!(
-        queries(&f)
-            .get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .is_err(),
-        "unrestricted history remains fenced while the accepted-tip suffix is uncovered"
-    );
+    queries(&f)
+        .get_transactions(key(), Order::Asc, 100u32.into(), None)
+        .expect("completed prefix is queryable");
     assert!(f
         .storage
         .get(Key::Meta("INDEX_REPAIR_V2").into_vec())
@@ -3358,12 +3406,9 @@ async fn recovery_script_rewind_restores_only_its_authenticated_capacity_prefix(
     assert_eq!(capacity.capacity.value(), 100);
     assert_eq!(capacity.block_number.value(), block_number);
     assert_eq!(capacity.block_hash, block_hash);
-    assert!(
-        queries(&f)
-            .get_transactions(key(), Order::Asc, 100u32.into(), None)
-            .is_err(),
-        "capacity prefix does not make incomplete history complete"
-    );
+    queries(&f)
+        .get_transactions(key(), Order::Asc, 100u32.into(), None)
+        .expect("completed prefix is queryable");
     let other_search = || SearchKey {
         script: other.clone().into(),
         ..SearchKey::default()

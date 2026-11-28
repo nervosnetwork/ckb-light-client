@@ -166,6 +166,7 @@ pub(crate) fn index_downloaded_blocks(
 
 pub(crate) fn prove_or_download_matched_blocks(
     peers: Arc<Peers>,
+    storage: &Storage,
     best_tip: &packed::Header,
     matched_blocks: &HashMap<H256, (bool, Option<packed::Block>)>,
     nc: &dyn CKBProtocolContext,
@@ -203,7 +204,20 @@ pub(crate) fn prove_or_download_matched_blocks(
         let message = packed::LightClientMessage::new_builder()
             .set(content.clone())
             .build();
-        peers.update_blocks_proof_request(peer_index, Some(content), true);
+        if let (Some(range), Ok(revision)) = (
+            storage.get_earliest_matched_blocks(),
+            canonical::coverage::scripts_revision(storage),
+        ) {
+            peers.update_matched_blocks_proof_request(
+                peer_index,
+                content,
+                range.start_number,
+                range.blocks_count,
+                revision,
+            );
+        } else {
+            peers.update_blocks_proof_request(peer_index, Some(content), true);
+        }
         if let Err(error) = nc.send_message(
             SupportProtocols::LightClient.protocol_id(),
             peer_index,

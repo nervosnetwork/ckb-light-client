@@ -150,6 +150,15 @@ impl<'a> SendTransactionsProofProcess<'a> {
         }
         *retire_request = Some(original_request.clone());
 
+        let matched_blocks = self.protocol.peers().matched_blocks();
+        let _matched_blocks = matched_blocks.write().await;
+        if !self
+            .protocol
+            .peers()
+            .owns_txs_proof_request(self.peer_index, original_request)
+        {
+            return Status::ok();
+        }
         // The original request slot is retained until this response is drained.
         // A valid old-fork response must neither complete a fetch nor mark it missing.
         match crate::storage::canonical::anchor_current(

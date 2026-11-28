@@ -1,8 +1,29 @@
-use super::*;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
+
+use ckb_chain_spec::consensus::ConsensusBuilder;
+use ckb_types::{
+    core, packed,
+    prelude::{IntoHeaderView, Unpack},
+    U256,
+};
+
+use super::super::super::{meta, update_state, INDEX_FORMAT, LAST_STATE_KEY, RECOVERY_FORMAT};
+use super::{
+    positional_capacity, positional_fixture, positional_fixture_at, query_context,
+    replay_target_page, snapshot_target_rows, Fault,
+};
+use crate::error::{Error, Result};
 use crate::storage::canonical::coverage;
+use crate::storage::{
+    FilterMapFn, IteratorDirection, IteratorStart, KVPair, Key, LightClientStorage, Storage,
+    StorageBackend, TakeWhileFn,
+};
 
 #[test]
-fn wo44_ambiguous_tail_behind_current_forward_range_stays_fenced() {
+fn ambiguous_tail_behind_current_forward_range_stays_fenced() {
     let (_directory, storage, blocks) = positional_fixture();
     replay_target_page(&storage, 1, 1, &blocks[..1]);
     let revision = coverage::scripts_revision(&storage).unwrap();
@@ -17,7 +38,7 @@ fn wo44_ambiguous_tail_behind_current_forward_range_stays_fenced() {
 }
 
 #[test]
-fn wo44_pending_anchor_carry_and_acceptance_are_one_atomic_commit() {
+fn pending_anchor_carry_and_acceptance_are_one_atomic_commit() {
     for after in [false, true] {
         let (directory, storage, blocks) = positional_fixture();
         let revision = coverage::scripts_revision(&storage).unwrap();
@@ -61,7 +82,7 @@ fn wo44_pending_anchor_carry_and_acceptance_are_one_atomic_commit() {
 }
 
 #[test]
-fn wo44_rechecked_inflight_headers_are_local_staleness_not_bad_proof() {
+fn rechecked_inflight_headers_are_local_staleness_not_bad_proof() {
     let (_directory, storage, blocks) = positional_fixture();
     let revision = coverage::scripts_revision(&storage).unwrap();
     coverage::save_filters(&storage, 1, 1, vec![(1, blocks[0].hash())], revision).unwrap();
@@ -80,7 +101,7 @@ fn wo44_rechecked_inflight_headers_are_local_staleness_not_bad_proof() {
 }
 
 #[test]
-fn wo44_current_position_mismatch_still_rejects_and_refilters() {
+fn current_position_mismatch_still_rejects_and_refilters() {
     let (_directory, storage, blocks) = positional_fixture();
     let revision = coverage::scripts_revision(&storage).unwrap();
     coverage::save_filters(&storage, 1, 1, vec![(1, blocks[0].hash())], revision).unwrap();
@@ -93,7 +114,7 @@ fn wo44_current_position_mismatch_still_rejects_and_refilters() {
 }
 
 #[test]
-fn wo44_pending_anchor_survives_150_linear_acceptances_reopen_but_not_fork() {
+fn pending_anchor_survives_150_linear_acceptances_reopen_but_not_fork() {
     let (directory, storage, blocks) = positional_fixture();
     let revision = coverage::scripts_revision(&storage).unwrap();
     coverage::save_filters(&storage, 1, 1, vec![(1, blocks[0].hash())], revision).unwrap();
@@ -164,7 +185,7 @@ fn wo44_pending_anchor_survives_150_linear_acceptances_reopen_but_not_fork() {
 }
 
 #[test]
-fn wo44_forward_pending_work_preserves_certified_prefix_but_recheck_fences_it() {
+fn forward_pending_work_preserves_certified_prefix_but_recheck_fences_it() {
     let (_directory, storage, blocks) = positional_fixture();
     replay_target_page(&storage, 1, 1, &blocks[..1]);
     assert_eq!(positional_capacity(&storage).unwrap(), 100);
@@ -195,7 +216,7 @@ fn wo44_forward_pending_work_preserves_certified_prefix_but_recheck_fences_it() 
 }
 
 #[test]
-fn wo44_legacy_cursor_is_not_a_birth_or_complete_membership_certificate() {
+fn legacy_cursor_is_not_a_birth_or_complete_membership_certificate() {
     let (directory, storage, blocks) = positional_fixture();
     replay_target_page(&storage, 1, 1, &blocks[..1]);
     let primary = storage
@@ -273,7 +294,7 @@ impl StorageBackend for Reads {
 impl LightClientStorage for Reads {}
 
 #[test]
-fn wo44_history_page_does_not_validate_2000_irrelevant_tail_transactions() {
+fn history_page_does_not_validate_2000_irrelevant_tail_transactions() {
     use crate::service::{LightClientService, Order, SearchKey};
     let directory = tempfile::tempdir().unwrap();
     let (storage, blocks) = positional_fixture_at(directory.path(), true);
@@ -328,7 +349,7 @@ fn wo44_history_page_does_not_validate_2000_irrelevant_tail_transactions() {
 }
 
 #[test]
-fn wo44_history_filters_and_page_continuation_preserve_canonical_results() {
+fn history_filters_and_page_continuation_preserve_canonical_results() {
     use crate::service::{LightClientService, Order, SearchKey, SearchKeyFilter};
     let directory = tempfile::tempdir().unwrap();
     let (storage, blocks) = positional_fixture_at(directory.path(), true);
@@ -386,7 +407,7 @@ fn wo44_history_filters_and_page_continuation_preserve_canonical_results() {
 }
 
 #[test]
-fn wo44_pending_range_scan_failure_propagates_without_panicking() {
+fn pending_range_scan_failure_propagates_without_panicking() {
     let (_directory, storage, _) = positional_fixture();
     let before = snapshot_target_rows(&storage);
     let fault = Reads {

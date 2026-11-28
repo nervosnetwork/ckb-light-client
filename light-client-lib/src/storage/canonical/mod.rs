@@ -3,21 +3,24 @@
 //! Proof anchor checks and commits require the existing single accepting protocol
 //! handler. They are synchronous and do not form a database compare-and-swap.
 //! Acceptance and watched indexing also share the matched-block write lock.
+use ckb_types::{
+    core::HeaderView,
+    packed,
+    prelude::{Entity, IntoHeaderView, Unpack},
+    U256,
+};
+
 use super::{
     extract_raw_data, BatchWriter, HeaderWithExtension, IteratorDirection, IteratorStart, Key,
     KeyPrefix, StorageBackend, Value, LAST_STATE_KEY,
 };
 use crate::error::{Error, Result};
-use ckb_types::{core::HeaderView, packed, prelude::*, U256};
 
-#[path = "canonical/coverage.rs"]
 pub(crate) mod coverage;
-#[path = "canonical/ordinals.rs"]
 mod ordinals;
 pub(crate) use ordinals::{
     needs_ordinal_body, ordinal_bodies, queue_ordinal_body, recover_ordinals,
 };
-#[path = "canonical/recovery.rs"]
 mod recovery;
 pub(crate) use recovery::{accept_with_rollback, complete_repair, recover, register};
 
@@ -25,7 +28,7 @@ const ASSOCIATION: &str = "TX_BLOCK_V1:";
 const MEMBERS: &str = "CHAIN_BLOCK_V1:";
 const CONTEXT: &str = "CHAIN_CONTEXT_V1";
 const TRANSITION: &str = "CHAIN_TRANSITION_V1";
-const INDEX_UNCERTAIN: &str = "INDEX_UNCERTAIN_V1";
+pub(super) const INDEX_UNCERTAIN: &str = "INDEX_UNCERTAIN_V1";
 const INDEX_FORMAT: &str = "INDEX_ASSOCIATIONS_V1";
 const RECOVERY_FORMAT: &str = "INDEX_RECOVERY_V2";
 const INDEX_WRITING: &str = "INDEX_WRITING_V1";
@@ -99,6 +102,62 @@ pub(crate) fn extends(
     }
     next.parent_hash() == previous.hash() && previous.number().checked_add(1) == Some(next.number())
 }
+
+/// Return the accepted recent-header window only when it was written with this
+/// exact accepted tip and is still bound to that tip by the canonical context.
+pub(crate) fn accepted_recent_window<S: StorageBackend + ?Sized>(
+    storage: &S,
+    expected_tip: &packed::Header,
+) -> Result<Option<Vec<(u64, packed::Byte32)>>> {
+    if storage.get(meta(TRANSITION))?.is_some() {
+        return Ok(None);
+    }
+    let Some(last_state) = storage.get(meta(LAST_STATE_KEY))? else {
+        return Ok(None);
+    };
+    let Some(tip) = parse_tip(Some(&last_state)) else {
+        return Ok(None);
+    };
+    if tip.data().as_slice() != expected_tip.as_slice()
+        || storage.get(meta(CONTEXT))?.as_deref() != Some(tip.hash().as_slice())
+    {
+        return Ok(None);
+    }
+    let Some(window) = storage.get(meta(super::LAST_N_HEADERS_KEY))? else {
+        return Ok(None);
+    };
+    if window.len() % 40 != 0 {
+        return Ok(None);
+    }
+    let mut parsed = Vec::with_capacity(window.len() / 40);
+    for row in window.chunks_exact(40) {
+        let number = u64::from_le_bytes(row[..8].try_into().expect("eight-byte height"));
+        let Ok(hash) = packed::Byte32::from_slice(&row[8..]) else {
+            return Ok(None);
+        };
+        if parsed
+            .last()
+            .is_some_and(|(previous, _): &(u64, packed::Byte32)| {
+                previous.checked_add(1) != Some(number)
+            })
+        {
+            return Ok(None);
+        }
+        parsed.push((number, hash));
+    }
+    if parsed
+        .last()
+        .is_some_and(|(number, _)| number.checked_add(1) != Some(tip.number()))
+    {
+        return Ok(None);
+    }
+    let parent_hash = tip.parent_hash();
+    if parsed.last().is_some_and(|(_, hash)| hash != &parent_hash) {
+        return Ok(None);
+    }
+    Ok(Some(parsed))
+}
+
 pub(crate) fn invalidate<S: StorageBackend + ?Sized>(
     storage: &S,
     batch: &mut S::Batch,
@@ -434,11 +493,28 @@ pub(crate) fn indexed_transaction<S: StorageBackend + ?Sized>(
 }
 pub(crate) fn index_ready<S: StorageBackend + ?Sized>(storage: &S) -> Result<()> {
     let rows = storage.get_many(&[meta(TRANSITION), meta(INDEX_UNCERTAIN), meta(INDEX_WRITING)])?;
-    if rows.len() != 3 || rows[0].is_some() || rows[1].is_some() || rows[2].as_deref() == Some(&[2])
+    let uncertainty = rows.get(1).and_then(Option::as_deref);
+    if rows.len() != 3
+        || rows[0].is_some()
+        || (uncertainty.is_some() && uncertainty != Some(&[2]))
+        || rows[2].as_deref() == Some(&[2])
     {
         return Err(Error::runtime(
             "canonical_state:rebuild_required: watched index interrupted or chain continuity unknown; resume in-place repair before querying",
         ));
+    }
+    Ok(())
+}
+
+pub(crate) fn mark_legacy_rollback<S: StorageBackend + ?Sized>(
+    storage: &S,
+    batch: &mut S::Batch,
+) -> Result<()> {
+    if storage.get(meta(recovery::ACCEPT))?.is_none()
+        && storage.get(meta(TRANSITION))?.is_none()
+        && !recovery::repair_pending(storage)?
+    {
+        batch.put(&meta(INDEX_UNCERTAIN), &[2]);
     }
     Ok(())
 }
@@ -466,7 +542,6 @@ fn query_context_inner<S: StorageBackend + ?Sized>(
     scope: Option<&[u8]>,
     allow_capacity_prefix: bool,
 ) -> Result<Vec<u8>> {
-    index_ready(storage)?;
     let rows = storage.get_many(&[
         meta(LAST_STATE_KEY),
         meta(TRANSITION),
@@ -477,9 +552,10 @@ fn query_context_inner<S: StorageBackend + ?Sized>(
         meta(CONTEXT),
         meta(RECOVERY_FORMAT),
     ])?;
+    let legacy_rollback = rows.get(2).and_then(Option::as_deref) == Some(&[2]);
     if rows.len() != 8
         || rows[1].is_some()
-        || rows[2].is_some()
+        || (rows[2].is_some() && !(allow_capacity_prefix && legacy_rollback))
         || rows[3].as_deref() != Some(&[1])
         || rows[4].is_some()
         || rows[7].as_deref() != Some(&[2])
@@ -492,6 +568,11 @@ fn query_context_inner<S: StorageBackend + ?Sized>(
         .clone()
         .ok_or_else(|| Error::runtime("missing accepted state"))?;
     let tip = parse_tip(Some(&state)).ok_or_else(|| Error::runtime("invalid accepted state"))?;
+    if legacy_rollback && !allow_capacity_prefix {
+        return Err(Error::runtime(
+            "canonical_state:repair_pending: watched coverage was rolled back",
+        ));
+    }
     if rows[6]
         .as_deref()
         .is_some_and(|context| context != tip.hash().as_slice())
@@ -502,13 +583,11 @@ fn query_context_inner<S: StorageBackend + ?Sized>(
         Some(scope) => coverage::affects_scope(storage, scope, tip.number())?,
         None => coverage::affects_index(storage)?,
     };
-    let capacity_prefix = match (allow_capacity_prefix, scope) {
-        (true, Some(scope)) if affects_scope && !recovery::repair_pending(storage)? => {
-            coverage::prefix_available(storage, scope, tip.number())?
-        }
-        _ => false,
+    let affected = match (allow_capacity_prefix, scope) {
+        (true, Some(scope)) => !coverage::prefix_query_available(storage, scope, tip.number())?,
+        _ => affects_scope,
     };
-    if (affects_scope && !capacity_prefix) || recovery::repair_pending(storage)? {
+    if affected || recovery::repair_pending(storage)? {
         return Err(Error::runtime(
             "canonical_state:repair_pending: watched coverage is being reindexed in place",
         ));
@@ -820,14 +899,25 @@ pub(crate) fn finish_index<S: super::LightClientStorage + ?Sized>(
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod investigation_index_replay {
-    use super::*;
+    use std::sync::Arc;
+
+    use ckb_chain_spec::consensus::ConsensusBuilder;
+    use ckb_types::{
+        core, packed,
+        prelude::{Builder, Entity, Pack},
+        U256,
+    };
+
+    use super::{
+        begin_index, finish_index, index_ready, member, meta, query_context, INDEX_WRITING,
+    };
     use crate::{
         service::{LightClientService, SearchKey},
-        storage::{LightClientStorage, ScriptStatus, ScriptType, SetScriptsCommand, Storage},
+        storage::{
+            BatchWriter, LightClientStorage, ScriptStatus, ScriptType, SetScriptsCommand, Storage,
+            StorageBackend,
+        },
     };
-    use ckb_chain_spec::consensus::ConsensusBuilder;
-    use ckb_types::core;
-    use std::sync::Arc;
 
     #[test]
     fn investigation_index_writing_one_replays_after_reopen_without_registration() {

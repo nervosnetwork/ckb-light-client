@@ -1,7 +1,18 @@
-use super::*;
+use ckb_network::CKBProtocolHandler;
+use ckb_types::{
+    packed,
+    prelude::{Builder, Entity, PackVec},
+    utilities::merkle_mountain_range::VerifiableHeader,
+};
+
+use super::{assert_eligible, changed_hint, slot_is_empty, Captured, Fixture, Kind, START};
+use crate::{
+    protocols::{light_client::constant::REFRESH_PEERS_TOKEN, LastState, MESSAGE_TIMEOUT},
+    tests::utils::faketime,
+};
 
 #[tokio::test]
-async fn wo44_valid_inflight_proof_after_recheck_is_not_penalized_or_stranded() {
+async fn valid_inflight_proof_after_recheck_is_not_penalized_or_stranded() {
     use crate::storage::{canonical::coverage, Key};
     let clock = faketime();
     clock.set_faketime(START);
@@ -76,10 +87,10 @@ async fn hint_deadline(kind: Kind) {
 }
 
 #[tokio::test]
-async fn wo44_block_hint_expires_without_punishing_a_live_peer() {
+async fn block_hint_expires_without_punishing_a_live_peer() {
     hint_deadline(Kind::Header).await;
 }
 #[tokio::test]
-async fn wo44_transaction_hint_expires_without_punishing_a_live_peer() {
+async fn transaction_hint_expires_without_punishing_a_live_peer() {
     hint_deadline(Kind::Transaction).await;
 }

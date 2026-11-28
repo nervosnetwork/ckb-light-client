@@ -623,7 +623,12 @@ async fn update_to_proved_last_state() {
             let last_n_headers = (1..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            let genesis = snapshot.get_header_by_number(0).expect("genesis header");
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         protocol
             .peers()
@@ -633,6 +638,15 @@ async fn update_to_proved_last_state() {
             .commit_prove_state(peer_index_proved, prove_state)
             .await
             .unwrap();
+
+        assert_eq!(
+            chain.client_storage().get_tip_header().calc_header_hash(),
+            last_header.header().hash()
+        );
+        assert!(protocol
+            .peers()
+            .pending_continuity(peer_index_proved)
+            .is_none());
 
         let prove_state = protocol
             .get_peer_state(&peer_index_proved)

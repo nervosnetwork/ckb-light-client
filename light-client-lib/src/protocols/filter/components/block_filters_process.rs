@@ -336,6 +336,7 @@ impl<'a> BlockFiltersProcess<'a> {
                         .add_matched_blocks(&mut matched_blocks, blocks);
                     prove_or_download_matched_blocks(
                         Arc::clone(&self.filter.peers),
+                        &self.filter.storage,
                         &tip_header,
                         &matched_blocks,
                         self.nc.as_ref(),

@@ -810,3 +810,86 @@ async fn maintainer_hashless_hint_after_replacement_preserves_current_owner() {
         }
     }
 }
+
+#[tokio::test]
+async fn wo48_valid_matched_proof_from_before_script_change_does_not_ban_peer() {
+    use super::{faketime, Captured, Fixture, Kind, START};
+    use crate::protocols::light_client::constant::GET_IDLE_BLOCKS_TOKEN;
+    use crate::storage::{
+        canonical::coverage, LightClientStorage, ScriptStatus, ScriptType, SetScriptsCommand,
+        StorageBackend,
+    };
+    use ckb_types::{packed, prelude::*};
+
+    let clock = faketime();
+    clock.set_faketime(START);
+    let mut f = Fixture::new();
+    let hash = f.block.hash();
+    let script_a = packed::Script::new_builder()
+        .args(b"wo48-range-a".as_slice().pack())
+        .build();
+    f.storage.update_filter_scripts(
+        vec![ScriptStatus {
+            script: script_a,
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }],
+        SetScriptsCommand::All,
+    );
+    let revision_a = coverage::scripts_revision(&f.storage).unwrap();
+    coverage::save_filters(&f.storage, 1, 1, vec![(1, hash.clone())], revision_a).unwrap();
+
+    f.protocol
+        .notify(f.context.context(), GET_IDLE_BLOCKS_TOKEN)
+        .await;
+    let Captured::Header(request_a) = Captured::get(&f, Kind::Header, f.peer) else {
+        panic!("idle scheduler did not create a header proof request");
+    };
+    assert_eq!(request_a.block_hashes(), vec![hash.unpack()]);
+    assert!(f
+        .peers
+        .get_peer(&f.peer)
+        .unwrap()
+        .get_blocks_proof_request()
+        .unwrap()
+        .should_get_blocks());
+
+    let script_b = packed::Script::new_builder()
+        .args(b"wo48-range-b".as_slice().pack())
+        .build();
+    f.storage.update_filter_scripts(
+        vec![ScriptStatus {
+            script: script_b,
+            script_type: ScriptType::Lock,
+            block_number: 0,
+        }],
+        SetScriptsCommand::All,
+    );
+    let revision_b = coverage::scripts_revision(&f.storage).unwrap();
+    coverage::save_filters(
+        &f.storage,
+        2,
+        1,
+        vec![(2, f.wire.header().calc_header_hash())],
+        revision_b,
+    )
+    .unwrap();
+    let range_b_key = coverage::key(2);
+    let range_b_before = StorageBackend::get(&f.storage, range_b_key.clone())
+        .unwrap()
+        .expect("durable range B");
+    let range_b = f.storage.get_earliest_matched_blocks().unwrap();
+    assert_eq!(range_b.start_number, 2);
+    assert_eq!(range_b.blocks_count, 1);
+
+    let response = f.positive(Kind::Header, f.wire.clone(), false);
+    f.receive(response).await;
+    let not_banned = f.context.not_banned(f.peer);
+    let disconnects = f.context.take_disconnects();
+    let range_b_after = StorageBackend::get(&f.storage, range_b_key).unwrap();
+    let range_b_unchanged = range_b_after.as_deref() == Some(range_b_before.as_slice());
+    assert!(
+        not_banned && disconnects.is_empty() && range_b_unchanged,
+        "range-A response affected peer or range B: not_banned={not_banned}, disconnects={disconnects:?}, range_b_unchanged={range_b_unchanged}"
+    );
+}

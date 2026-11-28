@@ -5,7 +5,7 @@ use tempfile::TempDir;
 mod chain;
 mod network_context;
 
-pub(crate) use chain::MockChain;
+pub(crate) use chain::{MockChain, MockRunningChain};
 pub(crate) use network_context::MockNetworkContext;
 
 use crate::storage::Storage;

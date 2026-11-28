@@ -1,12 +1,25 @@
 //! Durable intent and derived-index repair. Primary transactions/headers and
 //! user keys are never used as a source of canonical membership or deleted.
-use super::*;
-use crate::storage::{KeyPrefix, LightClientStorage, ScriptStatus, SetScriptsCommand};
+use ckb_types::{
+    core::HeaderView,
+    packed,
+    prelude::{Entity, IntoHeaderView, Unpack},
+    U256,
+};
 use serde::{Deserialize, Serialize};
+
+use super::{
+    bind, finish_revision, initialize_index_format, member, meta, update_state, ASSOCIATION,
+    CONTEXT, INDEX_FORMAT, INDEX_UNCERTAIN, INDEX_WRITING, MEMBERS, RECOVERY_FORMAT, TRANSITION,
+};
+use crate::error::{Error, Result};
+use crate::storage::{
+    BatchWriter, KeyPrefix, LightClientStorage, ScriptStatus, SetScriptsCommand, StorageBackend,
+};
 
 const REGISTRATION: &str = "INDEX_REGISTRATION_V2";
 const REPAIR: &str = "INDEX_REPAIR_V2";
-const ACCEPT: &str = "CHAIN_ACCEPT_V2";
+pub(super) const ACCEPT: &str = "CHAIN_ACCEPT_V2";
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "recovery_tests.rs"]
@@ -50,14 +63,7 @@ fn scan_page<S: StorageBackend + ?Sized>(
     prefix: Vec<u8>,
     limit: usize,
 ) -> Result<Vec<super::super::KVPair>> {
-    let select = prefix.clone();
-    storage.try_collect_iterator(
-        IteratorStart::From(prefix),
-        IteratorDirection::Forward,
-        Box::new(move |key| key.starts_with(&select)),
-        Box::new(|_, value| Some(value.to_vec())),
-        limit,
-    )
+    storage.try_collect_prefix_page(prefix, limit)
 }
 
 pub(crate) fn registration_pending<S: StorageBackend + ?Sized>(storage: &S) -> Result<bool> {
@@ -103,6 +109,47 @@ pub(crate) fn register<S: LightClientStorage + ?Sized>(
         // per-script indexing replays them behind the saved-coverage fence.
         start_repair(storage, true)?;
     }
+    let catalog_rows = scan(storage, prefix.clone())?;
+    let mut retained = std::collections::HashSet::new();
+    if matches!(
+        command,
+        SetScriptsCommand::Partial | SetScriptsCommand::Delete
+    ) {
+        retained.extend(catalog_rows.iter().map(|row| row.key.clone()));
+    }
+    if matches!(command, SetScriptsCommand::All | SetScriptsCommand::Partial) {
+        for script in &scripts {
+            let mut key = prefix.clone();
+            key.extend(script.script.as_slice());
+            key.push(u8::from(matches!(
+                script.script_type,
+                super::super::ScriptType::Type
+            )));
+            retained.insert(key);
+        }
+    }
+    if matches!(command, SetScriptsCommand::All) {
+        retained.clear();
+        for script in &scripts {
+            let mut key = prefix.clone();
+            key.extend(script.script.as_slice());
+            key.push(u8::from(matches!(
+                script.script_type,
+                super::super::ScriptType::Type
+            )));
+            retained.insert(key);
+        }
+    } else if matches!(command, SetScriptsCommand::Delete) {
+        for script in &scripts {
+            let mut key = prefix.clone();
+            key.extend(script.script.as_slice());
+            key.push(u8::from(matches!(
+                script.script_type,
+                super::super::ScriptType::Type
+            )));
+            retained.remove(&key);
+        }
+    }
     let intent = Registration {
         scripts: scripts
             .into_iter()
@@ -123,6 +170,11 @@ pub(crate) fn register<S: LightClientStorage + ?Sized>(
     let mut batch = storage.batch();
     batch.put(&meta(REGISTRATION), &encode(&intent)?);
     batch.put(&meta(INDEX_WRITING), &[2]);
+    if let Some(bytes) = storage.get(meta(REPAIR))? {
+        let mut repair: Repair = decode(&bytes)?;
+        repair.targets.retain(|(key, _)| retained.contains(key));
+        batch.put(&meta(REPAIR), &encode(&repair)?);
+    }
     batch.commit()?;
     if let Some(bytes) = storage.get(meta(REPAIR))? {
         initialize_repair(storage, decode(&bytes)?)?;
@@ -182,6 +234,24 @@ fn replay_registration<S: LightClientStorage + ?Sized>(
         2 => SetScriptsCommand::Delete,
         _ => return Err(Error::runtime("invalid registration command")),
     };
+    if !matches!(command, SetScriptsCommand::Delete) {
+        for script in &mut scripts {
+            let mut key = meta(super::super::FILTER_SCRIPTS_KEY);
+            key.extend(script.script.as_slice());
+            key.push(u8::from(matches!(
+                script.script_type,
+                super::super::ScriptType::Type
+            )));
+            if let Some(bytes) = storage.get(key)? {
+                let cursor = bytes
+                    .as_slice()
+                    .try_into()
+                    .map(u64::from_be_bytes)
+                    .map_err(|_| Error::runtime("invalid registered cursor"))?;
+                script.block_number = script.block_number.min(cursor);
+            }
+        }
+    }
     super::super::storage_trait::apply_filter_scripts(storage, scripts, command);
     complete_repair(storage)
 }
@@ -241,7 +311,11 @@ fn restart_repair<S: LightClientStorage + ?Sized>(storage: &S) -> Result<()> {
         return start_repair(storage, false);
     };
     let mut repair: Repair = decode(&bytes)?;
-    for (key, target) in coverage_targets(storage)? {
+    let current_targets = coverage_targets(storage)?;
+    let current_keys: std::collections::HashSet<_> =
+        current_targets.iter().map(|(key, _)| key.clone()).collect();
+    repair.targets.retain(|(key, _)| current_keys.contains(key));
+    for (key, target) in current_targets {
         if let Some((_, saved)) = repair.targets.iter_mut().find(|(saved, _)| *saved == key) {
             *saved = (*saved).max(target);
         } else {
@@ -258,9 +332,35 @@ fn initialize_repair<S: LightClientStorage + ?Sized>(
     if repair.initialized {
         return Ok(());
     }
+    let registered: std::collections::HashSet<_> =
+        scan(storage, meta(super::super::FILTER_SCRIPTS_KEY))?
+            .into_iter()
+            .map(|row| row.key)
+            .collect();
+    repair.targets.retain(|(key, _)| registered.contains(key));
     let mut batch = storage.batch();
     for (key, _) in &repair.targets {
-        batch.put(key, &0u64.to_be_bytes());
+        let scripts_prefix = meta(super::super::FILTER_SCRIPTS_KEY);
+        let starts_prefix = meta(super::super::FILTER_SCRIPT_STARTS_KEY);
+        let replay_floor = key
+            .get(scripts_prefix.len()..)
+            .map(|scope| {
+                let mut start_key = starts_prefix.clone();
+                start_key.extend_from_slice(scope);
+                storage.get(start_key)
+            })
+            .transpose()?
+            .flatten()
+            .map(|bytes| {
+                bytes
+                    .as_slice()
+                    .try_into()
+                    .map(u64::from_be_bytes)
+                    .map_err(|_| Error::runtime("invalid repair replay floor"))
+            })
+            .transpose()?
+            .unwrap_or(0);
+        batch.put(key, &replay_floor.to_be_bytes());
     }
     batch.put(
         &meta(super::super::MIN_FILTERED_BLOCK_NUMBER),

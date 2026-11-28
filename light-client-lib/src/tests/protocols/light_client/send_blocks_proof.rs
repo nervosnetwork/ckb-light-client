@@ -114,7 +114,12 @@ async fn changed_last_state_hint_preserves_unattributed_request() {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
         protocol
@@ -210,7 +215,12 @@ async fn different_hash_set_preserves_request() {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
         protocol
@@ -333,7 +343,12 @@ async fn get_blocks_with_chunks() {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
         protocol
@@ -784,7 +799,12 @@ async fn test_send_blocks_proof(param: TestParameter) {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(
             num,

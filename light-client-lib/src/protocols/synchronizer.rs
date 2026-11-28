@@ -130,17 +130,20 @@ impl CKBProtocolHandler for SyncProtocol {
                     }
                     self.peers.finish_ordinal_download(&block_hash);
                 }
-                self.peers.add_block(&mut matched_blocks, new_block);
-                if let Err(error) = crate::utils::network::index_downloaded_blocks(
-                    &self.storage,
-                    &self.peers,
-                    &mut matched_blocks,
-                ) {
-                    warn!("watched indexing paused: {error}");
+                let matched_progress = self.peers.add_block(&mut matched_blocks, new_block);
+                if matched_progress == Some(true) || ordinal_pending {
+                    if let Err(error) = crate::utils::network::index_downloaded_blocks(
+                        &self.storage,
+                        &self.peers,
+                        &mut matched_blocks,
+                    ) {
+                        warn!("watched indexing paused: {error}");
+                    }
                 }
                 let tip_header = self.storage.get_tip_header();
                 prove_or_download_matched_blocks(
                     Arc::clone(&self.peers),
+                    &self.storage,
                     &tip_header,
                     &matched_blocks,
                     nc.as_ref(),

@@ -831,6 +831,8 @@ pub trait LightClientStorage: StorageBackend {
 
         super::canonical::invalidate(self, &mut batch, to_number)
             .expect("membership invalidation scan");
+        super::canonical::mark_legacy_rollback(self, &mut batch)
+            .expect("rollback uncertainty marker");
         batch.commit().expect("batch commit should be ok");
     }
 
@@ -1099,6 +1101,41 @@ pub(super) fn apply_filter_scripts<S: LightClientStorage + ?Sized>(
         }
     }
 
+    let remove_script_rows =
+        |script: &packed::Script, script_type: ScriptType| {
+            let raw = super::extract_raw_data(script);
+            let (cell_prefix, tx_prefix) = match script_type {
+                ScriptType::Lock => (
+                    KeyPrefix::CellLockScript as u8,
+                    KeyPrefix::TxLockScript as u8,
+                ),
+                ScriptType::Type => (
+                    KeyPrefix::CellTypeScript as u8,
+                    KeyPrefix::TxTypeScript as u8,
+                ),
+            };
+            let mut selected = Vec::new();
+            for (prefix_byte, suffix_len) in [(cell_prefix, 16usize), (tx_prefix, 17usize)] {
+                let mut prefix = vec![prefix_byte];
+                prefix.extend_from_slice(&raw);
+                let select = prefix.clone();
+                let row_prefix = select.clone();
+                let rows = storage
+                    .try_collect_iterator(
+                        IteratorStart::From(prefix),
+                        IteratorDirection::Forward,
+                        Box::new(move |key| key.starts_with(&row_prefix)),
+                        Box::new(|_, value| Some(value.to_vec())),
+                        usize::MAX,
+                    )
+                    .expect("derived script row scan");
+                selected.extend(rows.into_iter().filter_map(|row| {
+                    (row.key.len() == select.len() + suffix_len).then_some(row.key)
+                }));
+            }
+            selected
+        };
+
     match command {
         SetScriptsCommand::All => {
             should_filter_genesis_block = scripts.iter().any(|ss| ss.block_number == 0);
@@ -1106,6 +1143,27 @@ pub(super) fn apply_filter_scripts<S: LightClientStorage + ?Sized>(
             // Delete all existing filter scripts
             for row in existing_rows {
                 let scope = &row.key[key_prefix.len()..];
+                let retained = scripts.iter().any(|ss| {
+                    let mut requested = ss.script.as_slice().to_vec();
+                    requested.push(u8::from(matches!(ss.script_type, ScriptType::Type)));
+                    requested == scope
+                });
+                if !retained {
+                    if let Ok(script) =
+                        packed::Script::from_slice(&scope[..scope.len().saturating_sub(1)])
+                    {
+                        for key in remove_script_rows(
+                            &script,
+                            if scope.last() == Some(&1) {
+                                ScriptType::Type
+                            } else {
+                                ScriptType::Lock
+                            },
+                        ) {
+                            batch.delete(&key);
+                        }
+                    }
+                }
                 let mut start_key = script_start_prefix.clone();
                 start_key.extend_from_slice(scope);
                 batch.delete(&row.key);
@@ -1145,6 +1203,15 @@ pub(super) fn apply_filter_scripts<S: LightClientStorage + ?Sized>(
         }
         SetScriptsCommand::Delete => {
             for ss in scripts {
+                for key in remove_script_rows(
+                    &ss.script,
+                    match &ss.script_type {
+                        ScriptType::Lock => ScriptType::Lock,
+                        ScriptType::Type => ScriptType::Type,
+                    },
+                ) {
+                    batch.delete(&key);
+                }
                 let scope = [
                     ss.script.as_slice(),
                     match ss.script_type {

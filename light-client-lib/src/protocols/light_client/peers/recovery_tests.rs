@@ -1,3 +1,12 @@
+use std::sync::Arc;
+
+use ckb_network::{CKBProtocolHandler, PeerIndex};
+use ckb_types::{
+    packed,
+    prelude::{Builder, Entity, IntoHeaderView, Pack, PackVec, Reader, Unpack},
+    utilities::merkle_mountain_range::VerifiableHeader,
+};
+
 use super::{BlocksProofRequest, TransactionsProofRequest};
 use crate::tests::utils::faketime;
 use crate::{
@@ -8,9 +17,6 @@ use crate::{
     storage::LightClientStorage,
     tests::utils::MockNetworkContext,
 };
-use ckb_network::{CKBProtocolHandler, PeerIndex};
-use ckb_types::{packed, prelude::*, utilities::merkle_mountain_range::VerifiableHeader};
-use std::sync::Arc;
 
 #[path = "../../../../tests/support/request_fixture.rs"]
 mod request_fixture;
@@ -18,8 +24,8 @@ use request_fixture::{Fixture, Kind, KINDS};
 
 const START: u64 = 100_000;
 
-#[path = "wo44_tests.rs"]
-mod wo44_tests;
+#[path = "proof_request_recovery_tests.rs"]
+mod proof_request_recovery_tests;
 
 #[path = "maintainer_tests.rs"]
 mod maintainer_tests;

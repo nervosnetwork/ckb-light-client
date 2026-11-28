@@ -1,13 +1,18 @@
+use std::sync::Arc;
+
+use ckb_chain_spec::consensus::ConsensusBuilder;
+use ckb_network::{CKBProtocolHandler, PeerIndex};
+use ckb_types::{
+    packed,
+    prelude::{Builder, Entity, IntoBlockView, IntoHeaderView, Pack, PackVec, Unpack},
+};
+
 use crate::tests::utils::faketime;
 use crate::{
     protocols::{FilterProtocol, SyncProtocol},
     storage::{LightClientStorage, Storage, StorageWithChainData},
     tests::utils::MockNetworkContext,
 };
-use ckb_chain_spec::consensus::ConsensusBuilder;
-use ckb_network::{CKBProtocolHandler, PeerIndex};
-use ckb_types::{packed, prelude::*};
-use std::sync::Arc;
 
 // A scan error must not be confused with an empty script/range set.
 struct FailedScan(Storage);

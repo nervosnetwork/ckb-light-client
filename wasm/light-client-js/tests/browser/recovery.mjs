@@ -53,13 +53,13 @@ listen_address = "127.0.0.1:0"
 `;
 async function start(){workers=[];client=new LightClient();await client.start(networkSpec?{type:'DevNet',spec:networkSpec,config:config()}:{type:'TestNet',config:config()},`0x${'01'.repeat(32)}`,'error','wss');}
 async function stop(){await client.stop();client=null;workers=[];}
-function openDb(){return new Promise((resolve,reject)=>{const r=indexedDB.open(database,1);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
-async function rows(){const db=await openDb();const records=await new Promise((resolve,reject)=>{const r=db.transaction('main-store','readonly').objectStore('main-store').getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});db.close();return records;}
-async function mutate(operations){const db=await openDb();await new Promise((resolve,reject)=>{const t=db.transaction('main-store','readwrite'),s=t.objectStore('main-store');for(const [kind,key,value]of operations){kind==='delete'?s.delete(key):s.put({key,value},key);}t.oncomplete=resolve;t.onabort=()=>reject(t.error);t.onerror=()=>reject(t.error);});db.close();}
+function open_db(){return new Promise((resolve,reject)=>{const r=indexedDB.open(database,1);r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});}
+async function rows(){const db=await open_db();const records=await new Promise((resolve,reject)=>{const r=db.transaction('main-store','readonly').objectStore('main-store').getAll();r.onsuccess=()=>resolve(r.result);r.onerror=()=>reject(r.error);});db.close();return records;}
+async function mutate(operations){const db=await open_db();await new Promise((resolve,reject)=>{const t=db.transaction('main-store','readwrite'),s=t.objectStore('main-store');for(const [kind,key,value]of operations){kind==='delete'?s.delete(key):s.put({key,value},key);}t.oncomplete=resolve;t.onabort=()=>reject(t.error);t.onerror=()=>reject(t.error);});db.close();}
 async function raw(name){return (await rows()).find(r=>equal(r.key,meta(name)))?.value;}
 async function snapshot(){const key={script,scriptType:'lock'};return {capacity:String(await client.getCellsCapacity(key)),cells:JSON.parse(JSON.stringify(await client.getCells(key,'asc',100),(_,v)=>typeof v==='bigint'?v.toString():v)),transactions:JSON.parse(JSON.stringify(await client.getTransactions(key,'asc',100),(_,v)=>typeof v==='bigint'?v.toString():v))};}
 async function seed(label){database=`wo29-recovery-${label}-${crypto.randomUUID()}`;await start();const genesis=await client.getGenesisBlock();script=genesis.transactions.find(t=>t.hash()==='0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f').outputs[5].lock;await client.setScripts([{script,scriptType:'lock',blockNumber:0n}],LightClientSetScriptsCommand.All);baseline=await snapshot();check(!baseline.cells.cells.some(c=>c.outPoint.txHash==='0x8f8c79eb6671709633fe6a46de93c0fedc9c1b8a6527a18d3983879542635c9f' && BigInt(c.outPoint.index)===5n),`${label}: spent historical output is absent`);check(baseline.transactions.transactions.length>=2,`${label}: real historical genesis creator/spend history`);results[label]={database,baseline};await stop();}
-async function failClosed(label){for(const [name,call]of [['cells',()=>client.getCells({script,scriptType:'lock'},'asc',100)],['history',()=>client.getTransactions({script,scriptType:'lock'},'asc',100)],['capacity',()=>client.getCellsCapacity({script,scriptType:'lock'})]]){let error;try{await call();}catch(e){error=String(e);}check(error?.includes('canonical_state:'),`${label}: ${name} returns recovery error, never partial success`);}}
+async function fail_closed(label){for(const [name,call]of [['cells',()=>client.getCells({script,scriptType:'lock'},'asc',100)],['history',()=>client.getTransactions({script,scriptType:'lock'},'asc',100)],['capacity',()=>client.getCellsCapacity({script,scriptType:'lock'})]]){let error;try{await call();}catch(e){error=String(e);}check(error?.includes('canonical_state:'),`${label}: ${name} returns recovery error, never partial success`);}}
 try{
  check(crossOriginIsolated,'COOP/COEP isolation');
  await seed('upgrade');
@@ -145,9 +145,9 @@ try{
  const rangeKey=[...meta('MATCHED_BLOCKS'),0,0,0,0,0,0,0,1];
  const rangeValue=[1,0,0,0,0,0,0,0,...Array(32).fill(19),0];
  await mutate([['put',rangeKey,rangeValue],['put',meta('MIN_FILTERED_NUMBER'),[1,0,0,0,0,0,0,0]],['put',meta('INDEX_WRITING_V1'),[1]]]);
- await start();await failClosed('interrupted watched range');await stop();
+ await start();await fail_closed('interrupted watched range');await stop();
  check((await raw('INDEX_REPAIR_V2'))?.length>0,'ambiguous legacy [1] range becomes saved-target repair, not a completed range');
- await start();await failClosed('second pending-range reopen');await stop();
+ await start();await fail_closed('second pending-range reopen');await stop();
  check((await raw('INDEX_REPAIR_V2'))?.length>0,'legacy partial-index coverage obligation survives repeated reopen');
 
 
@@ -180,19 +180,19 @@ try{
   check((await raw('MIN_FILTERED_NUMBER'))?.[0]===expectedMin,`${mode}: range and cursor transaction has atomic outcome`);
   const persisted=await rows();
   check(primaryBefore.every(row=>persisted.some(r=>equal(r,row))),`${mode}: interrupted recheck preserves every primary historical byte`);
-  await start();await failClosed(`${mode}: unfinished positional refilter`);await stop();
+  await start();await fail_closed(`${mode}: unfinished positional refilter`);await stop();
   check((await raw('MIN_FILTERED_NUMBER'))?.[0]===0,`${mode}: restart resumes filter request from saved range start`);
   check(repairTargets(await raw('INDEX_REPAIR_V2')).includes(2),`${mode}: restart preserves target until actual coverage is restored`);
   check(await raw('INDEX_UNCERTAIN_V1')===undefined,`${mode}: retry does not poison uncertainty`);
-  await start();await failClosed(`${mode}: repeated positional restart`);await stop();
+  await start();await fail_closed(`${mode}: repeated positional restart`);await stop();
  }
  await importPositional('partial',positionalFixture.positional_partial_rows);
  const partialBefore=await rows();
- await start();await failClosed('positioned [1] replay checkpoint');await stop();
+ await start();await fail_closed('positioned [1] replay checkpoint');await stop();
  check((await raw('INDEX_WRITING_V1'))?.[0]===1,'new positioned [1] replay remains directly resumable');
  const partialAfter=await rows();
  check(partialBefore.filter(r=>r.key[0]===224&&new TextDecoder().decode(new Uint8Array(r.key.slice(1))).startsWith('MATCHED_BLOCKS')).every(row=>partialAfter.some(r=>equal(r,row))),'indexed position flag and ambiguous tail both survive real worker reopen');
- await start();await failClosed('second positioned [1] restart');await stop();
+ await start();await fail_closed('second positioned [1] restart');await stop();
  await importPositional('complete',positionalFixture.positional_final_rows);
  await start();const complete=await snapshot();
  check(complete.capacity==='0'&&complete.cells.cells.length===0,'completed native proof/body checkpoint has no resurrected spent cells in browser');
@@ -205,10 +205,10 @@ try{
  const scriptRow=(await rows()).find(r=>r.key[0]===224&&new TextDecoder().decode(new Uint8Array(r.key.slice(1,15)))==='FILTER_SCRIPTS');
  check(!!scriptRow,'locate saved watched cursor');
  await mutate([['put',scriptRow.key,[0,0,0,0,0,0,0,2]],['put',meta('CHAIN_TRANSITION_V1'),[1]]]);
- await start();await failClosed('bare legacy rollback requires coverage repair');await client.setScripts([{script,scriptType:'lock',blockNumber:2n}],LightClientSetScriptsCommand.Partial);await failClosed('registration start height cannot certify repaired coverage');await stop();
+ await start();await fail_closed('bare legacy rollback requires coverage repair');await client.setScripts([{script,scriptType:'lock',blockNumber:2n}],LightClientSetScriptsCommand.Partial);await fail_closed('registration start height cannot certify repaired coverage');await stop();
  check((await raw('INDEX_REPAIR_V2'))?.length>0,'bare transition becomes durable in-place repair');
  check(await raw('INDEX_ASSOCIATIONS_V1')===undefined,'unrestored historical coverage is not marked migrated');
- await start();await failClosed('repeated bare-marker repair');await stop();
+ await start();await fail_closed('repeated bare-marker repair');await stop();
  // The checkpoint was emitted by native accept_with_rollback, interrupted
  // before its final accepted-state batch. These are trusted test headers with
  // DummyPoW; protocol proof validation is covered separately in native tests.
@@ -229,12 +229,12 @@ try{
  check((await raw('INDEX_REPAIR_V2'))?.length>0,'higher saved coverage target survives accepted rollback');
  await start();
  check((await client.getTipHeader()).number===3n,'restart retains the accepted candidate height');
- await failClosed('accepted rollback still needs historical coverage');await stop();
+ await fail_closed('accepted rollback still needs historical coverage');await stop();
  const rolledRows=await rows();
  check(rollbackPrimary.every(row=>rolledRows.some(r=>equal(r,row))),'browser rollback/restart preserves every historical transaction/header/height record');
  check(rolledRows.some(r=>equal(r.key,rollbackFixture.creator_key)&&equal(r.value,rollbackFixture.creator_bytes)),'multi-transaction historical creator bytes are retained');
  check(await raw('INDEX_RECOVERY_V2')===undefined,'rollback repair cannot certify coverage by clearing a marker');
- await start();await failClosed('second rollback repair restart');await stop();
+ await start();await fail_closed('second rollback repair restart');await stop();
  check(equal((await raw('LAST_STATE')).slice(32),rollbackFixture.candidate_tip),'repeated recovery does not change accepted candidate');
 
  // Exact before/after rows come from the real native acceptance encoder and
@@ -248,7 +248,7 @@ try{
   await mutate([...(await rows()).map(r=>['delete',r.key]),...sourceRows.map(r=>['put',r.key,r.value])]);
  }
  async function applyIntentDelta(abort){
-  const db=await openDb();
+  const db=await open_db();
   await new Promise((resolve,reject)=>{
    const t=db.transaction('main-store','readwrite'),s=t.objectStore('main-store');
    const first=rollbackFixture.intent_delta.find(row=>equal(row.key,meta('INDEX_REPAIR_V2')));
@@ -281,17 +281,17 @@ try{
   }
   await start();
   check((await client.getTipHeader()).number===BigInt(committed?1:2),`${mode}: restart uses the actually accepted chain`);
-  await failClosed(`${mode}: shorter-target recovery before coverage`);await stop();
+  await fail_closed(`${mode}: shorter-target recovery before coverage`);await stop();
   check(repairTargets(await raw('INDEX_REPAIR_V2'))[0]===(committed?1:2),`${mode}: correct old/new target survives restart`);
   const repairedRows=await rows();
   check(oldPrimary.every(row=>repairedRows.some(r=>equal(r,row))),`${mode}: target recovery preserves all primary history bytes`);
-  await start();await failClosed(`${mode}: repeated shorter-target restart`);await stop();
+  await start();await fail_closed(`${mode}: repeated shorter-target restart`);await stop();
   await importTarget(`${mode}-prefix`,fixture.prefix_rows);
   await start();
   if(committed){
    check(String(await client.getCellsCapacity({script,scriptType:'lock'}))==='100','new accepted height 1 legitimately has the unspent creator');
   }else{
-   await failClosed('old accepted height 2 after only creator replay');
+   await fail_closed('old accepted height 2 after only creator replay');
    check(repairTargets(await raw('INDEX_REPAIR_V2'))[0]===2,'old height-2 spend cannot be dropped after partial honest replay');
   }
   await stop();

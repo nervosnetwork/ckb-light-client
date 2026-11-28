@@ -12,7 +12,7 @@ use crate::{
     storage::LightClientStorage,
     tests::{
         prelude::*,
-        utils::{setup, MockChain, MockNetworkContext},
+        utils::{setup, MockChain, MockNetworkContext, MockRunningChain},
     },
 };
 
@@ -28,6 +28,93 @@ fn sampling_between(start_number: BlockNumber, boundary_number: BlockNumber) -> 
     let sampled_numbers = sampled_numbers.into_iter().rev().collect::<Vec<_>>();
     assert!(!sampled_numbers.is_empty());
     sampled_numbers
+}
+
+fn replacement_work_proof(
+    chain: &MockRunningChain,
+    request: &packed::GetLastStateProof,
+    last_header: &packed::VerifiableHeader,
+    omit_first_sample: bool,
+) -> packed::LightClientMessage {
+    replacement_work_proof_with_mmr_numbers(chain, request, last_header, omit_first_sample, None)
+}
+
+fn replacement_work_proof_with_mmr_numbers(
+    chain: &MockRunningChain,
+    request: &packed::GetLastStateProof,
+    last_header: &packed::VerifiableHeader,
+    omit_first_sample: bool,
+    mmr_numbers: Option<&[BlockNumber]>,
+) -> packed::LightClientMessage {
+    let snapshot = chain.shared().snapshot();
+    let last_header_entity: VerifiableHeader = last_header.clone().into();
+    let last_number = last_header_entity.header().number();
+    let last_n_blocks: BlockNumber = request.last_n_blocks().unpack();
+    let first_last_n_number = if last_number > last_n_blocks {
+        last_number - last_n_blocks
+    } else {
+        1
+    };
+    let first_last_n_difficulty = snapshot
+        .get_total_difficulty_by_number(first_last_n_number)
+        .expect("first recent header has accumulated difficulty");
+    let mut sampled_numbers = request
+        .difficulties()
+        .into_iter()
+        .map(|item| item.unpack())
+        .take_while(|difficulty: &U256| difficulty < &first_last_n_difficulty)
+        .map(|difficulty| {
+            (0..first_last_n_number)
+                .find(|number| {
+                    let parent = if *number == 0 {
+                        U256::zero()
+                    } else {
+                        snapshot
+                            .get_total_difficulty_by_number(*number - 1)
+                            .expect("parent difficulty exists")
+                    };
+                    let current = snapshot
+                        .get_total_difficulty_by_number(*number)
+                        .expect("block difficulty exists");
+                    parent < difficulty && difficulty <= current
+                })
+                .unwrap_or_else(|| {
+                    panic!(
+                        "sampled difficulty {difficulty} below last-n boundary {first_last_n_difficulty} has no replacement-history block before height {first_last_n_number}"
+                    )
+                })
+        })
+        .collect::<Vec<_>>();
+    sampled_numbers.sort_unstable();
+    sampled_numbers.dedup();
+    if omit_first_sample {
+        assert!(!sampled_numbers.is_empty(), "request includes sampled work");
+        sampled_numbers.remove(0);
+    }
+
+    let mut numbers = Vec::new();
+    if request.difficulties().is_empty() && last_number <= last_n_blocks {
+        numbers.push(0);
+    }
+    numbers.extend(sampled_numbers);
+    numbers.extend(first_last_n_number..last_number);
+    let headers = numbers
+        .iter()
+        .map(|number| {
+            snapshot
+                .get_verifiable_header_by_number(*number)
+                .expect("replacement header exists")
+        })
+        .collect::<Vec<_>>();
+    let proof = chain.build_proof_by_numbers(last_number, mmr_numbers.unwrap_or(&numbers));
+    let content = packed::SendLastStateProof::new_builder()
+        .last_header(last_header.clone())
+        .proof(proof)
+        .headers(headers.pack())
+        .build();
+    packed::LightClientMessage::new_builder()
+        .set(content)
+        .build()
 }
 
 #[tokio::test]
@@ -819,7 +906,12 @@ async fn valid_proof_with_prove_state() {
             let last_n_headers = (prev_last_n_blocks_start_number..prev_last_number)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
+            let mut state =
+                ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers);
+            let genesis = snapshot.get_header_by_number(0).expect("genesis header");
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         protocol
             .commit_prove_state(peer_index, prove_state)
@@ -881,26 +973,38 @@ async fn valid_proof_with_prove_state() {
         .as_bytes();
 
         protocol.received(nc.context(), peer_index, data).await;
-        let previous = snapshot.get_block_by_number(prev_last_number).unwrap();
-        let bridge = packed::SendBlocksProofV1::new_builder()
-            .last_header(last_header.clone())
-            .proof(chain.build_proof_by_numbers(num, &[prev_last_number]))
-            .headers(vec![previous.header().data()].pack())
-            .blocks_uncles_hash(vec![previous.calc_uncles_hash()].pack())
-            .blocks_extension(vec![packed::BytesOpt::new_builder()
-                .set(previous.extension())
-                .build()])
-            .build();
-        protocol
-            .received(
-                nc.context(),
-                peer_index,
-                packed::LightClientMessage::new_builder()
-                    .set(bridge)
-                    .build()
-                    .as_bytes(),
-            )
-            .await;
+        if let Some(request) = protocol
+            .get_peer(&peer_index)
+            .unwrap()
+            .get_blocks_proof_request()
+        {
+            let previous_hash = snapshot
+                .get_header_by_number(prev_last_number)
+                .unwrap()
+                .hash();
+            assert_eq!(request.last_hash(), last_header.header().calc_header_hash());
+            assert_eq!(request.block_hashes(), vec![previous_hash.unpack()]);
+            let previous = snapshot.get_block_by_number(prev_last_number).unwrap();
+            let bridge = packed::SendBlocksProofV1::new_builder()
+                .last_header(last_header.clone())
+                .proof(chain.build_proof_by_numbers(num, &[prev_last_number]))
+                .headers(vec![previous.header().data()].pack())
+                .blocks_uncles_hash(vec![previous.calc_uncles_hash()].pack())
+                .blocks_extension(vec![packed::BytesOpt::new_builder()
+                    .set(previous.extension())
+                    .build()])
+                .build();
+            protocol
+                .received(
+                    nc.context(),
+                    peer_index,
+                    packed::LightClientMessage::new_builder()
+                        .set(bridge)
+                        .build()
+                        .as_bytes(),
+                )
+                .await;
+        }
 
         assert!(nc.not_banned(peer_index));
 
@@ -1848,6 +1952,16 @@ async fn proved_replacement_header_cannot_relabel_a_detached_transfer() {
 #[derive(Default)]
 struct ReorgTestParameter {
     investigation_linear: bool,
+    investigation_bounded_continuity: bool,
+    investigation_positive_genesis: bool,
+    investigation_include_previous_height_sample: bool,
+    investigation_incomplete_recovery_proof: bool,
+    investigation_genesis_inclusion_only: bool,
+    investigation_full_genesis_recovery: bool,
+    investigation_retry_exhaustion: bool,
+    investigation_retry_send_failure: bool,
+    investigation_invalid_genesis_mmr: bool,
+    investigation_obsolete_genesis_response: bool,
     require_overlap_recheck: bool,
     last_number: BlockNumber,
     prev_last_number_opt: Option<BlockNumber>,
@@ -1921,11 +2035,16 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
     } else {
         1
     };
-    let sampled_numbers = if boundary_number == 1 || prev_last_number >= boundary_number {
+    let mut sampled_numbers = if boundary_number == 1 || prev_last_number >= boundary_number {
         Default::default()
     } else {
         sampling_between(prev_last_number, boundary_number)
     };
+    if param.investigation_include_previous_height_sample {
+        sampled_numbers.push(prev_last_number);
+        sampled_numbers.sort_unstable();
+        sampled_numbers.dedup();
+    }
     let rollback_blocks_count = param.rollback_blocks_count;
     let earliest_matched_number = param.earliest_matched_number_opt.unwrap_or_else(|| {
         if prev_last_number > rollback_blocks_count + 1 {
@@ -1965,7 +2084,7 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             .peers()
             .update_prove_request(peer_index, prev_prove_request.clone())
             .unwrap();
-        let prove_state = {
+        let mut prove_state = {
             let prev_last_n_blocks_start_number = if prev_last_number > last_n_blocks + 1 {
                 prev_last_number - last_n_blocks
             } else {
@@ -1976,6 +2095,18 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                 .collect::<Vec<_>>();
             ProveState::new_from_request(prev_prove_request, Vec::new(), last_n_headers)
         };
+        let authenticated_recent = prove_state.get_last_headers().to_vec();
+        prove_state
+            .proved_headers
+            .push(snapshot.get_header_by_number(0).expect("genesis header"));
+        prove_state.proved_headers.extend(authenticated_recent);
+        prove_state.work_anchor = Some((
+            0,
+            snapshot
+                .get_header_by_number(0)
+                .expect("genesis header")
+                .hash(),
+        ));
         protocol
             .commit_prove_state(peer_index, prove_state)
             .await
@@ -2227,6 +2358,258 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
         .as_bytes();
 
         protocol.received(nc.context(), peer_index, data).await;
+        if param.investigation_bounded_continuity || param.investigation_positive_genesis {
+            let accepted_tip_hash = storage.get_tip_header().calc_header_hash();
+            let genesis = chain.consensus().genesis_block();
+            let miss = |hash: packed::Byte32| {
+                packed::LightClientMessage::new_builder()
+                    .set(
+                        packed::SendBlocksProofV1::new_builder()
+                            .last_header(last_header.clone())
+                            .missing_block_hashes(vec![hash].pack())
+                            .build(),
+                    )
+                    .build()
+            };
+
+            let old_tip_request = protocol
+                .get_peer(&peer_index)
+                .unwrap()
+                .get_blocks_proof_request()
+                .map(|request| request.block_hashes());
+            if let Some(old_tip_request) = old_tip_request {
+                assert_eq!(old_tip_request, vec![accepted_tip_hash.unpack()]);
+                for attempt in 0..2 {
+                    protocol
+                        .received(
+                            nc.context(),
+                            peer_index,
+                            miss(accepted_tip_hash.clone()).as_bytes(),
+                        )
+                        .await;
+                    assert_eq!(
+                        storage.get_tip_header().calc_header_hash(),
+                        accepted_tip_hash,
+                        "missing old-tip response {attempt} must not change the accepted chain"
+                    );
+                }
+            } else {
+                assert!(
+                    protocol
+                        .get_peer_state(&peer_index)
+                        .unwrap()
+                        .get_prove_request()
+                        .is_some(),
+                    "a detached-height sample directly starts sampled recovery"
+                );
+            }
+            let pending = protocol
+                .peers()
+                .pending_continuity(peer_index)
+                .expect("bounded retries proceed to genesis proof");
+            assert!(pending.1.needs_genesis_bridge);
+            let genesis_hash = genesis.header().hash();
+            let recovery_request = protocol
+                .get_peer_state(&peer_index)
+                .expect("peer is registered")
+                .get_prove_request()
+                .cloned()
+                .expect("replacement work is requested from genesis");
+            assert_eq!(
+                recovery_request.recovery_accepted_tip(),
+                Some(&accepted_tip_hash),
+                "the local recovery request is bound to the accepted tip"
+            );
+            let recovery_start_number: BlockNumber =
+                recovery_request.get_content().start_number().unpack();
+            assert_eq!(
+                recovery_start_number, 0,
+                "replacement work sampling starts at genesis"
+            );
+            assert_eq!(
+                recovery_request.get_content().start_hash(),
+                genesis_hash,
+                "the sampled request is anchored to local genesis"
+            );
+            assert_eq!(
+                recovery_request.get_content().last_hash(),
+                last_header.header().calc_header_hash(),
+                "the sampled request is bound to the exact candidate"
+            );
+            assert!(protocol
+                .get_peer(&peer_index)
+                .unwrap()
+                .get_blocks_proof_request()
+                .is_none());
+
+            if param.investigation_positive_genesis {
+                let prove_state = &pending.1;
+                let has_previous_height_sample = prove_state
+                    .proved_headers
+                    .iter()
+                    .any(|header| header.number() == prev_last_number);
+                assert_eq!(
+                    has_previous_height_sample,
+                    param.investigation_include_previous_height_sample
+                        || param.investigation_full_genesis_recovery
+                );
+                if param.investigation_include_previous_height_sample
+                    || param.investigation_full_genesis_recovery
+                {
+                    let replacement_at_old_height = snapshot
+                        .get_header_by_number(prev_last_number)
+                        .expect("replacement header at the accepted tip height");
+                    assert_ne!(replacement_at_old_height.hash(), accepted_tip_hash);
+                    assert!(prove_state.proved_headers.iter().any(|header| {
+                        header.number() == prev_last_number
+                            && header.hash() == replacement_at_old_height.hash()
+                    }));
+                } else if !param.investigation_full_genesis_recovery {
+                    let candidate_work: U256 =
+                        last_header.parent_chain_root().total_difficulty().unpack();
+                    assert!(candidate_work > storage.get_last_state().0);
+                    assert!(!prove_state.proved_headers.iter().any(|header| {
+                        header.number().checked_add(1) == Some(prev_last_number)
+                    }));
+                }
+
+                use crate::storage::{BatchWriter, StorageBackend};
+                let previous_parent = snapshot
+                    .get_header_by_number(prev_last_number - 1)
+                    .expect("accepted tip parent");
+                let mut batch = storage.batch();
+                crate::storage::canonical::member(&mut batch, &previous_parent.data());
+                batch.commit().unwrap();
+                assert!(storage
+                    .get(crate::storage::canonical::member_key(prev_last_number - 1))
+                    .unwrap()
+                    .is_some());
+
+                if param.investigation_genesis_inclusion_only
+                    || param.investigation_incomplete_recovery_proof
+                {
+                    let genesis_proof = packed::SendBlocksProofV1::new_builder()
+                        .last_header(last_header.clone())
+                        .proof(chain.build_proof_by_numbers(last_number, &[0]))
+                        .headers(vec![genesis.header().data()].pack())
+                        .blocks_uncles_hash(vec![genesis.calc_uncles_hash()].pack())
+                        .blocks_extension(vec![packed::BytesOpt::new_builder()
+                            .set(genesis.extension())
+                            .build()])
+                        .build();
+                    protocol
+                        .received(
+                            nc.context(),
+                            peer_index,
+                            packed::LightClientMessage::new_builder()
+                                .set(genesis_proof)
+                                .build()
+                                .as_bytes(),
+                        )
+                        .await;
+                    assert_eq!(
+                        storage.get_tip_header().calc_header_hash(),
+                        accepted_tip_hash,
+                        "genesis inclusion alone cannot authorize replacement history"
+                    );
+                    assert!(protocol.peers().pending_continuity(peer_index).is_some());
+                    if param.investigation_genesis_inclusion_only {
+                        return;
+                    }
+                }
+
+                let replacement_work = replacement_work_proof(
+                    &chain,
+                    recovery_request.get_content(),
+                    &last_header,
+                    param.investigation_incomplete_recovery_proof,
+                );
+                protocol
+                    .received(nc.context(), peer_index, replacement_work.as_bytes())
+                    .await;
+                if param.investigation_incomplete_recovery_proof {
+                    assert_eq!(
+                        storage.get_tip_header().calc_header_hash(),
+                        accepted_tip_hash,
+                        "an incomplete sampled proof leaves the accepted tip unchanged"
+                    );
+                    assert!(protocol.peers().pending_continuity(peer_index).is_some());
+                    assert!(
+                        storage
+                            .get(crate::storage::canonical::member_key(prev_last_number - 1))
+                            .unwrap()
+                            .is_some(),
+                        "membership remains live until replacement work is authenticated"
+                    );
+                    return;
+                }
+
+                assert_eq!(
+                    storage.get_tip_header().calc_header_hash(),
+                    last_header.header().calc_header_hash(),
+                    "a valid genesis-based sampled proof authorizes the candidate"
+                );
+                assert!(protocol.peers().pending_continuity(peer_index).is_none());
+                assert!(protocol
+                    .get_peer(&peer_index)
+                    .unwrap()
+                    .get_blocks_proof_request()
+                    .is_none());
+                assert!(
+                    storage
+                        .get(crate::storage::canonical::member_key(prev_last_number - 1))
+                        .unwrap()
+                        .is_none(),
+                    "successful recovery invalidates old sparse membership"
+                );
+                let prove_state = protocol
+                    .get_peer_state(&peer_index)
+                    .unwrap()
+                    .get_prove_state()
+                    .cloned()
+                    .unwrap();
+                assert!(!prove_state.needs_genesis_bridge);
+                assert!(nc.not_banned(peer_index));
+
+                let sent_count = nc.sent_messages().borrow().len();
+                protocol.request_continuity(&nc.context());
+                assert_eq!(
+                    nc.sent_messages().borrow().len(),
+                    sent_count,
+                    "verified recovery does not repeat its genesis request"
+                );
+                assert!(protocol
+                    .get_peer_state(&peer_index)
+                    .unwrap()
+                    .get_prove_request()
+                    .is_none());
+                eprintln!(
+                    "sampled genesis recovery: candidate accepted, old membership revoked, no repeated request"
+                );
+            } else {
+                protocol
+                    .received(nc.context(), peer_index, miss(genesis_hash).as_bytes())
+                    .await;
+                assert!(protocol.peers().pending_continuity(peer_index).is_some());
+                assert_eq!(
+                    storage.get_tip_header().calc_header_hash(),
+                    accepted_tip_hash
+                );
+                assert!(
+                    protocol
+                        .get_peer_state(&peer_index)
+                        .unwrap()
+                        .get_prove_request()
+                        .is_some(),
+                    "missing genesis inclusion is not replacement-work evidence"
+                );
+                assert!(storage
+                    .get(crate::storage::Key::Meta("INDEX_UNCERTAIN_V1").into_vec())
+                    .unwrap()
+                    .is_none());
+            }
+            return;
+        }
         if rollback_blocks_count > last_n_blocks {
             assert_eq!(
                 storage.get_tip_header().into_view().number(),
@@ -2235,29 +2618,24 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             let pending = protocol
                 .peers()
                 .pending_continuity(peer_index)
-                .expect("deep fork awaits authenticated common genesis");
+                .expect("deep fork awaits replacement work verification");
             assert!(pending.1.needs_genesis_bridge);
-            let genesis = chain.consensus().genesis_block();
-            let bridge = packed::SendBlocksProofV1::new_builder()
-                .last_header(last_header.clone())
-                .proof(chain.build_proof_by_numbers(last_number, &[0]))
-                .headers(vec![genesis.header().data()].pack())
-                .blocks_uncles_hash(vec![genesis.calc_uncles_hash()].pack())
-                .blocks_extension(vec![packed::BytesOpt::new_builder()
-                    .set(genesis.extension())
-                    .build()])
-                .build();
+            let recovery_request = protocol
+                .get_peer_state(&peer_index)
+                .unwrap()
+                .get_prove_request()
+                .cloned()
+                .expect("fresh genesis-based sampled work request");
+            let recovery_start_number: BlockNumber =
+                recovery_request.get_content().start_number().unpack();
+            assert_eq!(recovery_start_number, 0);
+            let replacement_work =
+                replacement_work_proof(&chain, recovery_request.get_content(), &last_header, false);
             protocol
-                .received(
-                    nc.context(),
-                    peer_index,
-                    packed::LightClientMessage::new_builder()
-                        .set(bridge)
-                        .build()
-                        .as_bytes(),
-                )
+                .received(nc.context(), peer_index, replacement_work.as_bytes())
                 .await;
             assert_eq!(storage.get_tip_header().into_view().number(), last_number);
+            assert!(protocol.peers().pending_continuity(peer_index).is_none());
         }
         if param.require_overlap_recheck {
             let fork = prev_last_number - rollback_blocks_count;
@@ -2316,6 +2694,84 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                         .as_bytes(),
                 )
                 .await;
+        }
+
+        if let Some(tx) = transfer
+            .as_ref()
+            .filter(|_| rollback_blocks_count <= last_n_blocks)
+        {
+            use crate::{
+                service::{LightClientChainService, Status},
+                storage::StorageWithChainData,
+            };
+            let service = LightClientChainService::new(
+                StorageWithChainData::new(storage.clone(), peers.clone(), Default::default()),
+                Arc::new(chain.consensus().clone()),
+            );
+            assert_eq!(
+                service
+                    .get_transaction(&tx.hash().unpack())
+                    .tx_status
+                    .status,
+                Status::Committed,
+                "the previous transaction remains committed while replacement work is pending"
+            );
+            let accepted_tip = storage.get_tip_header();
+            let accepted_tip_hash = accepted_tip.calc_header_hash();
+            let accepted_tip_number: BlockNumber = accepted_tip.raw().number().unpack();
+            assert_eq!(accepted_tip_number, prev_last_number);
+            let pending = protocol
+                .peers()
+                .pending_continuity(peer_index)
+                .expect("candidate remains pending until sampled replacement work succeeds");
+            let candidate_hash = last_header.header().calc_header_hash();
+            assert_eq!(pending.0, accepted_tip_hash);
+            assert_eq!(pending.1.get_last_header().header().hash(), candidate_hash);
+            assert!(pending.1.needs_genesis_bridge);
+            assert!(
+                pending.1.proved_headers.iter().any(|header| {
+                    header.number() == prev_last_number - 1
+                        && header.hash() != accepted_tip.raw().parent_hash()
+                }),
+                "the replacement proof authenticates a conflicting parent-height header"
+            );
+            let rollback_boundary = pending
+                .1
+                .authenticated_rollback_boundary
+                .as_ref()
+                .expect("authenticated common ancestor is preserved for recovery");
+            assert!(rollback_boundary.matches(&accepted_tip_hash, &candidate_hash));
+            assert_eq!(
+                rollback_boundary.number(),
+                prev_last_number - rollback_blocks_count
+            );
+
+            let recovery_request = protocol
+                .get_peer_state(&peer_index)
+                .expect("peer state")
+                .get_prove_request()
+                .cloned()
+                .expect("sampled replacement work request is active");
+            assert_eq!(
+                recovery_request.recovery_accepted_tip(),
+                Some(&accepted_tip_hash)
+            );
+            assert_eq!(recovery_request.get_content().last_hash(), candidate_hash);
+            let recovery_start_number: BlockNumber =
+                recovery_request.get_content().start_number().unpack();
+            assert_eq!(recovery_start_number, 0);
+            let recovery_proof =
+                replacement_work_proof(&chain, recovery_request.get_content(), &last_header, false);
+            protocol
+                .received(nc.context(), peer_index, recovery_proof.as_bytes())
+                .await;
+            assert_eq!(
+                storage.get_tip_header().calc_header_hash(),
+                candidate_hash,
+                "authenticated sampled work accepts the pending candidate"
+            );
+            assert!(protocol.peers().pending_continuity(peer_index).is_none());
+            assert!(nc.not_banned(peer_index));
         }
 
         if param.result != StatusCode::OK {
@@ -2384,7 +2840,10 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
             );
             return;
         }
-        if prev_last_number <= 1 || param.long_fork_detected {
+        if prev_last_number <= 1
+            || param.long_fork_detected
+            || rollback_blocks_count > last_n_blocks
+        {
             assert!(prove_state.get_reorg_last_headers().is_empty());
         } else {
             assert!(!prove_state.get_reorg_last_headers().is_empty());
@@ -2432,18 +2891,63 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                     crate::service::FetchStatus::Added { .. }
                 ));
                 protocol.notify(nc.context(), 1).await;
+                let request = peers
+                    .get_peer(&peer_index)
+                    .and_then(|peer| peer.get_blocks_proof_request().cloned())
+                    .expect("scheduler issued the replacement header proof request");
+                assert_eq!(request.last_hash(), last_header.header().hash());
+                assert!(request
+                    .block_hashes()
+                    .contains(&replacement.hash().unpack()));
+                let requested_blocks = request
+                    .block_hashes()
+                    .iter()
+                    .map(|hash| {
+                        (0..=last_number)
+                            .find_map(|number| {
+                                snapshot.get_block_by_number(number).filter(|block| {
+                                    let block_hash: H256 = block.hash().unpack();
+                                    block_hash == *hash
+                                })
+                            })
+                            .expect("every requested hash is on the replacement chain")
+                    })
+                    .collect::<Vec<_>>();
+                let requested_numbers = requested_blocks
+                    .iter()
+                    .map(|block| block.number())
+                    .collect::<Vec<_>>();
                 let response = packed::SendBlocksProofV1::new_builder()
                     .last_header(
                         snapshot
                             .get_verifiable_header_by_number(last_number)
-                            .unwrap(),
+                            .expect("candidate tip is available for the issued request"),
                     )
-                    .proof(chain.build_proof_by_numbers(last_number, &[replacement.number()]))
-                    .headers(vec![replacement.header().data()].pack())
-                    .blocks_uncles_hash(vec![replacement.calc_uncles_hash()].pack())
-                    .blocks_extension(vec![packed::BytesOpt::new_builder()
-                        .set(replacement.extension())
-                        .build()])
+                    .proof(chain.build_proof_by_numbers(last_number, &requested_numbers))
+                    .headers(
+                        requested_blocks
+                            .iter()
+                            .map(|block| block.header().data())
+                            .collect::<Vec<_>>()
+                            .pack(),
+                    )
+                    .blocks_uncles_hash(
+                        requested_blocks
+                            .iter()
+                            .map(|block| block.calc_uncles_hash())
+                            .collect::<Vec<_>>()
+                            .pack(),
+                    )
+                    .blocks_extension(
+                        requested_blocks
+                            .iter()
+                            .map(|block| {
+                                packed::BytesOpt::new_builder()
+                                    .set(block.extension())
+                                    .build()
+                            })
+                            .collect::<Vec<_>>(),
+                    )
                     .build();
                 protocol
                     .received(
@@ -2483,8 +2987,370 @@ async fn test_with_reorg_blocks(param: ReorgTestParameter) {
                 .is_none());
             return;
         }
-        let no_reorg =
-            rollback_blocks_count == 0 && last_number - prev_last_number <= last_n_blocks;
+        let no_reorg = rollback_blocks_count == 0;
+        if let Some((accepted_hash, pending)) = protocol.peers().pending_continuity(peer_index) {
+            assert_eq!(storage.get_tip_header().calc_header_hash(), accepted_hash);
+            assert_eq!(
+                pending.get_last_header().header().hash(),
+                last_header.header().hash()
+            );
+            if no_reorg {
+                let request = protocol
+                    .get_peer(&peer_index)
+                    .unwrap()
+                    .get_blocks_proof_request()
+                    .expect("linear extension requests its accepted anchor")
+                    .clone();
+                assert_eq!(request.block_hashes(), vec![accepted_hash.unpack()]);
+                let previous = chain
+                    .shared()
+                    .snapshot()
+                    .get_block_by_number(prev_last_number)
+                    .unwrap();
+                let bridge = packed::SendBlocksProofV1::new_builder()
+                    .last_header(
+                        chain
+                            .shared()
+                            .snapshot()
+                            .get_verifiable_header_by_number(last_number)
+                            .unwrap(),
+                    )
+                    .proof(chain.build_proof_by_numbers(last_number, &[prev_last_number]))
+                    .headers(vec![previous.header().data()].pack())
+                    .blocks_uncles_hash(vec![previous.calc_uncles_hash()].pack())
+                    .blocks_extension(vec![packed::BytesOpt::new_builder()
+                        .set(previous.extension())
+                        .build()])
+                    .build();
+                protocol
+                    .received(
+                        nc.context(),
+                        peer_index,
+                        packed::LightClientMessage::new_builder()
+                            .set(bridge)
+                            .build()
+                            .as_bytes(),
+                    )
+                    .await;
+            } else {
+                for _ in 0..2 {
+                    let peer = protocol.get_peer(&peer_index).unwrap();
+                    let Some(request) = peer.get_blocks_proof_request() else {
+                        break;
+                    };
+                    assert_eq!(request.block_hashes(), vec![accepted_hash.unpack()]);
+                    let snapshot = chain.shared().snapshot();
+                    let missing = packed::SendBlocksProofV1::new_builder()
+                        .last_header(
+                            snapshot
+                                .get_verifiable_header_by_number(last_number)
+                                .unwrap(),
+                        )
+                        .missing_block_hashes(vec![accepted_hash.clone()].pack())
+                        .build();
+                    let message = packed::LightClientMessage::new_builder()
+                        .set(missing)
+                        .build();
+                    protocol
+                        .received(nc.context(), peer_index, message.as_bytes())
+                        .await;
+                }
+                let request = protocol
+                    .get_peer_state(&peer_index)
+                    .unwrap()
+                    .get_prove_request()
+                    .expect("detached candidate requests sampled work")
+                    .clone();
+                let mut active_request = request.clone();
+                assert_eq!(request.recovery_accepted_tip(), Some(&accepted_hash));
+                if param.restart && last_number == 30 && last_n_blocks == 20 {
+                    assert_eq!(prev_last_number, 15);
+                    let recovery_start_number: BlockNumber =
+                        request.get_content().start_number().unpack();
+                    assert_eq!(recovery_start_number, 0);
+                    assert_eq!(
+                        chain
+                            .shared()
+                            .snapshot()
+                            .get_total_difficulty_by_number(0)
+                            .unwrap(),
+                        U256::from(0x64u64)
+                    );
+                    let content = request
+                        .get_content()
+                        .clone()
+                        .as_builder()
+                        .difficulty_boundary(U256::from(0x409u64).pack())
+                        .difficulties(vec![U256::from(0x9u64).pack()].pack())
+                        .build();
+                    let retry_content = request
+                        .get_content()
+                        .clone()
+                        .as_builder()
+                        .difficulty_boundary(U256::from(0x409u64).pack())
+                        .difficulties(vec![U256::from(0x65u64).pack()].pack())
+                        .build();
+                    let original_rollback_boundary = protocol
+                        .peers()
+                        .pending_continuity(peer_index)
+                        .and_then(|(_, state)| state.authenticated_rollback_boundary)
+                        .expect("recovery carries an authenticated rollback boundary");
+                    let configured_retry_content = if param.investigation_retry_exhaustion {
+                        content.clone()
+                    } else {
+                        retry_content.clone()
+                    };
+                    protocol.set_recovery_proof_content_override(Some(
+                        configured_retry_content.clone(),
+                    ));
+                    let mut fixed = ProveRequest::new(
+                        LastState::new(request.get_last_header().clone()),
+                        content.clone(),
+                    );
+                    fixed.replacement_work_recovery(accepted_hash.clone());
+                    protocol
+                        .peers()
+                        .update_prove_request(peer_index, fixed)
+                        .unwrap();
+                    let last_header = chain
+                        .shared()
+                        .snapshot()
+                        .get_verifiable_header_by_number(last_number)
+                        .unwrap();
+                    let accepted_filter_cursor = storage.get_min_filtered_block_number();
+                    if param.investigation_invalid_genesis_mmr {
+                        let response = replacement_work_proof_with_mmr_numbers(
+                            &chain,
+                            &content,
+                            &last_header,
+                            false,
+                            Some(&[1]),
+                        );
+                        let sent_count = nc.sent_messages().borrow().len();
+                        protocol
+                            .received(nc.context(), peer_index, response.as_bytes())
+                            .await;
+                        assert!(nc.banned_since(peer_index, StatusCode::InvalidProof));
+                        assert_eq!(storage.get_tip_header().calc_header_hash(), accepted_hash);
+                        assert_eq!(
+                            storage.get_min_filtered_block_number(),
+                            accepted_filter_cursor
+                        );
+                        let (pending_tip, pending_state) = protocol
+                            .peers()
+                            .pending_continuity(peer_index)
+                            .expect("invalid MMR cannot consume pending recovery");
+                        assert_eq!(pending_tip, accepted_hash);
+                        assert_eq!(pending_state.recovery_sampling_requests, 1);
+                        assert!(pending_state.verified_replacement_work.is_none());
+                        let current_request = protocol
+                            .get_peer_state(&peer_index)
+                            .unwrap()
+                            .get_prove_request()
+                            .expect("invalid MMR leaves the active request intact")
+                            .clone();
+                        assert_eq!(current_request.get_content().as_bytes(), content.as_bytes());
+                        assert_eq!(nc.sent_messages().borrow().len(), sent_count);
+                        return;
+                    }
+                    let response = replacement_work_proof(&chain, &content, &last_header, false);
+                    if param.investigation_retry_send_failure {
+                        nc.fail_next_send();
+                    }
+                    protocol
+                        .received(nc.context(), peer_index, response.as_bytes())
+                        .await;
+                    assert!(
+                        nc.not_banned(peer_index),
+                        "a valid genesis-only sample is inconclusive, not invalid total difficulty"
+                    );
+                    assert_eq!(
+                        storage.get_tip_header().calc_header_hash(),
+                        accepted_hash,
+                        "an inconclusive sample cannot replace the accepted tip"
+                    );
+                    let (pending_tip, pending_state) = protocol
+                        .peers()
+                        .pending_continuity(peer_index)
+                        .expect("the inconclusive response retains the recovery attempt");
+                    assert_eq!(pending_tip, accepted_hash);
+                    assert_eq!(
+                        pending_state.get_last_header().header().hash(),
+                        request.get_content().last_hash()
+                    );
+                    assert!(pending_state.verified_replacement_work.is_none());
+                    assert!(
+                        pending_state.authenticated_rollback_boundary.as_ref()
+                            == Some(&original_rollback_boundary),
+                        "the inconclusive response retains the authenticated rollback boundary"
+                    );
+                    let retry = if param.investigation_retry_send_failure {
+                        assert!(protocol
+                            .get_peer_state(&peer_index)
+                            .unwrap()
+                            .get_prove_request()
+                            .is_none());
+                        let (_, pending_state) = protocol
+                            .peers()
+                            .pending_continuity(peer_index)
+                            .expect("send failure retains the bounded recovery attempt");
+                        assert_eq!(pending_state.recovery_sampling_requests, 2);
+                        protocol.request_continuity(&nc.context());
+                        protocol
+                            .get_peer_state(&peer_index)
+                            .unwrap()
+                            .get_prove_request()
+                            .expect("continuity scheduler retries after a send failure")
+                            .clone()
+                    } else {
+                        protocol
+                            .get_peer_state(&peer_index)
+                            .unwrap()
+                            .get_prove_request()
+                            .expect("inconclusive sample schedules another request")
+                            .clone()
+                    };
+                    assert_eq!(retry.recovery_accepted_tip(), Some(&accepted_hash));
+                    assert_eq!(
+                        retry.get_content().as_bytes(),
+                        configured_retry_content.as_bytes()
+                    );
+                    assert_eq!(
+                        retry.get_content().last_hash(),
+                        request.get_content().last_hash()
+                    );
+                    let retry_start_number: BlockNumber =
+                        retry.get_content().start_number().unpack();
+                    assert_eq!(retry_start_number, 0);
+                    active_request = retry;
+                    if !param.investigation_retry_exhaustion {
+                        protocol.set_recovery_proof_content_override(None);
+                    }
+                    if param.investigation_obsolete_genesis_response {
+                        let stale = replacement_work_proof(&chain, &content, &last_header, false);
+                        let sent_count = nc.sent_messages().borrow().len();
+                        protocol
+                            .received(nc.context(), peer_index, stale.as_bytes())
+                            .await;
+                        assert!(nc.banned_since(peer_index, StatusCode::InvalidSamples));
+                        assert_eq!(storage.get_tip_header().calc_header_hash(), accepted_hash);
+                        let (pending_tip, pending_state) = protocol
+                            .peers()
+                            .pending_continuity(peer_index)
+                            .expect("obsolete proof cannot consume pending recovery");
+                        assert_eq!(pending_tip, accepted_hash);
+                        assert_eq!(pending_state.recovery_sampling_requests, 2);
+                        assert!(pending_state.verified_replacement_work.is_none());
+                        let current_request = protocol
+                            .get_peer_state(&peer_index)
+                            .unwrap()
+                            .get_prove_request()
+                            .expect("obsolete proof leaves replacement request active")
+                            .clone();
+                        assert_eq!(
+                            current_request.get_content().as_bytes(),
+                            retry_content.as_bytes()
+                        );
+                        assert_eq!(nc.sent_messages().borrow().len(), sent_count);
+                        return;
+                    }
+                    if param.investigation_retry_exhaustion {
+                        assert_eq!(
+                            storage.get_min_filtered_block_number(),
+                            accepted_filter_cursor
+                        );
+                        for response_number in 0..2 {
+                            let current_request = protocol
+                                .get_peer_state(&peer_index)
+                                .unwrap()
+                                .get_prove_request()
+                                .expect("each inconclusive reply before exhaustion has a request")
+                                .clone();
+                            let response = replacement_work_proof(
+                                &chain,
+                                current_request.get_content(),
+                                &last_header,
+                                false,
+                            );
+                            protocol
+                                .received(nc.context(), peer_index, response.as_bytes())
+                                .await;
+                            assert!(nc.not_banned(peer_index));
+                            assert_eq!(storage.get_tip_header().calc_header_hash(), accepted_hash);
+                            assert_eq!(
+                                storage.get_min_filtered_block_number(),
+                                accepted_filter_cursor
+                            );
+                            if response_number == 0 {
+                                let (_, pending_state) = protocol
+                                    .peers()
+                                    .pending_continuity(peer_index)
+                                    .expect("retry budget remains after the second reply");
+                                assert_eq!(pending_state.recovery_sampling_requests, 3);
+                            } else {
+                                assert!(protocol.peers().pending_continuity(peer_index).is_none());
+                                assert!(protocol
+                                    .get_peer_state(&peer_index)
+                                    .unwrap()
+                                    .get_prove_request()
+                                    .is_none());
+                            }
+                        }
+                        protocol.set_recovery_proof_content_override(None);
+                        protocol
+                            .notify(
+                                nc.context(),
+                                crate::protocols::light_client::constant::REFRESH_PEERS_TOKEN,
+                            )
+                            .await;
+                        let next_attempt = protocol
+                            .get_peer_state(&peer_index)
+                            .unwrap()
+                            .get_prove_request()
+                            .expect("refresh schedules a fresh full proof after exhaustion")
+                            .clone();
+                        assert!(next_attempt.recovery_accepted_tip().is_none());
+                        assert_eq!(
+                            next_attempt.get_content().last_hash(),
+                            request.get_content().last_hash()
+                        );
+                        let next_start_number: BlockNumber =
+                            next_attempt.get_content().start_number().unpack();
+                        assert!(next_start_number <= prev_last_number);
+                        assert_ne!(
+                            next_attempt.get_content().start_hash(),
+                            storage.get_genesis_block().calc_header_hash(),
+                            "the fresh full proof is rooted in the retained accepted history"
+                        );
+                        return;
+                    }
+                }
+                let replacement = replacement_work_proof(
+                    &chain,
+                    active_request.get_content(),
+                    &chain
+                        .shared()
+                        .snapshot()
+                        .get_verifiable_header_by_number(last_number)
+                        .unwrap(),
+                    false,
+                );
+                protocol
+                    .received(nc.context(), peer_index, replacement.as_bytes())
+                    .await;
+                assert!(nc.not_banned(peer_index));
+                assert!(
+                    protocol.peers().pending_continuity(peer_index).is_none(),
+                    "sampled recovery must retire the pending candidate"
+                );
+            }
+        }
+        if last_number > prev_last_number {
+            assert_eq!(
+                storage.get_tip_header().calc_header_hash(),
+                last_header.header().hash()
+            );
+        }
         let min_filtered_block_number = if rollback_blocks_count == 0 {
             if no_reorg {
                 prev_last_number
@@ -2778,6 +3644,152 @@ async fn recovery_verified_linear_extension_with_missing_then_valid_old_tip_brid
         reorg_blocks_opt: Some(vec![]),
         restart: true,
         investigation_linear: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_missing_genesis_inclusion_cannot_authorize_the_pending_transition() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 350,
+        prev_last_number_opt: Some(120),
+        last_n_blocks: 100,
+        reorg_blocks_opt: Some(vec![]),
+        restart: true,
+        investigation_bounded_continuity: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_positive_genesis_after_missing_old_tip_proves_a_fork() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 350,
+        prev_last_number_opt: Some(120),
+        rollback_blocks_count: 1,
+        last_n_blocks: 100,
+        reorg_blocks_opt: Some(vec![]),
+        restart: true,
+        investigation_positive_genesis: true,
+        investigation_include_previous_height_sample: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_positive_genesis_requires_sampled_replacement_work() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 350,
+        prev_last_number_opt: Some(120),
+        last_n_blocks: 100,
+        reorg_blocks_opt: Some(vec![]),
+        restart: true,
+        investigation_positive_genesis: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_incomplete_genesis_samples_preserve_the_accepted_state() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 350,
+        prev_last_number_opt: Some(120),
+        last_n_blocks: 100,
+        reorg_blocks_opt: Some(vec![]),
+        restart: true,
+        investigation_positive_genesis: true,
+        investigation_incomplete_recovery_proof: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_genesis_inclusion_without_sampled_work_preserves_the_accepted_state() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 350,
+        prev_last_number_opt: Some(120),
+        last_n_blocks: 100,
+        reorg_blocks_opt: Some(vec![]),
+        restart: true,
+        investigation_positive_genesis: true,
+        investigation_genesis_inclusion_only: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_full_genesis_history_verifies_exact_accumulated_work() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 30,
+        prev_last_number_opt: Some(15),
+        rollback_blocks_count: 15,
+        last_n_blocks: 100,
+        reorg_blocks_opt: Some(vec![]),
+        restart: true,
+        investigation_positive_genesis: true,
+        investigation_full_genesis_recovery: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_genesis_only_sampling_retries_are_bounded() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 30,
+        prev_last_number_opt: Some(15),
+        rollback_blocks_count: 3,
+        last_n_blocks: 20,
+        restart: true,
+        investigation_retry_exhaustion: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_genesis_retry_send_failure_resumes_through_continuity_scheduler() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 30,
+        prev_last_number_opt: Some(15),
+        rollback_blocks_count: 3,
+        last_n_blocks: 20,
+        restart: true,
+        investigation_retry_send_failure: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_invalid_genesis_only_mmr_cannot_schedule_a_retry() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 30,
+        prev_last_number_opt: Some(15),
+        rollback_blocks_count: 3,
+        last_n_blocks: 20,
+        restart: true,
+        investigation_invalid_genesis_mmr: true,
+        ..Default::default()
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_obsolete_genesis_only_response_cannot_schedule_a_retry() {
+    test_with_reorg_blocks(ReorgTestParameter {
+        last_number: 30,
+        prev_last_number_opt: Some(15),
+        rollback_blocks_count: 3,
+        last_n_blocks: 20,
+        restart: true,
+        investigation_obsolete_genesis_response: true,
         ..Default::default()
     })
     .await;

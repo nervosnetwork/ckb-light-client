@@ -49,6 +49,29 @@ use crate::protocols::{GET_BLOCKS_PROOF_LIMIT, GET_TRANSACTIONS_PROOF_LIMIT, LAS
 use crate::storage::{LightClientStorage, Storage};
 use crate::utils::network::prove_or_download_matched_blocks;
 
+pub(crate) const MAX_RECOVERY_SAMPLING_REQUESTS: u8 = 3;
+
+fn authenticated_recent_suffix(tip: &packed::Header, proved: &[HeaderView]) -> Vec<HeaderView> {
+    let tip = tip.clone().into_view();
+    let by_position: HashMap<_, _> = proved
+        .iter()
+        .map(|header| ((header.number(), header.hash()), header.clone()))
+        .collect();
+    let mut suffix = Vec::new();
+    let mut expected_hash = tip.parent_hash();
+    let mut number = tip.number().checked_sub(1);
+    while let Some(height) = number {
+        let Some(header) = by_position.get(&(height, expected_hash.clone())) else {
+            break;
+        };
+        expected_hash = header.parent_hash();
+        suffix.push(header.clone());
+        number = height.checked_sub(1);
+    }
+    suffix.reverse();
+    suffix
+}
+
 pub struct LightClientProtocol {
     storage: Storage,
     peers: Arc<Peers>,
@@ -56,6 +79,8 @@ pub struct LightClientProtocol {
     mmr_activated_epoch: EpochNumber,
     last_n_blocks: BlockNumber,
     init_blocks_in_transit_per_peer: usize,
+    #[cfg(test)]
+    recovery_proof_content_override: Option<packed::GetLastStateProof>,
 }
 
 #[async_trait]
@@ -350,74 +375,223 @@ impl LightClientProtocol {
         if work > old_work {
             let tip = new_prove_state.get_last_header().header().data();
             let previous_view = previous.clone().into_view();
-            let extends = crate::storage::canonical::extends(
-                &previous,
-                &tip,
-                new_prove_state.get_last_headers(),
-            );
+            let previous_hash = previous_view.hash();
+            let candidate_hash = new_prove_state.get_last_header().header().hash();
+            let active_recovery_request = self
+                .peers
+                .get_state(&peer_index)
+                .and_then(|state| state.get_prove_request().cloned());
+            let pending_recovery = self.peers.pending_continuity(peer_index);
+            let pending_recovery_matches =
+                pending_recovery
+                    .as_ref()
+                    .is_some_and(|(accepted_tip, candidate)| {
+                        accepted_tip == &previous_hash
+                            && candidate.get_last_header().header().hash() == candidate_hash
+                    });
+            let pending_rollback_boundary = pending_recovery
+                .as_ref()
+                .filter(|(accepted_tip, candidate)| {
+                    accepted_tip == &previous_hash
+                        && candidate.get_last_header().header().hash() == candidate_hash
+                })
+                .and_then(|(_, candidate)| {
+                    candidate
+                        .authenticated_rollback_boundary
+                        .clone()
+                        .filter(|boundary| boundary.matches(&previous_hash, &candidate_hash))
+                });
+            let replacement_work_verified = new_prove_state
+                .verified_replacement_work
+                .as_ref()
+                .zip(active_recovery_request.as_ref())
+                .is_some_and(|(verified, request)| {
+                    pending_recovery_matches
+                        && verified.rollback_boundary == pending_rollback_boundary
+                        && verified.matches_request(&previous_hash, &candidate_hash, request)
+                        && new_prove_state.recovery_accepted_tip.as_ref() == Some(&previous_hash)
+                });
+            if new_prove_state.verified_replacement_work.is_some() && !replacement_work_verified {
+                return Ok(false);
+            }
             let bridged = new_prove_state
                 .proved_headers
                 .iter()
-                .any(|header| header.data().as_slice() == previous.as_slice());
-            let reorg = new_prove_state.get_reorg_last_headers();
-            let mut fork = if reorg.is_empty() {
-                None
+                .any(|header| header.hash() == previous_hash);
+            let tip_number: u64 = tip.raw().number().unpack();
+            let direct_extension = previous_view.number().checked_add(1) == Some(tip_number)
+                && tip.raw().parent_hash() == previous_hash;
+            let candidate_at_previous_height = if tip_number == previous_view.number() {
+                Some(tip.calc_header_hash())
             } else {
-                let old: HashMap<_, _> = self.storage.get_last_n_headers().into_iter().collect();
-                reorg.iter().rev().find_map(|header| {
-                    old.get(&header.number())
-                        .filter(|hash| **hash == header.hash())
-                        .map(|_| header.number())
-                })
+                new_prove_state
+                    .proved_headers
+                    .iter()
+                    .find(|header| header.number() == previous_view.number())
+                    .map(|header| header.hash())
             };
-            let genesis = self.storage.get_genesis_block().calc_header_hash();
-            if fork.is_none() && !extends && !bridged {
-                let common_genesis = new_prove_state.proved_headers.iter().any(|header| {
-                    (header.number() == 0 && header.hash() == genesis)
-                        || (header.number() == 1 && header.parent_hash() == genesis)
+            let previous_parent_hash = previous_view.parent_hash();
+            let extends_previous_height = candidate_at_previous_height
+                .as_ref()
+                .is_some_and(|hash| hash == &previous_hash);
+            let detached_at_previous_parent =
+                previous_view.number().checked_sub(1).is_some_and(|height| {
+                    new_prove_state.proved_headers.iter().any(|header| {
+                        header.number() == height && header.hash() != previous_parent_hash
+                    })
                 });
-                if common_genesis {
-                    fork = Some(0);
+            let detached_previous_tip = tip_number < previous_view.number()
+                || candidate_at_previous_height
+                    .as_ref()
+                    .is_some_and(|hash| hash != &previous_hash)
+                || detached_at_previous_parent;
+            let accepted_proved_headers = self
+                .peers
+                .get_all_prove_states()
+                .into_iter()
+                .filter(|(_, state)| state.get_last_header().header().hash() == previous_hash)
+                .flat_map(|(_, state)| state.proved_headers)
+                .collect::<Vec<_>>();
+            let accepted_recent =
+                crate::storage::canonical::accepted_recent_window(&self.storage, &previous)
+                    .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?
+                    .unwrap_or_default();
+            let authenticated_common_ancestors = new_prove_state
+                .proved_headers
+                .iter()
+                .filter_map(|header| {
+                    let number = header.number();
+                    let hash = header.hash();
+                    let is_previous_tip = number == previous_view.number() && hash == previous_hash;
+                    let is_previous_parent = previous_view
+                        .number()
+                        .checked_sub(1)
+                        .is_some_and(|height| number == height && hash == previous_parent_hash);
+                    let was_proved_under_accepted_tip = accepted_proved_headers
+                        .iter()
+                        .any(|accepted| accepted.number() == number && accepted.hash() == hash);
+                    let was_in_accepted_recent = accepted_recent
+                        .iter()
+                        .any(|(height, accepted_hash)| *height == number && accepted_hash == &hash);
+                    (is_previous_tip
+                        || is_previous_parent
+                        || was_proved_under_accepted_tip
+                        || was_in_accepted_recent)
+                        .then_some((number, hash))
+                })
+                .collect::<Vec<_>>();
+            let work_anchor_is_common =
+                new_prove_state
+                    .work_anchor
+                    .as_ref()
+                    .and_then(|(number, hash)| {
+                        authenticated_common_ancestors
+                            .iter()
+                            .any(|(ancestor_number, ancestor_hash)| {
+                                ancestor_number == number && ancestor_hash == hash
+                            })
+                            .then_some((*number, hash.clone()))
+                    });
+            let direct_parent_work = direct_extension && {
+                let parent_total_difficulty: U256 = new_prove_state
+                    .get_last_header()
+                    .parent_chain_root()
+                    .total_difficulty()
+                    .unpack();
+                parent_total_difficulty == old_work
+            };
+            #[derive(Clone, Copy)]
+            enum ChainEvidence {
+                ProvenExtension,
+                ProvenFork(u64),
+                ConservativeRecovery,
+                Insufficient,
+            }
+            let evidence = if replacement_work_verified {
+                ChainEvidence::ConservativeRecovery
+            } else if (bridged || direct_extension || extends_previous_height)
+                && (work_anchor_is_common.is_some() || direct_parent_work)
+            {
+                ChainEvidence::ProvenExtension
+            } else if detached_previous_tip {
+                work_anchor_is_common
+                    .clone()
+                    .map(|(ancestor, _)| ChainEvidence::ProvenFork(ancestor))
+                    .unwrap_or(ChainEvidence::Insufficient)
+            } else {
+                ChainEvidence::Insufficient
+            };
+            let recent = authenticated_recent_suffix(&tip, &new_prove_state.proved_headers);
+            let recovery_rollback_number = pending_rollback_boundary
+                .as_ref()
+                .map(peers::AuthenticatedRollbackBoundary::number);
+            let fork = match evidence {
+                ChainEvidence::ProvenExtension => Some(previous_view.number()),
+                ChainEvidence::ProvenFork(fork) => Some(fork),
+                ChainEvidence::ConservativeRecovery => Some(recovery_rollback_number.unwrap_or(0)),
+                ChainEvidence::Insufficient => None,
+            };
+            let Some(fork) = fork else {
+                new_prove_state.needs_genesis_bridge |=
+                    detached_previous_tip || bridged || extends_previous_height || direct_extension;
+                new_prove_state.authenticated_rollback_boundary = authenticated_common_ancestors
+                    .iter()
+                    .filter(|(number, _)| *number < previous_view.number())
+                    .max_by_key(|(number, _)| *number)
+                    .map(|(number, hash)| {
+                        peers::AuthenticatedRollbackBoundary::new(
+                            previous_hash.clone(),
+                            candidate_hash.clone(),
+                            *number,
+                            hash.clone(),
+                        )
+                    });
+                // Missing continuity is pending evidence. Inherited recent-window
+                // rows do not establish accepted-chain ancestry.
+                self.peers
+                    .update_prove_state(peer_index, new_prove_state.clone())?;
+                self.peers
+                    .queue_continuity(peer_index, previous_view.hash(), new_prove_state);
+                return Ok(true);
+            };
+            if replacement_work_verified && pending_rollback_boundary.is_some() {
+                if let Some((_, pending)) = pending_recovery.as_ref() {
+                    new_prove_state
+                        .set_reorg_last_headers(pending.get_reorg_last_headers().to_vec());
                 }
             }
-            if !reorg.is_empty() && fork.is_none() && !extends && !bridged {
-                // No retained common prefix: authenticate the configured genesis
-                // under this candidate root before choosing a full in-place repair.
-                new_prove_state.needs_genesis_bridge = true;
-                self.peers
-                    .queue_continuity(peer_index, previous_view.hash(), new_prove_state);
-                return Ok(true);
-            }
-            if previous_view.number() > 0 && !extends && !bridged && fork.is_none() {
-                // Missing continuity is pending evidence, not a poisoned index.
-                // Keep the accepted tip/rows intact while obtaining its exact MMR inclusion.
-                self.peers
-                    .queue_continuity(peer_index, previous_view.hash(), new_prove_state);
-                return Ok(true);
-            }
-            if let Some(fork) = fork.filter(|_| !extends && !bridged) {
+            if matches!(
+                evidence,
+                ChainEvidence::ProvenFork(_) | ChainEvidence::ConservativeRecovery
+            ) {
                 crate::storage::canonical::accept_with_rollback(
                     &self.storage,
                     &work,
                     &tip,
-                    new_prove_state.get_last_headers(),
+                    &recent,
                     fork,
                 )
                 .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?;
                 self.peers()
                     .retire_proof_requests_anchored_at(&previous_view.hash());
+                self.peers()
+                    .invalidate_latest_block_filter_hashes(peer_index);
                 matched_blocks.clear();
             } else {
                 crate::storage::canonical::update_state(
                     &self.storage,
                     &work,
                     &tip,
-                    new_prove_state.get_last_headers(),
-                    bridged.then_some(previous_view.number()),
+                    &recent,
+                    Some(previous_view.number()),
                 )
                 .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?;
             }
             self.peers.clear_continuity(peer_index);
+            new_prove_state.needs_genesis_bridge = false;
+            new_prove_state.continuity_retries = 0;
+            new_prove_state.recovery_accepted_tip = None;
+            new_prove_state.verified_replacement_work = None;
         }
         self.peers()
             .update_prove_state(peer_index, new_prove_state)?;
@@ -440,6 +614,8 @@ impl LightClientProtocol {
             mmr_activated_epoch,
             last_n_blocks: LAST_N_BLOCKS,
             init_blocks_in_transit_per_peer: INIT_BLOCKS_IN_TRANSIT_PER_PEER,
+            #[cfg(test)]
+            recovery_proof_content_override: None,
         }
     }
 
@@ -450,6 +626,14 @@ impl LightClientProtocol {
     #[cfg(test)]
     pub(crate) fn set_last_n_blocks(&mut self, last_n_blocks: BlockNumber) {
         self.last_n_blocks = last_n_blocks;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_recovery_proof_content_override(
+        &mut self,
+        content: Option<packed::GetLastStateProof>,
+    ) {
+        self.recovery_proof_content_override = content;
     }
 
     pub(crate) fn init_blocks_in_transit_per_peer(&self) -> usize {
@@ -700,6 +884,71 @@ impl LightClientProtocol {
         }
     }
 
+    fn request_genesis_recovery(
+        &self,
+        peer: PeerIndex,
+        previous: packed::Byte32,
+        mut state: ProveState,
+        nc: &BoxedCKBProtocolContext,
+    ) {
+        if state.recovery_sampling_requests >= MAX_RECOVERY_SAMPLING_REQUESTS {
+            warn!("peer {peer}: genesis replacement-work retry budget exhausted");
+            self.finish_genesis_recovery_attempt(peer);
+            return;
+        }
+
+        let candidate = state.get_last_header().clone();
+        #[cfg(test)]
+        let content = self
+            .recovery_proof_content_override
+            .clone()
+            .or_else(|| self.build_prove_request_content_from_genesis(&candidate));
+        #[cfg(not(test))]
+        let content = self.build_prove_request_content_from_genesis(&candidate);
+        let Some(content) = content else {
+            warn!("peer {peer}: could not build genesis replacement-work request");
+            return;
+        };
+
+        state.recovery_sampling_requests += 1;
+        let attempts = state.recovery_sampling_requests;
+        self.peers.queue_continuity(peer, previous.clone(), state);
+
+        let mut prove_request = ProveRequest::new(LastState::new(candidate), content.clone());
+        prove_request.replacement_work_recovery(previous);
+        if let Err(error) = self.peers.update_prove_request(peer, prove_request) {
+            warn!("peer {peer}: could not record genesis replacement-work request: {error}");
+            if attempts >= MAX_RECOVERY_SAMPLING_REQUESTS {
+                self.finish_genesis_recovery_attempt(peer);
+            } else {
+                self.peers.clear_prove_request(peer);
+            }
+            return;
+        }
+
+        let message = packed::LightClientMessage::new_builder()
+            .set(content)
+            .build();
+        if let Err(error) = nc.send_message(
+            SupportProtocols::LightClient.protocol_id(),
+            peer,
+            message.as_bytes(),
+        ) {
+            warn!("genesis replacement-work request failed: {error:?}");
+            if attempts >= MAX_RECOVERY_SAMPLING_REQUESTS {
+                self.finish_genesis_recovery_attempt(peer);
+            } else {
+                self.peers.clear_prove_request(peer);
+            }
+        }
+    }
+
+    fn finish_genesis_recovery_attempt(&self, peer: PeerIndex) {
+        self.peers.clear_continuity(peer);
+        self.peers.clear_prove_request(peer);
+        self.peers.clear_prove_state(peer);
+    }
+
     pub(crate) fn request_continuity(&self, nc: &BoxedCKBProtocolContext) {
         for peer in self.peers.continuity_peers() {
             let Some((previous, state)) = self.peers.pending_continuity(peer) else {
@@ -722,19 +971,21 @@ impl LightClientProtocol {
                 self.peers.clear_continuity(peer);
                 continue;
             }
-            if current.get_blocks_proof_request().is_some() {
+            let has_prove_request = self
+                .peers
+                .get_state(&peer)
+                .and_then(|state| state.get_prove_request().cloned())
+                .is_some();
+            if current.get_blocks_proof_request().is_some() || has_prove_request {
+                continue;
+            }
+            if state.needs_genesis_bridge {
+                self.request_genesis_recovery(peer, previous, state, nc);
                 continue;
             }
             let request = packed::GetBlocksProof::new_builder()
                 .last_hash(state.get_last_header().header().hash())
-                .block_hashes(
-                    vec![if state.needs_genesis_bridge {
-                        self.storage.get_genesis_block().calc_header_hash()
-                    } else {
-                        previous
-                    }]
-                    .pack(),
-                )
+                .block_hashes(vec![previous].pack())
                 .build();
             self.peers
                 .update_blocks_proof_request(peer, Some(request.clone()), false);
@@ -818,6 +1069,7 @@ impl LightClientProtocol {
         self.request_ordinal_bodies(nc);
         prove_or_download_matched_blocks(
             Arc::clone(&self.peers),
+            &self.storage,
             &tip_header,
             &matched_blocks,
             nc.as_ref(),
@@ -1013,7 +1265,7 @@ impl LightClientProtocol {
         Some(content)
     }
 
-    pub(crate) async fn build_prove_request_content_from_genesis(
+    pub(crate) fn build_prove_request_content_from_genesis(
         &self,
         last_header: &VerifiableHeader,
     ) -> Option<packed::GetLastStateProof> {
