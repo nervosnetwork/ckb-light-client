@@ -1,5 +1,5 @@
 use ckb_network::{bytes::Bytes, CKBProtocolHandler, PeerIndex, SupportProtocols};
-use ckb_systemtime::{faketime, unix_time_as_millis};
+use ckb_systemtime::unix_time_as_millis;
 use ckb_types::{
     core::{BlockNumber, EpochNumberWithFraction, HeaderBuilder},
     packed,
@@ -18,7 +18,7 @@ use crate::{
     storage::LightClientStorage,
     tests::{
         prelude::*,
-        utils::{setup, MockChain, MockNetworkContext},
+        utils::{faketime, setup, MockChain, MockNetworkContext},
     },
 };
 
@@ -166,12 +166,499 @@ async fn build_prove_request_content() {
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn accepted_state_proof_is_reusable_but_pending_candidate_proof_is_not() {
+    let chain = MockChain::new_with_dummy_pow("accepted-state-proof-reuse").start();
+    chain.mine_to(31);
+    let snapshot = chain.shared().snapshot();
+    let peers = chain.create_peers();
+    let accepted_peer = PeerIndex::new(20);
+    let candidate_peer = PeerIndex::new(21);
+    peers.add_peer(accepted_peer);
+    peers.add_peer(candidate_peer);
+
+    let target: VerifiableHeader = snapshot
+        .get_verifiable_header_by_number(31)
+        .expect("accepted tip")
+        .into();
+    let accepted_work = snapshot
+        .get_total_difficulty_by_number(31)
+        .expect("accepted total difficulty");
+    let accepted_history = (1..31)
+        .map(|number| {
+            snapshot
+                .get_header_by_number(number)
+                .expect("accepted history")
+        })
+        .collect::<Vec<_>>();
+    chain.client_storage().update_last_state(
+        &accepted_work,
+        &target.header().data(),
+        &accepted_history,
+    );
+    peers
+        .mock_prove_state(accepted_peer, target.clone())
+        .expect("accepted peer proof state");
+
+    assert_eq!(
+        peers
+            .find_if_a_header_is_proved(&target)
+            .map(|(peer, _)| peer),
+        Some(accepted_peer),
+        "proofs cached under the accepted tip remain reusable"
+    );
+
+    let mut pending_candidate = peers
+        .get_state(&accepted_peer)
+        .and_then(|state| state.get_prove_state().cloned())
+        .expect("accepted proof state");
+    pending_candidate.needs_genesis_bridge = true;
+    peers.queue_continuity(
+        accepted_peer,
+        chain.client_storage().get_tip_header().calc_header_hash(),
+        pending_candidate,
+    );
+    assert!(
+        peers.find_if_a_header_is_proved(&target).is_none(),
+        "proofs with pending continuity are never reused as accepted-state evidence"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn expanded_shallow_reorg_proof_covers_candidate_tips_31_to_35() {
+    let chain = MockChain::new_with_dummy_pow("shallow-reorg-proof").start();
+    chain.mine_to(35);
+    let snapshot = chain.shared().snapshot();
+    let peers = chain.create_peers();
+    let peer = PeerIndex::new(3);
+    let mut protocol = chain.create_light_client_protocol(peers.clone());
+    protocol.set_last_n_blocks(10);
+    let storage = chain.client_storage();
+    let orphan = snapshot
+        .get_header_by_number(30)
+        .expect("old tip header")
+        .as_advanced_builder()
+        .nonce(123456u128)
+        .build();
+    let old_window = (1..30)
+        .map(|number| {
+            snapshot
+                .get_header_by_number(number)
+                .expect("old window header")
+        })
+        .collect::<Vec<_>>();
+    let old_work = snapshot
+        .get_total_difficulty_by_number(30)
+        .expect("old tip work");
+    let nc = MockNetworkContext::new(SupportProtocols::LightClient);
+
+    for candidate_tip in 31..=35 {
+        storage.update_last_state(&old_work, &orphan.data(), &old_window);
+        peers.add_peer(peer);
+        peers.request_last_state(peer).unwrap();
+        peers.mock_latest_block_filter_hashes(
+            peer,
+            0,
+            vec![snapshot.get_header_by_number(1).unwrap().hash()],
+        );
+
+        let target = snapshot
+            .get_verifiable_header_by_number(candidate_tip)
+            .expect("replacement branch tip");
+        let target_view: VerifiableHeader = target.clone().into();
+        let request = protocol
+            .build_prove_request_content(&PeerState::default(), &target_view)
+            .await
+            .expect("request for the replacement tip");
+        let request_start: BlockNumber = request.start_number().unpack();
+        assert!(
+            request_start <= 29,
+            "request must cover the retained prefix"
+        );
+        assert_eq!(request.last_hash(), target.header().calc_header_hash());
+
+        let last_state = crate::protocols::LastState::new(target.clone().into());
+        peers.update_last_state(peer, last_state.clone()).unwrap();
+        peers
+            .update_prove_request(
+                peer,
+                crate::protocols::ProveRequest::new(last_state, request),
+            )
+            .unwrap();
+        let headers = (request_start..candidate_tip)
+            .map(|number| {
+                snapshot
+                    .get_verifiable_header_by_number(number)
+                    .expect("replacement-chain proof header")
+            })
+            .collect::<Vec<_>>();
+        let numbers = (request_start..candidate_tip).collect::<Vec<_>>();
+        let proof = chain.build_proof_by_numbers(candidate_tip, &numbers);
+        let response = packed::LightClientMessage::new_builder()
+            .set(
+                packed::SendLastStateProof::new_builder()
+                    .last_header(target)
+                    .headers(headers.pack())
+                    .proof(proof)
+                    .build(),
+            )
+            .build();
+        protocol
+            .received(nc.context(), peer, response.as_bytes())
+            .await;
+
+        assert_eq!(
+            storage.get_tip_header().calc_header_hash(),
+            snapshot.get_header_by_number(candidate_tip).unwrap().hash(),
+            "candidate tip {candidate_tip} must replace orphaned block 30"
+        );
+        let prove_state = peers
+            .get_state(&peer)
+            .and_then(|state| state.get_prove_state().cloned())
+            .expect("accepted candidate proof state");
+        assert!(prove_state.get_reorg_last_headers().is_empty());
+        assert!(peers.pending_continuity(peer).is_none());
+        assert!(
+            peers.get_latest_block_filter_hashes(0).is_empty(),
+            "detected fork at tip {candidate_tip} must invalidate the peer cache"
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shallow_reorg_proof_uses_the_real_request_builder_and_accepts_new_tip() {
+    let chain = MockChain::new_with_dummy_pow("original-shallow-reorg-proof").start();
+    chain.mine_to(31);
+    let snapshot = chain.shared().snapshot();
+    let peers = chain.create_peers();
+    let peer = PeerIndex::new(3);
+    let mut protocol = chain.create_light_client_protocol(peers.clone());
+    protocol.set_last_n_blocks(5);
+    let storage = chain.client_storage();
+    let orphan = snapshot
+        .get_header_by_number(30)
+        .expect("old tip header")
+        .as_advanced_builder()
+        .nonce(123456u128)
+        .build();
+    let old_window = (1..30)
+        .map(|number| {
+            snapshot
+                .get_header_by_number(number)
+                .expect("old window header")
+        })
+        .collect::<Vec<_>>();
+    let old_work = snapshot
+        .get_total_difficulty_by_number(30)
+        .expect("old tip work");
+    storage.update_last_state(&old_work, &orphan.data(), &old_window);
+    peers.add_peer(peer);
+    peers.request_last_state(peer).unwrap();
+    peers.mock_latest_block_filter_hashes(
+        peer,
+        0,
+        vec![snapshot.get_header_by_number(1).unwrap().hash()],
+    );
+
+    let target = snapshot
+        .get_verifiable_header_by_number(31)
+        .expect("replacement branch tip");
+    let target_view: VerifiableHeader = target.clone().into();
+    let request = protocol
+        .build_prove_request_content(&PeerState::default(), &target_view)
+        .await
+        .expect("request for replacement tip");
+    let request_start: BlockNumber = request.start_number().unpack();
+    assert_eq!(request_start, 26);
+    assert_eq!(request.last_hash(), target.header().calc_header_hash());
+    let last_state = crate::protocols::LastState::new(target_view.clone());
+    peers.update_last_state(peer, last_state.clone()).unwrap();
+    peers
+        .update_prove_request(
+            peer,
+            crate::protocols::ProveRequest::new(last_state, request),
+        )
+        .unwrap();
+
+    let numbers = (26..31).collect::<Vec<_>>();
+    let headers = numbers
+        .iter()
+        .map(|number| snapshot.get_verifiable_header_by_number(*number).unwrap())
+        .collect::<Vec<_>>();
+    let response = packed::LightClientMessage::new_builder()
+        .set(
+            packed::SendLastStateProof::new_builder()
+                .last_header(target)
+                .headers(headers.pack())
+                .proof(chain.build_proof_by_numbers(31, &numbers))
+                .build(),
+        )
+        .build();
+    protocol
+        .received(
+            MockNetworkContext::new(SupportProtocols::LightClient).context(),
+            peer,
+            response.as_bytes(),
+        )
+        .await;
+
+    assert_eq!(
+        storage.get_tip_header().calc_header_hash(),
+        snapshot.get_header_by_number(31).unwrap().hash()
+    );
+    let prove_state = peers
+        .get_state(&peer)
+        .and_then(|state| state.get_prove_state().cloned())
+        .expect("accepted candidate proof state");
+    assert!(prove_state.get_reorg_last_headers().is_empty());
+    assert!(peers.pending_continuity(peer).is_none());
+    assert!(peers.get_latest_block_filter_hashes(0).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unbound_recent_window_cannot_authorize_a_shallow_fork() {
+    let chain = MockChain::new_with_dummy_pow("unbound-recent-window").start();
+    chain.mine_to(31);
+    let snapshot = chain.shared().snapshot();
+    let peers = chain.create_peers();
+    let peer = PeerIndex::new(4);
+    peers.add_peer(peer);
+    peers.request_last_state(peer).unwrap();
+    let mut protocol = chain.create_light_client_protocol(peers.clone());
+    protocol.set_last_n_blocks(10);
+    let storage = chain.client_storage();
+    let orphan = snapshot
+        .get_header_by_number(30)
+        .expect("old tip header")
+        .as_advanced_builder()
+        .parent_hash(packed::Byte32::new([0xaa; 32]))
+        .nonce(123456u128)
+        .build();
+    let old_window = (1..30)
+        .map(|number| snapshot.get_header_by_number(number).expect("old window"))
+        .collect::<Vec<_>>();
+    let old_work = snapshot
+        .get_total_difficulty_by_number(30)
+        .expect("old tip work");
+    storage.update_last_state(&old_work, &orphan.data(), &old_window);
+    storage.update_last_n_headers(&old_window);
+    assert_eq!(storage.get_tip_header().calc_header_hash(), orphan.hash());
+    assert_eq!(
+        storage.get_tip_header().raw().parent_hash(),
+        packed::Byte32::new([0xaa; 32])
+    );
+
+    let target = snapshot
+        .get_verifiable_header_by_number(31)
+        .expect("replacement tip");
+    let request = protocol
+        .build_prove_request_content(&PeerState::default(), &target.clone().into())
+        .await
+        .expect("request for replacement tip");
+    let request_start: BlockNumber = request.start_number().unpack();
+    let last_state = crate::protocols::LastState::new(target.clone().into());
+    peers.update_last_state(peer, last_state.clone()).unwrap();
+    peers
+        .update_prove_request(
+            peer,
+            crate::protocols::ProveRequest::new(last_state, request),
+        )
+        .unwrap();
+    let numbers = (request_start..31).collect::<Vec<_>>();
+    let headers = numbers
+        .iter()
+        .map(|number| snapshot.get_verifiable_header_by_number(*number).unwrap())
+        .collect::<Vec<_>>();
+    assert!(
+        numbers.contains(&29),
+        "the candidate proof includes cached match 29"
+    );
+    let response = packed::LightClientMessage::new_builder()
+        .set(
+            packed::SendLastStateProof::new_builder()
+                .last_header(target)
+                .headers(headers.pack())
+                .proof(chain.build_proof_by_numbers(31, &numbers))
+                .build(),
+        )
+        .build();
+    protocol
+        .received(
+            MockNetworkContext::new(SupportProtocols::LightClient).context(),
+            peer,
+            response.as_bytes(),
+        )
+        .await;
+
+    assert_eq!(storage.get_tip_header().calc_header_hash(), orphan.hash());
+    let pending = peers
+        .pending_continuity(peer)
+        .expect("unbound window cannot establish a fork ancestor");
+    assert!(pending.1.needs_genesis_bridge);
+    let recovery_request = peers
+        .get_state(&peer)
+        .and_then(|state| state.get_prove_request().cloned())
+        .expect("the unbound window requires fresh authenticated recovery");
+    assert_eq!(
+        recovery_request.recovery_accepted_tip(),
+        Some(&orphan.hash())
+    );
+    assert_eq!(
+        recovery_request.get_content().last_hash(),
+        snapshot
+            .get_verifiable_header_by_number(31)
+            .unwrap()
+            .header()
+            .calc_header_hash()
+    );
+    assert!(peers
+        .get_peer(&peer)
+        .unwrap()
+        .get_blocks_proof_request()
+        .is_none());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn earlier_authenticated_ancestor_without_previous_tip_membership_requires_continuity() {
+    use ckb_merkle_mountain_range::{leaf_index_to_mmr_size, leaf_index_to_pos};
+    use ckb_types::utilities::merkle_mountain_range::{MMRProof, VerifiableHeader};
+
+    let chain = MockChain::new_with_dummy_pow("ancestor-without-detachment-proof").start();
+    chain.mine_to(31);
+    let snapshot = chain.shared().snapshot();
+    let peers = chain.create_peers();
+    let peer = PeerIndex::new(5);
+    let mut protocol = chain.create_light_client_protocol(peers.clone());
+    protocol.set_last_n_blocks(5);
+    let storage = chain.client_storage();
+    let orphan = snapshot
+        .get_header_by_number(30)
+        .expect("old tip header")
+        .as_advanced_builder()
+        .nonce(123456u128)
+        .build();
+    let old_window = (1..30)
+        .map(|number| snapshot.get_header_by_number(number).expect("old window"))
+        .collect::<Vec<_>>();
+    let old_work = snapshot
+        .get_total_difficulty_by_number(30)
+        .expect("old tip work");
+    storage.update_last_state(&old_work, &orphan.data(), &old_window);
+    peers.add_peer(peer);
+    peers.request_last_state(peer).unwrap();
+
+    let target: VerifiableHeader = snapshot
+        .get_verifiable_header_by_number(31)
+        .expect("candidate tip")
+        .into();
+    let request_content = protocol
+        .build_prove_request_content(&PeerState::default(), &target)
+        .await
+        .expect("candidate proof request");
+    let ancestor = snapshot.get_header_by_number(29).expect("common ancestor");
+    let proof = MMRProof::new(
+        leaf_index_to_mmr_size(target.parent_chain_root().end_number().unpack()),
+        chain
+            .build_proof_by_numbers(31, &[29])
+            .into_iter()
+            .collect(),
+    );
+    assert!(proof
+        .verify(
+            target.parent_chain_root(),
+            vec![(leaf_index_to_pos(29), ancestor.digest())]
+        )
+        .unwrap());
+
+    let target_hash = target.header().hash();
+    let last_state = crate::protocols::LastState::new(target.clone());
+    let prove_request = crate::protocols::ProveRequest::new(last_state.clone(), request_content);
+    peers.update_last_state(peer, last_state).unwrap();
+    peers
+        .update_prove_request(peer, prove_request.clone())
+        .unwrap();
+    let mut prove_state =
+        crate::protocols::ProveState::new_from_request(prove_request, Vec::new(), Vec::new());
+    prove_state.proved_headers.push(ancestor);
+    protocol
+        .commit_prove_state(peer, prove_state)
+        .await
+        .unwrap();
+    let context = MockNetworkContext::new(SupportProtocols::LightClient);
+    protocol.request_continuity(&context.context());
+
+    for _ in 0..2 {
+        assert_eq!(storage.get_tip_header().calc_header_hash(), orphan.hash());
+        let pending = peers
+            .pending_continuity(peer)
+            .expect("candidate remains pending");
+        assert_eq!(pending.1.get_last_header().header().hash(), target_hash);
+        let connected_peer = peers.get_peer(&peer).unwrap();
+        let request = connected_peer
+            .get_blocks_proof_request()
+            .expect("old-tip bridge request");
+        assert_eq!(request.last_hash(), target_hash);
+        assert_eq!(request.block_hashes(), vec![orphan.hash().unpack()]);
+        let missing = packed::SendBlocksProofV1::new_builder()
+            .last_header(snapshot.get_verifiable_header_by_number(31).unwrap())
+            .missing_block_hashes(vec![orphan.hash()].pack())
+            .build();
+        let response = packed::LightClientMessage::new_builder()
+            .set(missing)
+            .build();
+        protocol
+            .received(context.context(), peer, response.as_bytes())
+            .await;
+    }
+    assert_eq!(storage.get_tip_header().calc_header_hash(), orphan.hash());
+    assert!(context.not_banned(peer));
+    let recovery_request = peers
+        .get_state(&peer)
+        .and_then(|state| state.get_prove_request().cloned())
+        .expect("genesis replacement-work request");
+    assert_eq!(
+        recovery_request.recovery_accepted_tip(),
+        Some(&orphan.hash())
+    );
+    let recovery_start: BlockNumber = recovery_request.get_content().start_number().unpack();
+    assert_eq!(recovery_start, 0);
+    assert_eq!(recovery_request.get_content().last_hash(), target_hash);
+    let second_peer = PeerIndex::new(6);
+    peers.add_peer(second_peer);
+    peers.request_last_state(second_peer).unwrap();
+    peers
+        .update_last_state(second_peer, crate::protocols::LastState::new(target))
+        .unwrap();
+    protocol
+        .notify(context.context(), REFRESH_PEERS_TOKEN)
+        .await;
+    protocol.disconnected(context.context(), peer).await;
+
+    assert!(peers.pending_continuity(peer).is_none());
+    assert!(peers.pending_continuity(second_peer).is_none());
+    assert_eq!(storage.get_tip_header().calc_header_hash(), orphan.hash());
+    let second_state = peers.get_state(&second_peer).unwrap();
+    assert!(
+        second_state.get_prove_state().is_none(),
+        "pending work must not be reused"
+    );
+    let second_request = second_state
+        .get_prove_request()
+        .expect("second peer can prove independently");
+    assert_eq!(second_request.get_content().last_hash(), target_hash);
+    assert!(second_request.recovery_accepted_tip().is_none());
+}
+
 #[tokio::test]
 async fn test_light_client_get_idle_matched_blocks() {
     let chain = MockChain::new_with_dummy_pow("test-light-client");
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
     let peer_index = PeerIndex::new(3);
+    let proved_header = HeaderBuilder::default()
+        .number(2u64)
+        .epoch(EpochNumberWithFraction::new(0, 2, 100))
+        .build();
     let tip_header = VerifiableHeader::new(
         HeaderBuilder::default()
             .epoch(EpochNumberWithFraction::new(0, 0, 100).full_value())
@@ -192,7 +679,26 @@ async fn test_light_client_get_idle_matched_blocks() {
         peers
     };
     let unproved_block_hash = H256(rand::random()).pack();
-    let proved_block_hash = H256(rand::random()).pack();
+    let proved_block_hash = proved_header.hash();
+    // Explicit trusted scheduler checkpoint. A cached boolean alone is not
+    // authenticated membership or a durable watched coverage obligation.
+    crate::storage::canonical::store_proved_header(
+        chain.client_storage(),
+        &crate::storage::HeaderWithExtension {
+            header: proved_header.data(),
+            extension: None,
+        },
+        &chain.client_storage().get_tip_header(),
+    )
+    .unwrap();
+    chain.client_storage().add_positioned_matched_blocks(
+        1,
+        2,
+        vec![
+            (1, unproved_block_hash.clone()),
+            (2, proved_block_hash.clone()),
+        ],
+    );
     let blocks = vec![
         (unproved_block_hash.clone(), false),
         (proved_block_hash.clone(), true),
@@ -239,6 +745,7 @@ async fn test_light_client_get_idle_matched_blocks() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn refresh_all_peers() {
+    let faketime_guard = faketime();
     setup();
 
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
@@ -304,7 +811,6 @@ async fn refresh_all_peers() {
     {
         let start_ts = unix_time_as_millis();
         let timeout_ts = start_ts + REFRESH_PEERS_DURATION.as_millis() as u64 + 1;
-        let faketime_guard = faketime();
         faketime_guard.set_faketime(timeout_ts);
 
         protocol.notify(nc.context(), REFRESH_PEERS_TOKEN).await;

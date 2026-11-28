@@ -2,7 +2,10 @@ use std::{
     collections::{HashMap, HashSet},
     fmt, mem,
     num::NonZeroU32,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use ckb_network::PeerIndex;
@@ -29,6 +32,7 @@ use crate::{
 pub type BadMessageRateLimiter<T> = RateLimiter<T, DefaultKeyedStateStore<T>, DefaultClock>;
 
 pub struct Peers {
+    pending_continuity: DashMap<PeerIndex, (Byte32, ProveState)>,
     inner: DashMap<PeerIndex, Peer>,
     // The headers are fetching, the value is:
     fetching_headers: DashMap<Byte32, FetchInfo>,
@@ -72,6 +76,7 @@ pub struct Peer {
     // requests off it until the accepted tip changes; do not retry in a loop.
     unavailable_proof_anchor: Option<Byte32>,
     txs_proof_request: Option<TransactionsProofRequest>,
+    matched_misses: HashMap<H256, (Byte32, u64)>,
     check_points: CheckPoints,
     latest_block_filter_hashes: LatestBlockFilterHashes,
 }
@@ -155,10 +160,59 @@ pub struct ProveRequest {
     content: packed::GetLastStateProof,
     skip_check_tau: bool,
     long_fork_detected: bool,
+    recovery_accepted_tip: Option<Byte32>,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct AuthenticatedRollbackBoundary {
+    accepted_tip: Byte32,
+    candidate_tip: Byte32,
+    number: BlockNumber,
+    hash: Byte32,
+}
+
+impl AuthenticatedRollbackBoundary {
+    pub(crate) fn new(
+        accepted_tip: Byte32,
+        candidate_tip: Byte32,
+        number: BlockNumber,
+        hash: Byte32,
+    ) -> Self {
+        Self {
+            accepted_tip,
+            candidate_tip,
+            number,
+            hash,
+        }
+    }
+
+    pub(crate) fn matches(&self, accepted_tip: &Byte32, candidate_tip: &Byte32) -> bool {
+        &self.accepted_tip == accepted_tip && &self.candidate_tip == candidate_tip
+    }
+
+    pub(crate) fn number(&self) -> BlockNumber {
+        self.number
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct VerifiedReplacementWork {
+    pub(crate) accepted_tip: Byte32,
+    pub(crate) candidate_tip: Byte32,
+    request_content: packed::GetLastStateProof,
+    pub(crate) rollback_boundary: Option<AuthenticatedRollbackBoundary>,
 }
 
 #[derive(Clone)]
 pub struct ProveState {
+    pub(crate) proved_headers: Vec<HeaderView>,
+    pub(crate) needs_genesis_bridge: bool,
+    pub(crate) continuity_retries: u8,
+    pub(crate) recovery_sampling_requests: u8,
+    pub(crate) recovery_accepted_tip: Option<Byte32>,
+    pub(crate) work_anchor: Option<(BlockNumber, Byte32)>,
+    pub(crate) verified_replacement_work: Option<VerifiedReplacementWork>,
+    pub(crate) authenticated_rollback_boundary: Option<AuthenticatedRollbackBoundary>,
     last_state: LastState,
     reorg_last_headers: Vec<HeaderView>,
     last_headers: Vec<HeaderView>,
@@ -167,9 +221,11 @@ pub struct ProveState {
 #[derive(Clone)]
 pub(crate) struct BlocksProofRequest {
     owner: Arc<()>,
+    pub(crate) uncorrelated_hint: Arc<AtomicBool>,
     content: packed::GetBlocksProof,
     when_sent: u64,
     should_get_blocks: bool,
+    range_ownership: Option<(u64, u64, u64)>,
 }
 
 #[derive(Clone)]
@@ -182,6 +238,7 @@ pub(crate) struct BlocksRequest {
 #[derive(Clone)]
 pub(crate) struct TransactionsProofRequest {
     owner: Arc<()>,
+    pub(crate) uncorrelated_hint: Arc<AtomicBool>,
     content: packed::GetTransactionsProof,
     when_sent: u64,
 }
@@ -280,14 +337,20 @@ impl fmt::Display for ProveRequest {
         if f.alternate() {
             write!(
                 f,
-                "LastState {{ last_state: {:#}, tau: {}, fork: {} }}",
-                self.last_state, tau_status, self.long_fork_detected,
+                "LastState {{ last_state: {:#}, tau: {}, fork: {}, recovery: {} }}",
+                self.last_state,
+                tau_status,
+                self.long_fork_detected,
+                self.recovery_accepted_tip.is_some(),
             )
         } else {
             write!(
                 f,
-                "{} (tau: {}, fork: {})",
-                self.last_state, tau_status, self.long_fork_detected,
+                "{} (tau: {}, fork: {}, recovery: {})",
+                self.last_state,
+                tau_status,
+                self.long_fork_detected,
+                self.recovery_accepted_tip.is_some(),
             )
         }
     }
@@ -300,6 +363,7 @@ impl ProveRequest {
             content,
             skip_check_tau: false,
             long_fork_detected: false,
+            recovery_accepted_tip: None,
         }
     }
 
@@ -323,12 +387,51 @@ impl ProveRequest {
         self.skip_check_tau = true;
     }
 
-    pub(crate) fn if_long_fork_detected(&self) -> bool {
-        self.long_fork_detected
-    }
-
+    #[cfg(test)]
     pub(crate) fn long_fork_detected(&mut self) {
         self.long_fork_detected = true;
+    }
+
+    pub(crate) fn replacement_work_recovery(&mut self, accepted_tip: Byte32) {
+        self.long_fork_detected = true;
+        self.recovery_accepted_tip = Some(accepted_tip);
+    }
+
+    pub(crate) fn recovery_accepted_tip(&self) -> Option<&Byte32> {
+        self.recovery_accepted_tip.as_ref()
+    }
+}
+
+impl VerifiedReplacementWork {
+    pub(crate) fn new(
+        accepted_tip: Byte32,
+        candidate_tip: Byte32,
+        request_content: packed::GetLastStateProof,
+        rollback_boundary: Option<AuthenticatedRollbackBoundary>,
+    ) -> Self {
+        Self {
+            accepted_tip,
+            candidate_tip,
+            request_content,
+            rollback_boundary,
+        }
+    }
+
+    pub(crate) fn matches_request(
+        &self,
+        accepted_tip: &Byte32,
+        candidate_tip: &Byte32,
+        request: &ProveRequest,
+    ) -> bool {
+        &self.accepted_tip == accepted_tip
+            && &self.candidate_tip == candidate_tip
+            && self
+                .rollback_boundary
+                .as_ref()
+                .is_none_or(|boundary| boundary.matches(accepted_tip, candidate_tip))
+            && request.recovery_accepted_tip() == Some(accepted_tip)
+            && request.get_last_header().header().hash() == *candidate_tip
+            && self.request_content.as_slice() == request.get_content().as_slice()
     }
 }
 
@@ -371,11 +474,24 @@ impl ProveState {
         reorg_last_headers: Vec<HeaderView>,
         last_headers: Vec<HeaderView>,
     ) -> Self {
-        let ProveRequest { last_state, .. } = request;
+        let ProveRequest {
+            last_state,
+            long_fork_detected,
+            recovery_accepted_tip,
+            ..
+        } = request;
         Self {
             last_state,
             reorg_last_headers,
             last_headers,
+            proved_headers: Vec::new(),
+            needs_genesis_bridge: long_fork_detected || recovery_accepted_tip.is_some(),
+            continuity_retries: 0,
+            recovery_sampling_requests: 0,
+            recovery_accepted_tip,
+            work_anchor: None,
+            verified_replacement_work: None,
+            authenticated_rollback_boundary: None,
         }
     }
 
@@ -391,6 +507,10 @@ impl ProveState {
         &self.reorg_last_headers[..]
     }
 
+    pub(crate) fn set_reorg_last_headers(&mut self, headers: Vec<HeaderView>) {
+        self.reorg_last_headers = headers;
+    }
+
     pub(crate) fn get_last_headers(&self) -> &[HeaderView] {
         &self.last_headers[..]
     }
@@ -401,12 +521,15 @@ impl BlocksProofRequest {
         content: packed::GetBlocksProof,
         when_sent: u64,
         should_get_blocks: bool,
+        range_ownership: Option<(u64, u64, u64)>,
     ) -> Self {
         Self {
             content,
             when_sent,
             should_get_blocks,
+            range_ownership,
             owner: Arc::new(()),
+            uncorrelated_hint: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -420,6 +543,29 @@ impl BlocksProofRequest {
             .into_iter()
             .map(|v| v.unpack())
             .collect()
+    }
+
+    pub(crate) fn owns_saved_range(
+        &self,
+        range: &crate::storage::MatchedBlocks,
+        revision: u64,
+    ) -> bool {
+        self.range_ownership
+            .is_none_or(|(start, count, saved_revision)| {
+                start == range.start_number
+                    && count == range.blocks_count
+                    && saved_revision == revision
+                    && self.block_hashes().iter().all(|hash| {
+                        range
+                            .blocks
+                            .iter()
+                            .any(|block| Unpack::<H256>::unpack(&block.hash) == *hash)
+                    })
+            })
+    }
+
+    pub(crate) fn has_saved_range_binding(&self) -> bool {
+        self.range_ownership.is_some()
     }
 
     pub(crate) fn check_block_hashes(
@@ -452,6 +598,9 @@ impl BlocksProofRequest {
 }
 
 impl BlocksRequest {
+    pub(crate) fn contains(&self, hash: &Byte32) -> bool {
+        self.hashes.contains_key(&hash.unpack())
+    }
     fn new(hashes: Vec<Byte32>, when_sent: u64) -> Self {
         let hashes = hashes
             .into_iter()
@@ -471,6 +620,7 @@ impl TransactionsProofRequest {
             content,
             when_sent,
             owner: Arc::new(()),
+            uncorrelated_hint: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -1047,6 +1197,30 @@ impl PeerState {
         }
     }
 
+    fn clear_last_state_proof(self) -> Self {
+        match self {
+            Self::RequestFirstLastStateProof { last_state, .. } => {
+                Self::OnlyHasLastState { last_state }
+            }
+            Self::RequestNewLastStateProof {
+                last_state,
+                prove_state,
+                ..
+            } => Self::Ready {
+                last_state,
+                prove_state,
+            },
+            state => state,
+        }
+    }
+
+    fn clear_prove_state(self) -> Self {
+        match self {
+            Self::Ready { last_state, .. } => Self::OnlyHasLastState { last_state },
+            state => state,
+        }
+    }
+
     fn require_new_last_state(&self, before_ts: u64) -> bool {
         match self {
             Self::Initialized => true,
@@ -1101,6 +1275,7 @@ impl Peer {
             blocks_request: None,
             unavailable_proof_anchor: None,
             txs_proof_request: None,
+            matched_misses: HashMap::new(),
             check_points,
             latest_block_filter_hashes,
         }
@@ -1154,6 +1329,7 @@ impl Peers {
 
         Self {
             inner: Default::default(),
+            pending_continuity: DashMap::new(),
             fetching_headers: DashMap::new(),
             fetching_txs: DashMap::new(),
             matched_blocks: Default::default(),
@@ -1338,6 +1514,24 @@ impl Peers {
         *self.max_outbound_peers.write().expect("poisoned") = max_outbound_peers;
     }
 
+    pub(crate) fn queue_continuity(&self, peer: PeerIndex, previous: Byte32, state: ProveState) {
+        self.pending_continuity.insert(peer, (previous, state));
+    }
+    pub(crate) fn pending_continuity(&self, peer: PeerIndex) -> Option<(Byte32, ProveState)> {
+        self.pending_continuity
+            .get(&peer)
+            .map(|entry| entry.value().clone())
+    }
+    pub(crate) fn clear_continuity(&self, peer: PeerIndex) {
+        self.pending_continuity.remove(&peer);
+    }
+    pub(crate) fn continuity_peers(&self) -> Vec<PeerIndex> {
+        self.pending_continuity
+            .iter()
+            .map(|entry| *entry.key())
+            .collect()
+    }
+
     pub fn add_peer(&self, index: PeerIndex) {
         let peer = Peer::new(self.check_point_interval, self.start_check_point.clone());
         self.inner.insert(index, peer);
@@ -1347,6 +1541,7 @@ impl Peers {
         self.mark_fetching_headers_timeout(index);
         self.mark_fetching_txs_timeout(index);
         self.inner.remove(&index);
+        self.pending_continuity.remove(&index);
         mutex_lock!(self.rate_limiter).retain_recent();
     }
 
@@ -1426,6 +1621,18 @@ impl Peers {
         Ok(())
     }
 
+    pub(crate) fn clear_prove_request(&self, index: PeerIndex) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state = peer.state.take().clear_last_state_proof();
+        }
+    }
+
+    pub(crate) fn clear_prove_state(&self, index: PeerIndex) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.state = peer.state.take().clear_prove_state();
+        }
+    }
+
     pub fn update_prove_state(&self, index: PeerIndex, state: ProveState) -> Result<(), Status> {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             let has_reorg = !state.reorg_last_headers.is_empty();
@@ -1435,6 +1642,12 @@ impl Peers {
             }
         }
         Ok(())
+    }
+
+    pub(crate) fn invalidate_latest_block_filter_hashes(&self, index: PeerIndex) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.latest_block_filter_hashes.clear();
+        }
     }
 
     pub(crate) fn add_block(
@@ -1452,6 +1665,12 @@ impl Peers {
             }
             value.0
         })
+    }
+
+    pub(crate) fn finish_ordinal_download(&self, hash: &Byte32) {
+        for mut peer in self.inner.iter_mut() {
+            peer.value_mut().add_block(hash);
+        }
     }
 
     pub(crate) fn remove_fetching_header(&self, block_hash: &Byte32) -> bool {
@@ -1516,6 +1735,32 @@ impl Peers {
         }
     }
 
+    // A filter's hash is not committed by its GCS bytes. If no currently
+    // eligible peer can prove a required hash, recheck the filter positions;
+    // this is a retry hint, never evidence of completed coverage or a fork.
+    pub(crate) fn matched_hash_unavailable(
+        &self,
+        best_tip: &packed::Header,
+        matched: &HashMap<H256, (bool, Option<packed::Block>)>,
+    ) -> bool {
+        let peers = self.get_best_proved_peers(best_tip);
+        !peers.is_empty()
+            && matched.iter().any(|(hash, (proved, _))| {
+                !proved
+                    && peers.iter().all(|index| {
+                        let Some(peer) = self.get_peer(index) else {
+                            return false;
+                        };
+                        let Some(state) = peer.state.get_prove_state() else {
+                            return false;
+                        };
+                        let anchor = state.get_last_header().header().hash();
+                        self.matched_blocks_for_peer(*index, &anchor, vec![hash.pack()])
+                            .is_empty()
+                    })
+            })
+    }
+
     // get matched blocks which not yet downloaded and not in any BlocksRequest
     pub(crate) fn get_matched_blocks_to_prove(
         &self,
@@ -1542,21 +1787,56 @@ impl Peers {
                 if value.0 {
                     return None;
                 }
-                // Skip if marked as missing by peers (e.g., uncle blocks)
-                if let Some(fetch_info) = self.fetching_headers.get(&key.pack()) {
-                    if fetch_info.missing {
-                        log::warn!(
-                            "Skipping matched block {:#x} - marked as missing by peers (likely an uncle block)",
-                            key.pack()
-                        );
-                        return None;
-                    }
-                }
                 Some(key.pack())
             })
             .take(limit)
             .collect()
     }
+    // Peer availability is advisory, bounded to the pending set and current anchor.
+    pub(crate) fn note_matched_misses(
+        &self,
+        index: PeerIndex,
+        request: &BlocksProofRequest,
+        hashes: &[Byte32],
+    ) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            if !peer
+                .blocks_proof_request
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.owner, &request.owner))
+            {
+                return;
+            }
+            let now = unix_time_as_millis();
+            peer.matched_misses.retain(|_, (anchor, time)| {
+                *anchor == request.last_hash() && now.saturating_sub(*time) < MESSAGE_TIMEOUT
+            });
+            for hash in hashes {
+                peer.matched_misses
+                    .insert(hash.unpack(), (request.last_hash(), now));
+            }
+        }
+    }
+
+    pub(crate) fn matched_blocks_for_peer(
+        &self,
+        index: PeerIndex,
+        anchor: &Byte32,
+        hashes: Vec<Byte32>,
+    ) -> Vec<Byte32> {
+        let Some(mut peer) = self.inner.get_mut(&index) else {
+            return Vec::new();
+        };
+        let now = unix_time_as_millis();
+        peer.matched_misses.retain(|_, (previous, time)| {
+            previous == anchor && now.saturating_sub(*time) < MESSAGE_TIMEOUT
+        });
+        hashes
+            .into_iter()
+            .filter(|hash| !peer.matched_misses.contains_key(&hash.unpack()))
+            .collect()
+    }
+
     // get matched blocks which not yet downloaded and not in any BlocksRequest
     pub(crate) fn get_matched_blocks_to_download(
         &self,
@@ -1619,8 +1899,25 @@ impl Peers {
     ) {
         if let Some(mut peer) = self.inner.get_mut(&index) {
             peer.blocks_proof_request = request.map(|content| {
-                BlocksProofRequest::new(content, unix_time_as_millis(), should_get_blocks)
+                BlocksProofRequest::new(content, unix_time_as_millis(), should_get_blocks, None)
             });
+        }
+    }
+    pub(crate) fn update_matched_blocks_proof_request(
+        &self,
+        index: PeerIndex,
+        content: packed::GetBlocksProof,
+        start: u64,
+        count: u64,
+        revision: u64,
+    ) {
+        if let Some(mut peer) = self.inner.get_mut(&index) {
+            peer.blocks_proof_request = Some(BlocksProofRequest::new(
+                content,
+                unix_time_as_millis(),
+                true,
+                Some((start, count, revision)),
+            ));
         }
     }
     pub(crate) fn owns_blocks_proof_request(
@@ -1641,6 +1938,38 @@ impl Peers {
         self.inner
             .get(&index)
             .is_some_and(|peer| peer.unavailable_proof_anchor.as_ref() != Some(anchor))
+    }
+
+    pub(crate) fn retire_proof_requests_anchored_at(&self, anchor: &Byte32) {
+        for mut item in self.inner.iter_mut() {
+            let peer = item.value_mut();
+            if let Some(request) = peer
+                .blocks_proof_request
+                .as_ref()
+                .filter(|request| request.last_hash().as_slice() == anchor.as_slice())
+                .cloned()
+            {
+                for hash in request.block_hashes() {
+                    if let Some(mut info) = self.fetching_headers.get_mut(&hash.pack()) {
+                        info.timeout = true;
+                    }
+                }
+                peer.blocks_proof_request = None;
+            }
+            if let Some(request) = peer
+                .txs_proof_request
+                .as_ref()
+                .filter(|request| request.last_hash().as_slice() == anchor.as_slice())
+                .cloned()
+            {
+                for hash in request.tx_hashes() {
+                    if let Some(mut info) = self.fetching_txs.get_mut(&hash.pack()) {
+                        info.timeout = true;
+                    }
+                }
+                peer.txs_proof_request = None;
+            }
+        }
     }
 
     /// Retire only the locally captured operation, including across handler awaits.
@@ -1705,6 +2034,18 @@ impl Peers {
         }
         peer.txs_proof_request = None;
         true
+    }
+
+    pub(crate) fn owns_txs_proof_request(
+        &self,
+        index: PeerIndex,
+        expected: &TransactionsProofRequest,
+    ) -> bool {
+        self.inner.get(&index).is_some_and(|peer| {
+            peer.txs_proof_request
+                .as_ref()
+                .is_some_and(|current| Arc::ptr_eq(&current.owner, &expected.owner))
+        })
     }
 
     pub(crate) fn update_blocks_request(&self, index: PeerIndex, hashes: Option<Vec<Byte32>>) {
@@ -2004,6 +2345,31 @@ impl Peers {
         }
     }
 
+    /// A hashless hint grants timeout leniency, never request attribution. Even
+    /// a replay cannot shorten or extend the captured owner's original deadline.
+    /// Expiration releases retryable work without punishing an otherwise live peer.
+    pub(crate) fn expire_hinted_proof_requests(&self, now: u64) {
+        let peers: Vec<_> = self
+            .inner
+            .iter()
+            .map(|item| (*item.key(), item.value().clone()))
+            .collect();
+        for (index, peer) in peers {
+            if let Some(request) = peer.blocks_proof_request.filter(|request| {
+                request.uncorrelated_hint.load(Ordering::Relaxed)
+                    && now.saturating_sub(request.when_sent) > MESSAGE_TIMEOUT
+            }) {
+                self.finish_blocks_proof_request(index, &request, true, false);
+            }
+            if let Some(request) = peer.txs_proof_request.filter(|request| {
+                request.uncorrelated_hint.load(Ordering::Relaxed)
+                    && now.saturating_sub(request.when_sent) > MESSAGE_TIMEOUT
+            }) {
+                self.finish_txs_proof_request(index, &request, true, false);
+            }
+        }
+    }
+
     pub(crate) fn get_peers_which_have_timeout(&self, now: u64) -> Vec<PeerIndex> {
         self.inner
             .iter()
@@ -2093,7 +2459,9 @@ impl Peers {
         self.inner.iter().find_map(|item| {
             let (peer_index, peer) = item.pair();
             peer.state.get_prove_state().and_then(|prove_state| {
-                if prove_state.is_same_as(header) {
+                if prove_state.is_same_as(header)
+                    && !self.pending_continuity.contains_key(peer_index)
+                {
                     Some((*peer_index, prove_state.clone()))
                 } else {
                     None
@@ -2177,8 +2545,8 @@ mod request_ownership_tests {
             let wire = packed::GetBlocksProof::new_builder()
                 .block_hashes(vec![hash.clone()].pack())
                 .build();
-            let old = BlocksProofRequest::new(wire.clone(), 77, false);
-            let replacement = BlocksProofRequest::new(wire, 77, false);
+            let old = BlocksProofRequest::new(wire.clone(), 77, false, None);
+            let replacement = BlocksProofRequest::new(wire, 77, false, None);
             peers.inner.get_mut(&peer).unwrap().blocks_proof_request = Some(replacement.clone());
             assert!(!peers.finish_blocks_proof_request(peer, &old, true, false));
             assert!(!peers.finish_blocks_proof_request(peer, &old, true, true));
@@ -2258,6 +2626,7 @@ mod proof_hash_validation_tests {
                 .build(),
             0,
             false,
+            None,
         );
 
         assert_exact_hash_partition(|received, missing| {
@@ -2277,6 +2646,7 @@ mod proof_hash_validation_tests {
                 .build(),
             0,
             false,
+            None,
         );
         assert!(!duplicate_request.check_block_hashes(
             &[Byte32::new([1; 32]), Byte32::new([2; 32])],
@@ -2323,3 +2693,90 @@ mod proof_hash_validation_tests {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 #[path = "peers/recovery_tests.rs"]
 mod recovery_tests;
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[path = "peers/missing_tests.rs"]
+mod missing_tests;
+
+#[cfg(test)]
+mod replacement_work_binding_tests {
+    use super::*;
+    use crate::tests::{prelude::*, utils::MockChain};
+    use ckb_types::U256;
+
+    #[test]
+    fn verified_replacement_work_is_bound_to_the_candidate_and_exact_request() {
+        let chain = MockChain::new_with_dummy_pow("replacement-work-binding").start();
+        chain.mine_to(3);
+        let snapshot = chain.shared().snapshot();
+        let genesis = chain.consensus().genesis_block();
+        let accepted_tip = Byte32::new([7; 32]);
+        let candidate: VerifiableHeader = snapshot
+            .get_verifiable_header_by_number(2)
+            .expect("candidate header")
+            .into();
+        let candidate_hash = candidate.header().hash();
+        let start_number: packed::Uint64 = 0u64.pack();
+        let last_n_blocks: packed::Uint64 = 1u64.pack();
+        let content = packed::GetLastStateProof::new_builder()
+            .last_hash(candidate_hash.clone())
+            .start_hash(genesis.header().hash())
+            .start_number(start_number)
+            .last_n_blocks(last_n_blocks)
+            .difficulty_boundary(U256::zero().pack())
+            .build();
+        let mut request = ProveRequest::new(LastState::new(candidate.clone()), content.clone());
+        request.replacement_work_recovery(accepted_tip.clone());
+        let verified = VerifiedReplacementWork::new(
+            accepted_tip.clone(),
+            candidate_hash.clone(),
+            content.clone(),
+            Some(AuthenticatedRollbackBoundary::new(
+                accepted_tip.clone(),
+                candidate_hash.clone(),
+                1,
+                genesis.header().hash(),
+            )),
+        );
+        assert!(verified.matches_request(&accepted_tip, &candidate_hash, &request));
+
+        let changed_content = content
+            .clone()
+            .as_builder()
+            .difficulty_boundary(U256::one().pack())
+            .build();
+        let mut changed_request = ProveRequest::new(LastState::new(candidate), changed_content);
+        changed_request.replacement_work_recovery(accepted_tip.clone());
+        assert!(!verified.matches_request(&accepted_tip, &candidate_hash, &changed_request));
+
+        let other_candidate: VerifiableHeader = snapshot
+            .get_verifiable_header_by_number(3)
+            .expect("replacement candidate")
+            .into();
+        let other_hash = other_candidate.header().hash();
+        let mismatched_boundary_work = VerifiedReplacementWork::new(
+            accepted_tip.clone(),
+            candidate_hash.clone(),
+            content.clone(),
+            Some(AuthenticatedRollbackBoundary::new(
+                accepted_tip.clone(),
+                other_hash.clone(),
+                1,
+                genesis.header().hash(),
+            )),
+        );
+        assert!(!mismatched_boundary_work.matches_request(
+            &accepted_tip,
+            &candidate_hash,
+            &request
+        ));
+        let other_content = content
+            .clone()
+            .as_builder()
+            .last_hash(other_hash.clone())
+            .build();
+        let mut other_request = ProveRequest::new(LastState::new(other_candidate), other_content);
+        other_request.replacement_work_recovery(accepted_tip.clone());
+        assert!(!verified.matches_request(&accepted_tip, &other_hash, &other_request));
+    }
+}

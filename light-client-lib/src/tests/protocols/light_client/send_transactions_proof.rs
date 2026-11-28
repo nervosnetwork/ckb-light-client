@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{future::Future, sync::Arc};
 
 use ckb_network::{CKBProtocolHandler, PeerIndex, SupportProtocols};
 use ckb_store::ChainStore;
@@ -151,6 +151,13 @@ async fn test_send_txs_proof_ok() {
             )
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -174,6 +181,54 @@ async fn test_send_txs_proof_ok() {
 
     assert!(nc.not_banned(peer_index));
     assert!(nc.sent_messages().borrow().is_empty());
+    // Queue body recovery first and a duplicate proof second behind the same lock.
+    // The proof must observe the ordinal written by the body when it acquires the lock.
+    let storage = chain.client_storage();
+    let snapshot = chain.shared().snapshot();
+    let block = snapshot.get_block_by_number(block_numbers[0]).unwrap();
+    let tx_hash = &tx_hashes[0];
+    let saved = || {
+        crate::storage::canonical::transaction(storage, tx_hash)
+            .unwrap()
+            .unwrap()
+    };
+    assert_eq!(saved().index, u32::MAX);
+    crate::storage::canonical::queue_ordinal_body(storage, &block.header().data()).unwrap();
+    let request = packed::GetTransactionsProof::new_builder()
+        .last_hash(storage.get_tip_header().calc_header_hash())
+        .tx_hashes(
+            [tx_hashes.clone(), missing_tx_hashes.clone()]
+                .concat()
+                .pack(),
+        )
+        .build();
+    peers.update_txs_proof_request(peer_index, Some(request));
+
+    let sync_nc = MockNetworkContext::new(SupportProtocols::Sync);
+    let mut sync = chain.create_sync_protocol(Arc::clone(&peers));
+    let body = packed::SyncMessage::new_builder()
+        .set(packed::SendBlock::new_builder().block(block.data()).build())
+        .build();
+    let guard = peers.matched_blocks().read().await;
+    let mut body_response =
+        std::pin::pin!(sync.received(sync_nc.context(), peer_index, body.as_bytes()));
+    let mut proof_response =
+        std::pin::pin!(protocol.received(nc.context(), peer_index, message.as_bytes()));
+    std::future::poll_fn(|cx| {
+        assert!(body_response.as_mut().poll(cx).is_pending());
+        assert!(proof_response.as_mut().poll(cx).is_pending());
+        std::task::Poll::Ready(())
+    })
+    .await;
+    assert_eq!(saved().index, u32::MAX);
+    drop(guard);
+    body_response.await;
+    assert_eq!(saved().index, 1);
+    proof_response.await;
+    assert_eq!(saved().index, 1);
+    assert!(nc.not_banned(peer_index));
+    assert!(sync_nc.not_banned(peer_index));
+
     for tx_hash in tx_hashes {
         assert!(chain
             .client_storage()
@@ -306,6 +361,13 @@ async fn test_send_txs_proof_invalid_mmr_proof() {
             .tx_hashes(tx_hashes.clone().pack())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -461,6 +523,13 @@ async fn test_send_txs_proof_invalid_merkle_proof() {
             .tx_hashes(tx_hashes.clone().pack())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -572,6 +641,13 @@ async fn legacy_txs_proof_for_extension_block_is_rejected() {
             .tx_hashes(vec![tx_hash.clone()].pack())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -646,6 +722,13 @@ async fn test_empty_txs_proof(with_unexpected_extension: bool, last_state_change
             })
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();
@@ -722,6 +805,13 @@ async fn rejects_malformed_v1_extra_fields() {
             .last_hash(last_header.header().calc_header_hash())
             .build();
         peers.add_peer(peer_index);
+        // This header comes from the fixture's fully validated local chain.
+        let accepted: VerifiableHeader = last_header.clone().into();
+        chain.client_storage().update_last_state(
+            &accepted.total_difficulty(),
+            &accepted.header().data(),
+            &[],
+        );
         peers
             .mock_prove_state(peer_index, last_header.into())
             .unwrap();

@@ -67,7 +67,7 @@ async fn unsolicited_reply_without_a_request_is_penalized() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn changed_last_state_hint_releases_request() {
+async fn changed_last_state_hint_preserves_unattributed_request() {
     let chain = MockChain::new_with_dummy_pow("test-light-client").start();
     let nc = MockNetworkContext::new(SupportProtocols::LightClient);
 
@@ -114,7 +114,12 @@ async fn changed_last_state_hint_releases_request() {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
         protocol
@@ -156,7 +161,8 @@ async fn changed_last_state_hint_releases_request() {
         assert!(nc.not_banned(peer_index));
 
         let peer = protocol.get_peer(&peer_index).expect("has peer");
-        assert!(peer.get_blocks_proof_request().is_none());
+        assert!(peer.get_blocks_proof_request().is_some());
+        assert!(nc.sent_messages().borrow().is_empty());
     }
 }
 
@@ -209,7 +215,12 @@ async fn different_hash_set_preserves_request() {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
         protocol
@@ -332,7 +343,12 @@ async fn get_blocks_with_chunks() {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(num, &block_numbers, &[]);
         protocol
@@ -783,7 +799,12 @@ async fn test_send_blocks_proof(param: TestParameter) {
             let last_n_headers = (last_n_blocks_start_number..num)
                 .map(|num| snapshot.get_header_by_number(num).expect("block stored"))
                 .collect::<Vec<_>>();
-            ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers)
+            let genesis = snapshot.get_header_by_number(0).expect("genesis stored");
+            let mut state =
+                ProveState::new_from_request(prove_request.clone(), Vec::new(), last_n_headers);
+            state.work_anchor = Some((0, genesis.hash()));
+            state.proved_headers.push(genesis);
+            state
         };
         let content = chain.build_blocks_proof_content(
             num,

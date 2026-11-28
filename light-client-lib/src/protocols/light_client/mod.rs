@@ -49,6 +49,29 @@ use crate::protocols::{GET_BLOCKS_PROOF_LIMIT, GET_TRANSACTIONS_PROOF_LIMIT, LAS
 use crate::storage::{LightClientStorage, Storage};
 use crate::utils::network::prove_or_download_matched_blocks;
 
+pub(crate) const MAX_RECOVERY_SAMPLING_REQUESTS: u8 = 3;
+
+fn authenticated_recent_suffix(tip: &packed::Header, proved: &[HeaderView]) -> Vec<HeaderView> {
+    let tip = tip.clone().into_view();
+    let by_position: HashMap<_, _> = proved
+        .iter()
+        .map(|header| ((header.number(), header.hash()), header.clone()))
+        .collect();
+    let mut suffix = Vec::new();
+    let mut expected_hash = tip.parent_hash();
+    let mut number = tip.number().checked_sub(1);
+    while let Some(height) = number {
+        let Some(header) = by_position.get(&(height, expected_hash.clone())) else {
+            break;
+        };
+        expected_hash = header.parent_hash();
+        suffix.push(header.clone());
+        number = height.checked_sub(1);
+    }
+    suffix.reverse();
+    suffix
+}
+
 pub struct LightClientProtocol {
     storage: Storage,
     peers: Arc<Peers>,
@@ -56,6 +79,8 @@ pub struct LightClientProtocol {
     mmr_activated_epoch: EpochNumber,
     last_n_blocks: BlockNumber,
     init_blocks_in_transit_per_peer: usize,
+    #[cfg(test)]
+    recovery_proof_content_override: Option<packed::GetLastStateProof>,
 }
 
 #[async_trait]
@@ -340,82 +365,233 @@ impl LightClientProtocol {
     pub(crate) async fn commit_prove_state(
         &self,
         peer_index: PeerIndex,
-        new_prove_state: ProveState,
+        mut new_prove_state: ProveState,
     ) -> Result<bool, Status> {
-        let (old_total_difficulty, prev_last_header) = self.storage.get_last_state();
-        let new_total_difficulty = new_prove_state.get_last_header().total_difficulty();
-        if new_total_difficulty > old_total_difficulty {
-            let reorg_last_headers = new_prove_state.get_reorg_last_headers();
-            if reorg_last_headers.is_empty() {
-                let prev_last_header_number: BlockNumber = prev_last_header.raw().number().unpack();
-                // If previous last header is block#1, that means there are no previous last n
-                // headers, so we could NOT distinguish whether the block#1 is a fork block or not.
-                // For safety, just remove the block#1.
-                if prev_last_header_number == 1 {
-                    info!("rollback to block#1 since previous last header number is 1");
-                    let mut matched_blocks = self.peers.matched_blocks().write().await;
-
-                    while let Some(matched_blocks_data) = self.storage.get_latest_matched_blocks() {
-                        if matched_blocks_data.start_number > 0 {
-                            self.storage
-                                .remove_matched_blocks(matched_blocks_data.start_number);
-                        }
-                    }
-                    self.storage.rollback_to_block(1);
-
-                    matched_blocks.clear();
-                }
-            } else {
-                let old_last_headers: HashMap<_, _> =
-                    self.storage.get_last_n_headers().into_iter().collect();
-                let fork_number = reorg_last_headers.iter().rev().find_map(|reorg_header| {
-                    let number = reorg_header.number();
-                    old_last_headers
-                        .get(&number)
-                        .map(|hash| {
-                            if &reorg_header.hash() == hash {
-                                Some(number)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or_default()
+        let mut matched_blocks = self.peers.matched_blocks().write().await;
+        crate::storage::canonical::recover(&self.storage)
+            .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?;
+        let (old_work, previous) = self.storage.get_last_state();
+        let work = new_prove_state.get_last_header().total_difficulty();
+        if work > old_work {
+            let tip = new_prove_state.get_last_header().header().data();
+            let previous_view = previous.clone().into_view();
+            let previous_hash = previous_view.hash();
+            let candidate_hash = new_prove_state.get_last_header().header().hash();
+            let active_recovery_request = self
+                .peers
+                .get_state(&peer_index)
+                .and_then(|state| state.get_prove_request().cloned());
+            let pending_recovery = self.peers.pending_continuity(peer_index);
+            let pending_recovery_matches =
+                pending_recovery
+                    .as_ref()
+                    .is_some_and(|(accepted_tip, candidate)| {
+                        accepted_tip == &previous_hash
+                            && candidate.get_last_header().header().hash() == candidate_hash
+                    });
+            let pending_rollback_boundary = pending_recovery
+                .as_ref()
+                .filter(|(accepted_tip, candidate)| {
+                    accepted_tip == &previous_hash
+                        && candidate.get_last_header().header().hash() == candidate_hash
+                })
+                .and_then(|(_, candidate)| {
+                    candidate
+                        .authenticated_rollback_boundary
+                        .clone()
+                        .filter(|boundary| boundary.matches(&previous_hash, &candidate_hash))
                 });
-                if let Some(to_number) = fork_number {
-                    debug!("fork to number: {}", to_number);
-                    let mut matched_blocks = self.peers.matched_blocks().write().await;
-                    let mut start_number_opt = None;
-                    while let Some(matched_blocks_data) = self.storage.get_latest_matched_blocks() {
-                        // Remove matched blocks if the range contains blocks after the fork point
-                        // The range is [start_number, start_number + blocks_count - 1]
-                        // Fork point (to_number) is the last valid block, so remove ranges containing blocks > to_number
-                        if matched_blocks_data.start_number + matched_blocks_data.blocks_count
-                            > to_number + 1
-                        {
-                            debug!("remove matched blocks start from: {} (range covers {} blocks, contains blocks after fork at {})",
-                                   matched_blocks_data.start_number, matched_blocks_data.blocks_count, to_number);
-                            self.storage
-                                .remove_matched_blocks(matched_blocks_data.start_number);
-                        } else {
-                            start_number_opt = Some(matched_blocks_data.start_number);
-                            break;
-                        }
-                    }
-                    let rollback_to = start_number_opt.unwrap_or(to_number) + 1;
-                    info!("rollback to block#{}", rollback_to);
-                    self.storage.rollback_to_block(rollback_to);
-                    matched_blocks.clear();
-                } else {
-                    warn!("long fork detected");
-                    return Ok(false);
+            let replacement_work_verified = new_prove_state
+                .verified_replacement_work
+                .as_ref()
+                .zip(active_recovery_request.as_ref())
+                .is_some_and(|(verified, request)| {
+                    pending_recovery_matches
+                        && verified.rollback_boundary == pending_rollback_boundary
+                        && verified.matches_request(&previous_hash, &candidate_hash, request)
+                        && new_prove_state.recovery_accepted_tip.as_ref() == Some(&previous_hash)
+                });
+            if new_prove_state.verified_replacement_work.is_some() && !replacement_work_verified {
+                return Ok(false);
+            }
+            let bridged = new_prove_state
+                .proved_headers
+                .iter()
+                .any(|header| header.hash() == previous_hash);
+            let tip_number: u64 = tip.raw().number().unpack();
+            let direct_extension = previous_view.number().checked_add(1) == Some(tip_number)
+                && tip.raw().parent_hash() == previous_hash;
+            let candidate_at_previous_height = if tip_number == previous_view.number() {
+                Some(tip.calc_header_hash())
+            } else {
+                new_prove_state
+                    .proved_headers
+                    .iter()
+                    .find(|header| header.number() == previous_view.number())
+                    .map(|header| header.hash())
+            };
+            let previous_parent_hash = previous_view.parent_hash();
+            let extends_previous_height = candidate_at_previous_height
+                .as_ref()
+                .is_some_and(|hash| hash == &previous_hash);
+            let detached_at_previous_parent =
+                previous_view.number().checked_sub(1).is_some_and(|height| {
+                    new_prove_state.proved_headers.iter().any(|header| {
+                        header.number() == height && header.hash() != previous_parent_hash
+                    })
+                });
+            let detached_previous_tip = tip_number < previous_view.number()
+                || candidate_at_previous_height
+                    .as_ref()
+                    .is_some_and(|hash| hash != &previous_hash)
+                || detached_at_previous_parent;
+            let accepted_proved_headers = self
+                .peers
+                .get_all_prove_states()
+                .into_iter()
+                .filter(|(_, state)| state.get_last_header().header().hash() == previous_hash)
+                .flat_map(|(_, state)| state.proved_headers)
+                .collect::<Vec<_>>();
+            let accepted_recent =
+                crate::storage::canonical::accepted_recent_window(&self.storage, &previous)
+                    .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?
+                    .unwrap_or_default();
+            let authenticated_common_ancestors = new_prove_state
+                .proved_headers
+                .iter()
+                .filter_map(|header| {
+                    let number = header.number();
+                    let hash = header.hash();
+                    let is_previous_tip = number == previous_view.number() && hash == previous_hash;
+                    let is_previous_parent = previous_view
+                        .number()
+                        .checked_sub(1)
+                        .is_some_and(|height| number == height && hash == previous_parent_hash);
+                    let was_proved_under_accepted_tip = accepted_proved_headers
+                        .iter()
+                        .any(|accepted| accepted.number() == number && accepted.hash() == hash);
+                    let was_in_accepted_recent = accepted_recent
+                        .iter()
+                        .any(|(height, accepted_hash)| *height == number && accepted_hash == &hash);
+                    (is_previous_tip
+                        || is_previous_parent
+                        || was_proved_under_accepted_tip
+                        || was_in_accepted_recent)
+                        .then_some((number, hash))
+                })
+                .collect::<Vec<_>>();
+            let work_anchor_is_common =
+                new_prove_state
+                    .work_anchor
+                    .as_ref()
+                    .and_then(|(number, hash)| {
+                        authenticated_common_ancestors
+                            .iter()
+                            .any(|(ancestor_number, ancestor_hash)| {
+                                ancestor_number == number && ancestor_hash == hash
+                            })
+                            .then_some((*number, hash.clone()))
+                    });
+            let direct_parent_work = direct_extension && {
+                let parent_total_difficulty: U256 = new_prove_state
+                    .get_last_header()
+                    .parent_chain_root()
+                    .total_difficulty()
+                    .unpack();
+                parent_total_difficulty == old_work
+            };
+            #[derive(Clone, Copy)]
+            enum ChainEvidence {
+                ProvenExtension,
+                ProvenFork(u64),
+                ConservativeRecovery,
+                Insufficient,
+            }
+            let evidence = if replacement_work_verified {
+                ChainEvidence::ConservativeRecovery
+            } else if (bridged || direct_extension || extends_previous_height)
+                && (work_anchor_is_common.is_some() || direct_parent_work)
+            {
+                ChainEvidence::ProvenExtension
+            } else if detached_previous_tip {
+                work_anchor_is_common
+                    .clone()
+                    .map(|(ancestor, _)| ChainEvidence::ProvenFork(ancestor))
+                    .unwrap_or(ChainEvidence::Insufficient)
+            } else {
+                ChainEvidence::Insufficient
+            };
+            let recent = authenticated_recent_suffix(&tip, &new_prove_state.proved_headers);
+            let recovery_rollback_number = pending_rollback_boundary
+                .as_ref()
+                .map(peers::AuthenticatedRollbackBoundary::number);
+            let fork = match evidence {
+                ChainEvidence::ProvenExtension => Some(previous_view.number()),
+                ChainEvidence::ProvenFork(fork) => Some(fork),
+                ChainEvidence::ConservativeRecovery => Some(recovery_rollback_number.unwrap_or(0)),
+                ChainEvidence::Insufficient => None,
+            };
+            let Some(fork) = fork else {
+                new_prove_state.needs_genesis_bridge |=
+                    detached_previous_tip || bridged || extends_previous_height || direct_extension;
+                new_prove_state.authenticated_rollback_boundary = authenticated_common_ancestors
+                    .iter()
+                    .filter(|(number, _)| *number < previous_view.number())
+                    .max_by_key(|(number, _)| *number)
+                    .map(|(number, hash)| {
+                        peers::AuthenticatedRollbackBoundary::new(
+                            previous_hash.clone(),
+                            candidate_hash.clone(),
+                            *number,
+                            hash.clone(),
+                        )
+                    });
+                // Missing continuity is pending evidence. Inherited recent-window
+                // rows do not establish accepted-chain ancestry.
+                self.peers
+                    .update_prove_state(peer_index, new_prove_state.clone())?;
+                self.peers
+                    .queue_continuity(peer_index, previous_view.hash(), new_prove_state);
+                return Ok(true);
+            };
+            if replacement_work_verified && pending_rollback_boundary.is_some() {
+                if let Some((_, pending)) = pending_recovery.as_ref() {
+                    new_prove_state
+                        .set_reorg_last_headers(pending.get_reorg_last_headers().to_vec());
                 }
             }
-
-            self.storage.update_last_state(
-                &new_total_difficulty,
-                &new_prove_state.get_last_header().header().data(),
-                new_prove_state.get_last_headers(),
-            );
+            if matches!(
+                evidence,
+                ChainEvidence::ProvenFork(_) | ChainEvidence::ConservativeRecovery
+            ) {
+                crate::storage::canonical::accept_with_rollback(
+                    &self.storage,
+                    &work,
+                    &tip,
+                    &recent,
+                    fork,
+                )
+                .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?;
+                self.peers()
+                    .retire_proof_requests_anchored_at(&previous_view.hash());
+                self.peers()
+                    .invalidate_latest_block_filter_hashes(peer_index);
+                matched_blocks.clear();
+            } else {
+                crate::storage::canonical::update_state(
+                    &self.storage,
+                    &work,
+                    &tip,
+                    &recent,
+                    Some(previous_view.number()),
+                )
+                .map_err(|error| StatusCode::InternalError.with_context(error.to_string()))?;
+            }
+            self.peers.clear_continuity(peer_index);
+            new_prove_state.needs_genesis_bridge = false;
+            new_prove_state.continuity_retries = 0;
+            new_prove_state.recovery_accepted_tip = None;
+            new_prove_state.verified_replacement_work = None;
         }
         self.peers()
             .update_prove_state(peer_index, new_prove_state)?;
@@ -438,6 +614,8 @@ impl LightClientProtocol {
             mmr_activated_epoch,
             last_n_blocks: LAST_N_BLOCKS,
             init_blocks_in_transit_per_peer: INIT_BLOCKS_IN_TRANSIT_PER_PEER,
+            #[cfg(test)]
+            recovery_proof_content_override: None,
         }
     }
 
@@ -448,6 +626,14 @@ impl LightClientProtocol {
     #[cfg(test)]
     pub(crate) fn set_last_n_blocks(&mut self, last_n_blocks: BlockNumber) {
         self.last_n_blocks = last_n_blocks;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_recovery_proof_content_override(
+        &mut self,
+        content: Option<packed::GetLastStateProof>,
+    ) {
+        self.recovery_proof_content_override = content;
     }
 
     pub(crate) fn init_blocks_in_transit_per_peer(&self) -> usize {
@@ -512,6 +698,7 @@ impl LightClientProtocol {
 
     async fn refresh_all_peers(&mut self, nc: &BoxedCKBProtocolContext) {
         let now = unix_time_as_millis();
+        self.peers().expire_hinted_proof_requests(now);
         for peer_index in self.peers().get_peers_which_have_timeout(now) {
             self.peers().mark_fetching_headers_timeout(peer_index);
             self.peers().mark_fetching_txs_timeout(peer_index);
@@ -697,17 +884,192 @@ impl LightClientProtocol {
         }
     }
 
+    fn request_genesis_recovery(
+        &self,
+        peer: PeerIndex,
+        previous: packed::Byte32,
+        mut state: ProveState,
+        nc: &BoxedCKBProtocolContext,
+    ) {
+        if state.recovery_sampling_requests >= MAX_RECOVERY_SAMPLING_REQUESTS {
+            warn!("peer {peer}: genesis replacement-work retry budget exhausted");
+            self.finish_genesis_recovery_attempt(peer);
+            return;
+        }
+
+        let candidate = state.get_last_header().clone();
+        #[cfg(test)]
+        let content = self
+            .recovery_proof_content_override
+            .clone()
+            .or_else(|| self.build_prove_request_content_from_genesis(&candidate));
+        #[cfg(not(test))]
+        let content = self.build_prove_request_content_from_genesis(&candidate);
+        let Some(content) = content else {
+            warn!("peer {peer}: could not build genesis replacement-work request");
+            return;
+        };
+
+        state.recovery_sampling_requests += 1;
+        let attempts = state.recovery_sampling_requests;
+        self.peers.queue_continuity(peer, previous.clone(), state);
+
+        let mut prove_request = ProveRequest::new(LastState::new(candidate), content.clone());
+        prove_request.replacement_work_recovery(previous);
+        if let Err(error) = self.peers.update_prove_request(peer, prove_request) {
+            warn!("peer {peer}: could not record genesis replacement-work request: {error}");
+            if attempts >= MAX_RECOVERY_SAMPLING_REQUESTS {
+                self.finish_genesis_recovery_attempt(peer);
+            } else {
+                self.peers.clear_prove_request(peer);
+            }
+            return;
+        }
+
+        let message = packed::LightClientMessage::new_builder()
+            .set(content)
+            .build();
+        if let Err(error) = nc.send_message(
+            SupportProtocols::LightClient.protocol_id(),
+            peer,
+            message.as_bytes(),
+        ) {
+            warn!("genesis replacement-work request failed: {error:?}");
+            if attempts >= MAX_RECOVERY_SAMPLING_REQUESTS {
+                self.finish_genesis_recovery_attempt(peer);
+            } else {
+                self.peers.clear_prove_request(peer);
+            }
+        }
+    }
+
+    fn finish_genesis_recovery_attempt(&self, peer: PeerIndex) {
+        self.peers.clear_continuity(peer);
+        self.peers.clear_prove_request(peer);
+        self.peers.clear_prove_state(peer);
+    }
+
+    pub(crate) fn request_continuity(&self, nc: &BoxedCKBProtocolContext) {
+        for peer in self.peers.continuity_peers() {
+            let Some((previous, state)) = self.peers.pending_continuity(peer) else {
+                continue;
+            };
+            let tip = self.storage.get_tip_header();
+            let Some(current) = self.peers.get_peer(&peer) else {
+                self.peers.clear_continuity(peer);
+                continue;
+            };
+            if previous != tip.calc_header_hash()
+                || !self
+                    .peers
+                    .get_state(&peer)
+                    .and_then(|state| state.get_last_state().cloned())
+                    .is_some_and(|observed| {
+                        observed.as_ref().header().hash() == state.get_last_header().header().hash()
+                    })
+            {
+                self.peers.clear_continuity(peer);
+                continue;
+            }
+            let has_prove_request = self
+                .peers
+                .get_state(&peer)
+                .and_then(|state| state.get_prove_request().cloned())
+                .is_some();
+            if current.get_blocks_proof_request().is_some() || has_prove_request {
+                continue;
+            }
+            if state.needs_genesis_bridge {
+                self.request_genesis_recovery(peer, previous, state, nc);
+                continue;
+            }
+            let request = packed::GetBlocksProof::new_builder()
+                .last_hash(state.get_last_header().header().hash())
+                .block_hashes(vec![previous].pack())
+                .build();
+            self.peers
+                .update_blocks_proof_request(peer, Some(request.clone()), false);
+            let message = packed::LightClientMessage::new_builder()
+                .set(request)
+                .build();
+            if let Err(error) = nc.send_message(
+                SupportProtocols::LightClient.protocol_id(),
+                peer,
+                message.as_bytes(),
+            ) {
+                warn!("continuity bridge request failed: {error:?}");
+            }
+        }
+    }
+
+    fn request_ordinal_bodies(&self, nc: &BoxedCKBProtocolContext) {
+        let hashes = match crate::storage::canonical::ordinal_bodies(&self.storage) {
+            Ok(hashes) => hashes,
+            Err(error) => {
+                warn!("ordinal recovery paused: {error}");
+                return;
+            }
+        };
+        for hash in hashes {
+            if self.peers.get_peers_index().iter().any(|index| {
+                self.peers
+                    .get_peer(index)
+                    .and_then(|peer| peer.get_blocks_request().cloned())
+                    .is_some_and(|request| request.contains(&hash))
+            }) {
+                continue;
+            }
+            let tip = self.storage.get_tip_header();
+            let peer = self
+                .peers
+                .get_best_proved_peers(&tip)
+                .into_iter()
+                .find(|index| {
+                    self.peers
+                        .get_peer(index)
+                        .is_some_and(|peer| peer.get_blocks_request().is_none())
+                });
+            let Some(peer) = peer else {
+                return;
+            };
+            self.peers
+                .update_blocks_request(peer, Some(vec![hash.clone()]));
+            let request = packed::GetBlocks::new_builder()
+                .block_hashes(vec![hash].pack())
+                .build();
+            let message = packed::SyncMessage::new_builder().set(request).build();
+            if let Err(error) = nc.send_message(
+                SupportProtocols::Sync.protocol_id(),
+                peer,
+                message.as_bytes(),
+            ) {
+                warn!("ordinal body request failed: {error:?}");
+            }
+        }
+    }
+
     async fn get_idle_blocks(&mut self, nc: &BoxedCKBProtocolContext) {
+        self.request_continuity(nc);
         // Clean up old missing headers (uncle blocks) older than 1 hour
         // to prevent unbounded memory growth in fetching_headers
         const MAX_MISSING_AGE_MS: u64 = 3_600_000; // 1 hour
         self.peers.cleanup_old_missing_headers(MAX_MISSING_AGE_MS);
 
         let tip_header = self.storage.get_tip_header();
-        let matched_blocks = self.peers.matched_blocks().read().await;
+        let mut matched_blocks = self.peers.matched_blocks().write().await;
+        if let Err(error) = crate::utils::network::index_downloaded_blocks(
+            &self.storage,
+            &self.peers,
+            &mut matched_blocks,
+        ) {
+            warn!("watched indexing paused: {error}");
+            return;
+        }
 
+        self.request_ordinal_bodies(nc);
         prove_or_download_matched_blocks(
             Arc::clone(&self.peers),
+            &self.storage,
             &tip_header,
             &matched_blocks,
             nc.as_ref(),
@@ -903,7 +1265,7 @@ impl LightClientProtocol {
         Some(content)
     }
 
-    pub(crate) async fn build_prove_request_content_from_genesis(
+    pub(crate) fn build_prove_request_content_from_genesis(
         &self,
         last_header: &VerifiableHeader,
     ) -> Option<packed::GetLastStateProof> {

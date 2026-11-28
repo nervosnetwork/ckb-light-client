@@ -67,6 +67,18 @@ pub trait StorageBackend: Send + Sync {
     /// Create a new batch for atomic writes
     fn batch(&self) -> Self::Batch;
 
+    /// Read the first `limit` rows under a byte prefix. Cleanup callers delete
+    /// each returned page before requesting the next one.
+    fn try_collect_prefix_page(&self, prefix: Vec<u8>, limit: usize) -> Result<Vec<KVPair>> {
+        self.try_collect_iterator(
+            IteratorStart::From(prefix.clone()),
+            super::IteratorDirection::Forward,
+            Box::new(move |key| key.starts_with(&prefix)),
+            Box::new(|_, value| Some(value.to_vec())),
+            limit,
+        )
+    }
+
     // ========== Iterator operations ==========
 
     /// Scan one snapshot and propagate backend/cursor/decoding failures instead

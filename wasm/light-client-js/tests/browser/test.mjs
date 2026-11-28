@@ -105,32 +105,34 @@ try {
   results.persistence = JSON.stringify(results.initial.cells) === JSON.stringify(results.reopened.cells) && results.initial.capacity === results.reopened.capacity;
   results.assertions.push({ name:'state persists after worker restart', passed:results.persistence });
 
-  // Nonzero cursors isolate metadata batches from genesis filtering.
+  // With no peers, registration updates cannot certify coverage beyond genesis.
   results.stage = 'script batch controls';
   const [first, second] = scripts;
   const status = (script, height) => ({ script, scriptType:'lock', blockNumber:BigInt(height) });
-  const normalize = entries => entries.map(s => [scriptKey(s.script), String(s.blockNumber)]).sort();
+  const normalize = entries => entries.map(s => [scriptKey(s.script), s.scriptType, String(s.blockNumber)]).sort();
   async function checkScripts(name, entries, command, expected) {
     await client.setScripts(entries, command);
     const actual = normalize(await client.getScripts());
     const wanted = normalize(expected);
     results.assertions.push({ name, passed:JSON.stringify(actual) === JSON.stringify(wanted), expected:wanted, actual });
   }
-  await checkScripts('delete then put: script replacement', [status(first,13), status(second,14)],
-    LightClientSetScriptsCommand.All, [status(first,13), status(second,14)]);
-  await checkScripts('repeated puts: final cursor wins', [status(first,21), status(first,22)],
-    LightClientSetScriptsCommand.Partial, [status(first,22), status(second,14)]);
+  await checkScripts('replace catalog with one script', [status(first, 12)],
+    LightClientSetScriptsCommand.All, [status(first, 0)]);
+  await checkScripts('replace catalog with both scripts', [status(first,13), status(second,0)],
+    LightClientSetScriptsCommand.All, [status(first,0), status(second,0)]);
+  await checkScripts('repeated puts preserve authenticated cursors', [status(first,21), status(first,22)],
+    LightClientSetScriptsCommand.Partial, [status(first,0), status(second,0)]);
   await checkScripts('interleaved script updates', [status(first,31), status(second,41), status(first,32), status(second,42)],
-    LightClientSetScriptsCommand.Partial, [status(first,32), status(second,42)]);
+    LightClientSetScriptsCommand.Partial, [status(first,0), status(second,0)]);
   await checkScripts('delete selected script', [status(first,32)],
-    LightClientSetScriptsCommand.Delete, [status(second,42)]);
+    LightClientSetScriptsCommand.Delete, [status(second,0)]);
   await client.stop();
   client = null;
   results.stage = 'script controls restart';
   await open();
   const actual = normalize(await client.getScripts());
   results.assertions.push({ name:'script controls persist after worker restart',
-    passed:JSON.stringify(actual) === JSON.stringify(normalize([status(second,42)])), actual });
+    passed:JSON.stringify(actual) === JSON.stringify(normalize([status(second,0)])), actual });
   results.outcome = results.assertions.every(a => a.passed) ? 'INVARIANTS_PASS' : 'REGRESSION_FAILED';
   results.stage = 'complete';
 } catch (error) { results.outcome = 'EXECUTION_ERROR'; results.error = String(error); }

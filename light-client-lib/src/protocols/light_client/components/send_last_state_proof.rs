@@ -18,12 +18,59 @@ use log::{debug, error, log_enabled, trace, warn, Level};
 use super::super::{
     peers::ProveRequest, prelude::*, LastState, LightClientProtocol, ProveState, Status, StatusCode,
 };
+use crate::storage::LightClientStorage;
 
 pub(crate) struct SendLastStateProofProcess<'a> {
     message: packed::SendLastStateProofReader<'a>,
     protocol: &'a mut LightClientProtocol,
     peer_index: PeerIndex,
     nc: &'a BoxedCKBProtocolContext,
+}
+
+fn verify_complete_work_coverage(
+    anchor: &VerifiableHeader,
+    headers: &[VerifiableHeader],
+    last_header: &VerifiableHeader,
+) -> bool {
+    let anchor_number = anchor.header().number();
+    let last_number = last_header.header().number();
+    if anchor_number >= last_number {
+        return false;
+    }
+
+    let mut expected_number = anchor_number + 1;
+    let mut expected_parent = anchor.header().hash();
+    let mut total_difficulty = anchor.total_difficulty();
+    for header in headers
+        .iter()
+        .filter(|header| header.header().number() > anchor_number)
+    {
+        let number = header.header().number();
+        if number >= last_number {
+            break;
+        }
+        if number != expected_number || header.header().parent_hash() != expected_parent {
+            return false;
+        }
+        let Some(next_total_difficulty) =
+            total_difficulty.checked_add(&compact_to_difficulty(header.header().compact_target()))
+        else {
+            return false;
+        };
+        total_difficulty = next_total_difficulty;
+        expected_parent = header.header().hash();
+        expected_number += 1;
+    }
+
+    if expected_number != last_number || last_header.header().parent_hash() != expected_parent {
+        return false;
+    }
+    let Some(total_difficulty) = total_difficulty.checked_add(&compact_to_difficulty(
+        last_header.header().compact_target(),
+    )) else {
+        return false;
+    };
+    total_difficulty == last_header.total_difficulty()
 }
 
 impl<'a> SendLastStateProofProcess<'a> {
@@ -84,6 +131,7 @@ impl<'a> SendLastStateProofProcess<'a> {
             .iter()
             .map(|header| header.to_entity().into())
             .collect::<Vec<VerifiableHeader>>();
+        let proved_verifiable_headers = headers.clone();
         let last_n_blocks = self.protocol.last_n_blocks() as usize;
 
         trace!(
@@ -125,6 +173,12 @@ impl<'a> SendLastStateProofProcess<'a> {
         // Check POW for all headers.
         return_if_failed!(self.protocol.check_pow_for_headers(headers.iter()));
 
+        let genesis_only_sample = original_request.recovery_accepted_tip().is_some()
+            && sampled_count != 0
+            && headers[reorg_count..reorg_count + sampled_count]
+                .iter()
+                .all(|header| header.number() == 0);
+
         // Check tau with epoch difficulties of samples.
         let failed_to_verify_tau = if original_request.if_skip_check_tau() {
             trace!(
@@ -132,8 +186,24 @@ impl<'a> SendLastStateProofProcess<'a> {
                 self.peer_index
             );
             false
+        } else if genesis_only_sample {
+            trace!(
+                "peer {}: sampled recovery includes only genesis; work is inconclusive",
+                self.peer_index
+            );
+            false
         } else if sampled_count != 0 {
-            let start_header = &headers[reorg_count];
+            let start_header = if original_request.recovery_accepted_tip().is_some() {
+                let Some(start_header) = headers[reorg_count..reorg_count + sampled_count]
+                    .iter()
+                    .find(|header| header.number() != 0)
+                else {
+                    return StatusCode::InvalidTotalDifficulty.into();
+                };
+                start_header
+            } else {
+                &headers[reorg_count]
+            };
             let end_header = &headers[reorg_count + sampled_count + last_n_count - 1];
             match verify_tau(
                 start_header.epoch(),
@@ -169,27 +239,216 @@ impl<'a> SendLastStateProofProcess<'a> {
             headers.iter()
         ));
 
-        // Check total difficulty.
-        //
-        // If no sampled headers, we can skip the check for total difficulty
-        // since POW checks with continuous checks is enough.
-        if sampled_count != 0 {
-            if let Some(prove_state) = peer_state.get_prove_state() {
-                let prev_last_header = prove_state.get_last_header();
-                let start_header = prev_last_header.header();
-                let end_header = last_header.header();
+        let mut work_anchor = None;
+        let mut verified_replacement_work = None;
+        if let Some(accepted_tip) = original_request.recovery_accepted_tip().cloned() {
+            let content = original_request.get_content();
+            let genesis = self.protocol.storage().get_genesis_block();
+            let recovery_start_number: BlockNumber = content.start_number().unpack();
+            let candidate_hash = last_header.header().hash();
+            let pending_recovery = self.protocol.peers().pending_continuity(self.peer_index);
+            let pending_matches =
+                pending_recovery
+                    .as_ref()
+                    .is_some_and(|(pending_tip, pending_state)| {
+                        pending_tip == &accepted_tip
+                            && pending_state.get_last_header().header().hash() == candidate_hash
+                    });
+            let rollback_boundary = pending_recovery
+                .as_ref()
+                .filter(|(pending_tip, pending_state)| {
+                    pending_tip == &accepted_tip
+                        && pending_state.get_last_header().header().hash() == candidate_hash
+                })
+                .and_then(|(_, pending_state)| {
+                    pending_state
+                        .authenticated_rollback_boundary
+                        .clone()
+                        .filter(|boundary| boundary.matches(&accepted_tip, &candidate_hash))
+                });
+            if !pending_matches
+                || recovery_start_number != 0
+                || content.start_hash() != genesis.calc_header_hash()
+                || content.last_hash() != candidate_hash
+            {
+                return StatusCode::InvalidSamples.into();
+            }
+            if genesis_only_sample {
+                let Some((pending_tip, pending_state)) = pending_recovery else {
+                    return StatusCode::InvalidSamples.into();
+                };
+                if pending_tip != accepted_tip
+                    || pending_state.get_last_header().header().hash() != candidate_hash
+                {
+                    return StatusCode::InvalidSamples.into();
+                }
+                self.protocol.request_genesis_recovery(
+                    self.peer_index,
+                    accepted_tip,
+                    pending_state,
+                    self.nc,
+                );
+                return Status::ok();
+            }
+            if sampled_count != 0 {
+                let Some(first_sample) = proved_verifiable_headers
+                    [reorg_count..reorg_count + sampled_count]
+                    .iter()
+                    .find(|header| header.header().number() != 0)
+                else {
+                    return StatusCode::InvalidTotalDifficulty.into();
+                };
                 if let Err(msg) = verify_total_difficulty(
-                    start_header.epoch(),
-                    start_header.compact_target(),
-                    &prev_last_header.total_difficulty(),
-                    end_header.epoch(),
-                    end_header.compact_target(),
+                    first_sample.header().epoch(),
+                    first_sample.header().compact_target(),
+                    &first_sample.total_difficulty(),
+                    last_header.header().epoch(),
+                    last_header.header().compact_target(),
                     &last_header.total_difficulty(),
                     TAU,
                 ) {
                     return StatusCode::InvalidTotalDifficulty.with_context(msg);
                 }
+            } else {
+                let Some(genesis_header) = proved_verifiable_headers
+                    .iter()
+                    .find(|header| header.header().number() == 0)
+                else {
+                    return StatusCode::InvalidSamples.into();
+                };
+                if genesis_header.header().hash() != content.start_hash()
+                    || !verify_complete_work_coverage(
+                        genesis_header,
+                        &proved_verifiable_headers,
+                        &last_header,
+                    )
+                {
+                    return StatusCode::InvalidTotalDifficulty.into();
+                }
             }
+            verified_replacement_work = Some(super::super::peers::VerifiedReplacementWork::new(
+                accepted_tip,
+                candidate_hash,
+                content.clone(),
+                rollback_boundary,
+            ));
+        } else if sampled_count != 0 {
+            if let Some(prove_state) = peer_state.get_prove_state() {
+                let prev_last_header = prove_state.get_last_header();
+                let start_header = prev_last_header.header();
+                let end_header = last_header.header();
+                let start_is_detached = proved_verifiable_headers.iter().any(|header| {
+                    (header.header().number() == start_header.number()
+                        && header.header().hash() != start_header.hash())
+                        || start_header.number().checked_sub(1).is_some_and(|height| {
+                            header.header().number() == height
+                                && header.header().hash() != start_header.parent_hash()
+                        })
+                });
+                if !start_is_detached {
+                    if let Err(msg) = verify_total_difficulty(
+                        start_header.epoch(),
+                        start_header.compact_target(),
+                        &prev_last_header.total_difficulty(),
+                        end_header.epoch(),
+                        end_header.compact_target(),
+                        &last_header.total_difficulty(),
+                        TAU,
+                    ) {
+                        return StatusCode::InvalidTotalDifficulty.with_context(msg);
+                    }
+                }
+                let content = original_request.get_content();
+                let start_number: BlockNumber = content.start_number().unpack();
+                if !start_is_detached
+                    && start_number == start_header.number()
+                    && content.start_hash() == start_header.hash()
+                {
+                    work_anchor = Some((start_header.number(), start_header.hash()));
+                }
+            } else {
+                let (start_total_difficulty, start_header) =
+                    self.protocol.storage().get_last_state();
+                let start_header = start_header.into_view();
+                let content = original_request.get_content();
+                let start_number: BlockNumber = content.start_number().unpack();
+                if start_number == start_header.number()
+                    && content.start_hash() == start_header.hash()
+                {
+                    let (work_start, work_at_start) =
+                        if start_header.number() == 0 && start_header.epoch().length() == 0 {
+                            if start_header.hash()
+                                != self
+                                    .protocol
+                                    .storage()
+                                    .get_genesis_block()
+                                    .calc_header_hash()
+                            {
+                                return StatusCode::InvalidSamples.into();
+                            }
+                            // Genesis has no epoch length. Use the first authenticated
+                            // non-genesis sample for the epoch difficulty calculation.
+                            let Some(sample) = proved_verifiable_headers
+                                [reorg_count..reorg_count + sampled_count]
+                                .iter()
+                                .find(|sample| sample.header().number() != 0)
+                            else {
+                                return StatusCode::InvalidTotalDifficulty.into();
+                            };
+                            (sample.header().clone(), sample.total_difficulty())
+                        } else {
+                            (start_header.clone(), start_total_difficulty)
+                        };
+                    if let Err(msg) = verify_total_difficulty(
+                        work_start.epoch(),
+                        work_start.compact_target(),
+                        &work_at_start,
+                        last_header.header().epoch(),
+                        last_header.header().compact_target(),
+                        &last_header.total_difficulty(),
+                        TAU,
+                    ) {
+                        return StatusCode::InvalidTotalDifficulty.with_context(msg);
+                    }
+                    work_anchor = Some((start_header.number(), start_header.hash()));
+                }
+            }
+        } else {
+            let accepted_tip = self.protocol.storage().get_tip_header();
+            let accepted_tip_hash = accepted_tip.calc_header_hash();
+            let accepted_headers = self
+                .protocol
+                .peers()
+                .get_all_prove_states()
+                .into_iter()
+                .filter(|(_, state)| state.get_last_header().header().hash() == accepted_tip_hash)
+                .flat_map(|(_, state)| state.proved_headers)
+                .collect::<Vec<_>>();
+            let accepted_tip_number: BlockNumber = accepted_tip.raw().number().unpack();
+            for candidate in proved_verifiable_headers.iter().rev() {
+                let number = candidate.header().number();
+                let hash = candidate.header().hash();
+                let is_accepted_parent = accepted_tip_number.checked_sub(1).is_some_and(|height| {
+                    number == height && hash == accepted_tip.raw().parent_hash()
+                });
+                let was_proved_under_accepted_tip = accepted_headers
+                    .iter()
+                    .any(|accepted| accepted.number() == number && accepted.hash() == hash);
+                if (is_accepted_parent || was_proved_under_accepted_tip)
+                    && verify_complete_work_coverage(
+                        candidate,
+                        &proved_verifiable_headers,
+                        &last_header,
+                    )
+                {
+                    work_anchor = Some((number, hash));
+                    break;
+                }
+            }
+        }
+
+        if verified_replacement_work.is_some() && failed_to_verify_tau {
+            return StatusCode::InvalidTotalDifficulty.into();
         }
 
         if failed_to_verify_tau {
@@ -302,57 +561,25 @@ impl<'a> SendLastStateProofProcess<'a> {
             };
 
             // Commit the status if all checks are passed.
-            let prove_state = ProveState::new_from_request(
+            let mut prove_state = ProveState::new_from_request(
                 original_request.to_owned(),
                 reorg_last_headers,
                 last_headers,
             );
 
-            if original_request.if_long_fork_detected() {
-                error!(
-                    "Long fork detected, please check if ckb-light-client is connected to \
-                     the same network ckb node. If you connected ckb-light-client to a dev \
-                     chain for testing purpose you should remove the storage of \
-                     ckb-light-client to recover."
-                );
-                panic!("long fork detected");
-            }
+            prove_state.proved_headers = headers.clone();
+            prove_state.work_anchor = work_anchor;
+            prove_state.verified_replacement_work = verified_replacement_work;
 
-            let long_fork_detected = !return_if_failed!(
+            let committed = return_if_failed!(
                 self.protocol
                     .commit_prove_state(self.peer_index, prove_state.clone())
                     .await
             );
-
-            if long_fork_detected {
-                let last_header = prove_state.get_last_header();
-                if let Some(content) = self
-                    .protocol
-                    .build_prove_request_content_from_genesis(last_header)
-                    .await
-                {
-                    let mut prove_request =
-                        ProveRequest::new(LastState::new(last_header.clone()), content.clone());
-                    prove_request.long_fork_detected();
-                    return_if_failed!(self
-                        .protocol
-                        .peers()
-                        .update_prove_request(self.peer_index, prove_request));
-
-                    let message = packed::LightClientMessage::new_builder()
-                        .set(content)
-                        .build();
-                    self.nc.as_ref().reply(self.peer_index, &message);
-
-                    let errmsg = "long fork detected";
-                    return StatusCode::RequireRecheck.with_context(errmsg);
-                } else {
-                    warn!(
-                        "peer {}, build prove request from genesis failed",
-                        self.peer_index
-                    );
-                }
+            if !committed && prove_state.verified_replacement_work.is_some() {
+                return Status::ok();
             }
+            self.protocol.request_continuity(self.nc);
         }
 
         debug!("block proof verify passed for peer: {}", self.peer_index);
